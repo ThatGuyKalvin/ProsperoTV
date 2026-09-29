@@ -301,6 +301,8 @@ console is unavailable.
 
 ## Credits and licences
 
+Built with the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) by John Törnblom (ps5-payload-dev).
+
 Special thanks to [JMUtechnologies](https://github.com/JMUtechnologies) for
 extensive testing, valuable feedback, and providing IPTV credentials for testing.
 Their help has been instrumental in improving ProsperoTV's playback compatibility
@@ -320,7 +322,7 @@ ProsperoTV builds on and acknowledges:
 - [IPTVnator](https://github.com/4gray/iptvnator) and
   [Megacubo](https://github.com/EdenwareApps/Megacubo) as IPTV product
   references.
-- SDL2, RmlUi, FreeType, SQLite, zlib, LLVM, GoogleTest, Montserrat, Noto,
+- SDL2 (John Törnblom's [PS5 port](https://github.com/ps5-payload-dev/SDL)), RmlUi, FreeType, SQLite, zlib, LLVM, GoogleTest, Montserrat, Noto,
   DejaVu, and Source Han Sans.
 
 Third-party software and data retain their own licences and terms. See
