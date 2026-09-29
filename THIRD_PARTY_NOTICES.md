@@ -1,4 +1,28 @@
-# Notices
+# Third-party notices
+
+## Credits and acknowledgements
+
+Special thanks to [JMUtechnologies](https://github.com/JMUtechnologies) for
+extensive testing, valuable feedback, and providing IPTV credentials for testing.
+Their help has been instrumental in improving ProsperoTV's playback compatibility
+and reliability.
+
+ProsperoTV builds on and acknowledges:
+
+- [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
+  [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk),
+  [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo),
+  [MkPFS](https://github.com/PSBrew/MkPFS), and
+  [UFS2Tool](https://github.com/SvenGDK/UFS2Tool).
+- [iptv-org/iptv](https://github.com/iptv-org/iptv) for the public channel
+  catalog and metadata.
+- [ProsperoRadio](https://github.com/blackbearreloaded/ProsperoRadio) as the
+  primary native application and user-experience reference.
+- [IPTVnator](https://github.com/4gray/iptvnator) and
+  [Megacubo](https://github.com/EdenwareApps/Megacubo) as IPTV product
+  references.
+- SDL2 (John Törnblom's [PS5 port](https://github.com/ps5-payload-dev/SDL)), RmlUi, FreeType, SQLite, zlib, LLVM, GoogleTest, Montserrat, Noto,
+  DejaVu, and Source Han Sans.
 
 ## Native build dependencies
 
