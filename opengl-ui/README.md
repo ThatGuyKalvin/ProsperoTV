@@ -84,7 +84,7 @@ menu again where it was. The catalog, the filters and the focus live in
 The kit bakes printable ASCII. A channel list needs more, so
 `tools/bake-fonts.sh` runs the kit's baker over the kit's own font files (Inter,
 Montserrat, DejaVu Sans Mono) with its European alphabet: Latin-1, Latin
-Extended-A and Cyrillic. Names in
+Extended-A, Greek and Cyrillic. Names in
 other scripts fall back to what the fonts can write, then to the playlist's
 id for the channel (`shown_name` in `draw.cpp`). Faces for other scripts would
 have to be added to the kit's `third_party/fonts`.

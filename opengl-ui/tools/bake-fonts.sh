@@ -9,7 +9,7 @@
 #
 # The faces are the kit's (Inter, Montserrat, DejaVu Sans Mono, from its
 # third_party/fonts) and so is the baker, run with its "european" alphabet:
-# channel names in Western and Central European languages and in Cyrillic
+# channel names in Western and Central European languages, in Greek and in Cyrillic
 # read as written. The result is the same for the same inputs, so it is made
 # once and reused.
 
