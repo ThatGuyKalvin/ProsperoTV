@@ -5,12 +5,12 @@
 #
 # usage: tools/host-snapshots.sh [output dir] [width height]
 #
-# KIT the ps5-homebrew-ui checkout (default: ../../ps5-homebrew-ui, beside the repository)
+# KIT the ps5-homebrew-ui checkout (default: fetched at its pinned commit by tools/fetch-kit.sh)
 # TV  the ProsperoTV checkout      (default: the repository this folder is in)
 
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-kit=$(cd -- "${KIT:-$root/../../ps5-homebrew-ui}" && pwd)
+kit=$(bash "$root/tools/fetch-kit.sh")
 tv=$(cd -- "${TV:-$root/..}" && pwd)
 cxx=$(command -v "${HOST_CXX:-clang++}")
 cache=$(command -v ccache || true)
@@ -23,7 +23,7 @@ if [[ ${HOST_SANITIZE:-0} == 1 ]]; then
 fi
 mkdir -p "$build/obj"
 
-includes="-I$root/kit_patches -I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include"
+includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O2 -Wall -Wextra $sanitize \$flags -DGL_GLEXT_PROTOTYPES=1 $includes -MD -MF \$out.d -c \$in -o \$out"
@@ -45,7 +45,7 @@ includes="-I$root/kit_patches -I$root/src -I$root/host -I$kit/src -I$kit/third_p
     for source in "$root"/src/tv/*.cpp; do
         edge "$source" "-Werror -fno-exceptions -fno-rtti"
     done
-    for source in "$root"/host/*.cpp "$root"/kit_patches/ui/components/*.cpp "$kit/host/platform_host.cpp"; do
+    for source in "$root"/host/*.cpp "$kit/host/platform_host.cpp"; do
         edge "$source" ""
     done
     while IFS= read -r relative; do

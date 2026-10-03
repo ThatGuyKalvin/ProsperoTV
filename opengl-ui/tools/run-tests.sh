@@ -5,7 +5,7 @@
 #
 # usage: tools/run-tests.sh [gtest arguments]
 #
-# KIT the ps5-homebrew-ui checkout (default: ../../ps5-homebrew-ui, beside the repository)
+# KIT the ps5-homebrew-ui checkout (default: fetched at its pinned commit by tools/fetch-kit.sh)
 # TV  the ProsperoTV checkout      (default: the repository this folder is in)
 #
 # The tests need no OpenGL: the interface records draw lists and the tests
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-kit=$(cd -- "${KIT:-$root/../../ps5-homebrew-ui}" && pwd)
+kit=$(bash "$root/tools/fetch-kit.sh")
 tv=$(cd -- "${TV:-$root/..}" && pwd)
 cxx=$(command -v "${HOST_CXX:-clang++}")
 cache=$(command -v ccache || true)
@@ -22,7 +22,7 @@ build="$root/build/tests"
 mkdir -p "$build/obj"
 
 sanitize="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
-includes="-I$root/kit_patches -I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include"
+includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O1 $sanitize \$flags $includes -MD -MF \$out.d -c \$in -o \$out"
@@ -53,7 +53,7 @@ includes="-I$root/kit_patches -I$root/src -I$root/ps5/src -I$root/host -I$kit/sr
     for source in "$root"/tests/*.cpp; do
         edge "$source" "$strict -isystem $gtest/googletest/include"
     done
-    for source in "$root"/kit_patches/ui/components/*.cpp "$kit/host/platform_host.cpp"; do
+    for source in "$kit/host/platform_host.cpp"; do
         edge "$source" "-Wall -Wextra"
     done
     while IFS= read -r relative; do

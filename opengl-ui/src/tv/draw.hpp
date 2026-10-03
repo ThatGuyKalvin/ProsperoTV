@@ -14,7 +14,7 @@ namespace ptv
 {
 
 // Text as a face can write it: letters of a script the baked fonts do not
-// hold (they cover Latin, Greek and Cyrillic) are left out instead of being
+// hold (they cover Latin and Cyrillic) are left out instead of being
 // drawn as question marks, and the spaces around them are closed up.
 std::string readable(const ui::FontRef &font, std::string_view text);
 // A channel's name for the screen. display_name() when the fonts can write

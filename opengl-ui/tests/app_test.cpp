@@ -619,16 +619,14 @@ iptv::Channel written(const char *name, const char *id = "")
 TEST(ShownNames, AreWrittenInTheScriptsTheFontsHold)
 {
     const hui::ui::Fonts &fonts = font_set().fonts;
-    // Accents, Cyrillic and Greek are baked: the name is shown as written.
+    // Accents and Cyrillic are baked: the name is shown as written.
     EXPECT_EQ(ptv::shown_name(fonts, written("Ni\xC3\xB1os T\xC3\xA9l\xC3\xA9 (720p)")),
               "Ni\xC3\xB1os T\xC3\xA9l\xC3\xA9");
     const char *cyrillic =
         "\xD0\x9F\xD0\xB5\xD1\x80\xD0\xB2\xD1\x8B\xD0\xB9 \xD0\xBA\xD0\xB0\xD0\xBD\xD0\xB0\xD0\xBB";
     EXPECT_EQ(ptv::shown_name(fonts, written(cyrillic)), cyrillic);
-    const char *greek = "\xCE\x95\xCE\xA1\xCE\xA4 1";
-    EXPECT_EQ(ptv::shown_name(fonts, written(greek)), greek);
     // Every letter of a shown name can be drawn by the face it is drawn in.
-    for (const char *name : {cyrillic, greek, "Ni\xC3\xB1os"})
+    for (const char *name : {cyrillic, "Ni\xC3\xB1os"})
     {
         const hui::ui::FontRef &face = ptv::title_face(fonts, name);
         const std::string_view text(name);

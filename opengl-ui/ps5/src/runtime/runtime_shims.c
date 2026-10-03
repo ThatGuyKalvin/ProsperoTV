@@ -89,3 +89,21 @@ int pclose(FILE *stream)
     errno = ENOSYS;
     return -1;
 }
+
+/* The console's launch picture stays up until the menu has presented its
+ * first frame. The OpenGL runtime asks to hide it as soon as the display
+ * opens, which would leave a black screen while programs build and fonts
+ * load. The kit's build routes every such call here (--wrap), and its
+ * sys::hide_splash_screen() lets them through after hui_release_splash(). */
+extern int __real_sceSystemServiceHideSplashScreen(void);
+static int tv_splash_released;
+
+void hui_release_splash(void)
+{
+    tv_splash_released = 1;
+}
+
+int __wrap_sceSystemServiceHideSplashScreen(void)
+{
+    return tv_splash_released ? __real_sceSystemServiceHideSplashScreen() : 0;
+}

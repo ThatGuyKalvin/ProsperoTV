@@ -21,6 +21,7 @@ ui/components/component.cpp
 ui/components/counter.cpp
 ui/components/dialog.cpp
 ui/components/form.cpp
+ui/components/grid.cpp
 ui/components/list.cpp
 ui/components/loading_screen.cpp
 ui/components/menu.cpp

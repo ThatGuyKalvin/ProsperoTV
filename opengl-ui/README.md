@@ -14,11 +14,12 @@ releases ProsperoTV as before; nothing in this folder is built by its
 `Makefile` or its workflow. This folder is developed and tested here until it
 replaces the root build.
 
-It compiles against two source trees in place:
+The kit is a dependency fetched when something is built; none of its code is
+kept in this repository. It compiles against two source trees:
 
 | Needs | Default path | Override |
 | --- | --- | --- |
-| `ps5-homebrew-ui` (renderer, themes, components, font files, sounds) | a checkout beside this repository | `KIT=` |
+| `ps5-homebrew-ui` (renderer, themes, components, font files, sounds) | fetched at its pinned commit into `.deps/` by `tools/fetch-kit.sh` | `KIT=` |
 | ProsperoTV (catalog, stores, network, player) | the repository this folder is in | `TV=` |
 
 ```bash
@@ -50,7 +51,6 @@ src/tv/               the interface and its logic (namespace ptv), as the consol
   app.*               tabs, status, the Settings and About pages, hints, the failure dialog, notices
 host/                 PC renderer, the scripted walk, stand-ins for keyboard and network
 tests/                GoogleTest: the logic, the interface under scripted and random input
-kit_patches/          ui::GridView with a cell count instead of items (from the Radio prototype)
 ps5/                  the console entry point, runtime pieces, and the build-tree assembly
 tools/                the builds, the font bake, the sample playlist
 ```
@@ -82,8 +82,9 @@ menu again where it was. The catalog, the filters and the focus live in
 ## Fonts
 
 The kit bakes printable ASCII. A channel list needs more, so
-`tools/bake-fonts.sh` bakes the kit's own font files (Inter, Montserrat,
-DejaVu Sans Mono) with Latin-1, Latin Extended-A, Greek and Cyrillic. Names in
+`tools/bake-fonts.sh` runs the kit's baker over the kit's own font files (Inter,
+Montserrat, DejaVu Sans Mono) with its European alphabet: Latin-1, Latin
+Extended-A and Cyrillic. Names in
 other scripts fall back to what the fonts can write, then to the playlist's
 id for the channel (`shown_name` in `draw.cpp`). Faces for other scripts would
 have to be added to the kit's `third_party/fonts`.

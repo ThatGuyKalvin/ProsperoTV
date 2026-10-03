@@ -5,7 +5,7 @@
 #
 # usage: ps5/assemble.sh [build tree]      (default: ../../prosperotv-ui-build, beside the repository)
 #
-# KIT the ps5-homebrew-ui checkout (default: ../../ps5-homebrew-ui, beside the repository)
+# KIT the ps5-homebrew-ui checkout (default: fetched at its pinned commit by tools/fetch-kit.sh)
 # TV  the ProsperoTV checkout      (default: the repository this folder is in)
 # TV_CATEGORY=media|game           which area of the home screen (see patch_tree.py)
 #
@@ -17,7 +17,7 @@
 
 set -euo pipefail
 proto=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-kit=$(cd -- "${KIT:-$proto/../../ps5-homebrew-ui}" && pwd)
+kit=$(bash "$proto/tools/fetch-kit.sh")
 tv=$(cd -- "${TV:-$proto/..}" && pwd)
 out=${1:-"$proto/../../prosperotv-ui-build"}
 mkdir -p "$out"
@@ -68,7 +68,6 @@ while IFS= read -r relative; do
     mkdir -p "$out/src/kit/$(dirname "$relative")"
     cp "$kit/src/$relative" "$out/src/kit/$relative"
 done < "$proto/ps5/kit-files.txt"
-cp "$proto"/kit_patches/ui/components/grid.* "$out/src/kit/ui/components/"
 
 # ---- the interface and the console entry point ----
 mkdir -p "$out/src/tv"
