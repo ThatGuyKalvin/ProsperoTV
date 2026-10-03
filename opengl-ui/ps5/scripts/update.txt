@@ -1,0 +1,12 @@
+# The notice of a newer version: run with DEV_SWITCHES=update-as.txt=<file>
+# holding "PPSA99003 01.000.000", so the catalog's version is the newer one.
+wait 2
+until catalog 420
+wait 2
+shot 01-update-notice
+wait 5
+shot 02-still-there
+wait 7
+shot 03-gone
+status
+quit 40

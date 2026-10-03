@@ -1,0 +1,17 @@
+# The tuning screen: one channel that streams, from Cross to its first picture.
+# The player leaves pictures of the screen (tuning-*.bmp) beside the report.
+wait 2
+until catalog 420
+wait 2
+watch 20
+query france 24
+wait 1
+shot 01-before
+press cross
+until menu 120
+wait 2
+status
+shot 02-back
+press circle
+wait 1
+quit 45

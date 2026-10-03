@@ -1,0 +1,16 @@
+# One channel known to stream, to see what the video decoder asks of the system.
+wait 2
+until catalog 420
+wait 2
+watch 20
+query france 24
+wait 1
+status
+press cross
+until menu 120
+wait 2
+status
+shot 01-back
+press circle
+wait 1
+quit 40

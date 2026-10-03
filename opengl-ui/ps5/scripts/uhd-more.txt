@@ -1,0 +1,55 @@
+# 4K channels 4 to 9 of the drawer's Picture size list, 20 s each.
+wait 2
+until catalog 420
+wait 2
+watch 20
+press triangle
+wait 1
+press down 2
+press right 4
+wait 1
+press down
+press cross
+wait 2
+press right 3
+wait 1
+status
+press cross
+until menu 120
+wait 1
+status
+press circle
+press right
+press cross
+until menu 120
+wait 1
+status
+press circle
+press right
+press cross
+until menu 120
+wait 1
+status
+press circle
+press right
+press cross
+until menu 120
+wait 1
+status
+press circle
+press right
+press cross
+until menu 120
+wait 1
+status
+press circle
+press right
+press cross
+until menu 120
+wait 1
+status
+shot 01-after-uhd
+press circle
+press circle
+wait 1
+quit 45

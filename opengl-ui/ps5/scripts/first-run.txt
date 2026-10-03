@@ -1,0 +1,85 @@
+# First start on a console with nothing saved: download the channel list, use
+# the letters and a held R2, look at every tab, search by text, play three
+# channels (one of them 4K) and come back from each, quit.
+wait 2
+shot 01-start
+status
+until catalog 420
+wait 2
+status
+shot 02-live-tv
+# ---- the letters: Right past the last column, then down six letters ----
+press right 4
+press right
+wait 1
+shot 03-letters
+press down 6
+wait 1
+status
+shot 04-letter-chosen
+press left
+wait 1
+# ---- R2 held for three seconds keeps turning pages ----
+hold r2 3
+wait 1
+status
+shot 05-pages-held
+press circle
+wait 1
+# ---- the News list ----
+press up
+press right 2
+wait 1
+status
+shot 06-news
+press left 2
+press down
+wait 1
+# ---- a channel, and back: twice ----
+watch 20
+press cross
+until menu 120
+wait 2
+status
+shot 07-back-from-channel
+press circle
+wait 1
+press right
+press cross
+until menu 120
+wait 2
+status
+shot 08-back-again
+press circle
+wait 1
+# ---- search by text, as the keyboard would set it; then a 4K channel ----
+query 4K
+wait 2
+status
+shot 09-search-4k
+press cross
+until menu 120
+wait 2
+status
+shot 10-back-from-4k
+press circle
+wait 1
+query -
+wait 1
+# ---- every other tab ----
+press r1
+wait 1
+shot 11-favorites
+press r1
+wait 1
+shot 12-sources
+press r1
+wait 1
+shot 13-settings
+press r1
+wait 1
+shot 14-about
+press circle
+wait 1
+status
+quit 45

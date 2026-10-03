@@ -1,0 +1,711 @@
+// ProsperoTV - Tests of the interface: it is driven like a controller would, without OpenGL.
+// Copyright (C) 2026 BlackBearReloaded
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include "core/save_file.hpp"
+#include "host_platform.hpp"
+#include "tv/app.hpp"
+#include "tv/draw.hpp"
+
+#include <gtest/gtest.h>
+
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <random>
+#include <string>
+#include <thread>
+
+namespace
+{
+
+namespace fs = std::filesystem;
+using hui::Action;
+using hui::Direction;
+
+constexpr float kDt = 1.0f / 60.0f;
+
+// The baked fonts of the kit: text is measured with them, so the tests lay
+// out what the console lays out. KIT_FONTS is set by tools/run-tests.sh.
+struct FontSet
+{
+    hui::gfx::Font regular, semibold, display, mono;
+    hui::ui::Fonts fonts;
+
+    FontSet()
+    {
+        const char *dir = std::getenv("KIT_FONTS");
+        load(dir, "inter-regular.huifont", &regular, &fonts.regular, 0xf0000001u);
+        load(dir, "inter-semibold.huifont", &semibold, &fonts.semibold, 0xf0000002u);
+        load(dir, "montserrat-medium.huifont", &display, &fonts.display, 0xf0000003u);
+        load(dir, "dejavu-sans-mono.huifont", &mono, &fonts.mono, 0xf0000004u);
+        fonts.pixel = fonts.mono;
+        fonts.hand = fonts.regular;
+    }
+
+    static void load(const char *dir, const char *name, hui::gfx::Font *font, hui::ui::FontRef *ref,
+                     std::uint32_t handle)
+    {
+        std::string data;
+        const std::string path = std::string(dir != nullptr ? dir : ".") + "/" + name;
+        if (!hui::save::read_file(path, &data) || !font->load(data))
+        {
+            ADD_FAILURE() << "cannot load " << path;
+            return;
+        }
+        ref->font = font;
+        ref->texture = handle;
+    }
+};
+
+const FontSet &font_set()
+{
+    static const FontSet set;
+    return set;
+}
+
+// Sixty channels in five kinds, enough for several rows of the grid.
+std::string playlist_text()
+{
+    static constexpr const char *kinds[] = {"General", "News", "Sports", "Kids", "Movies"};
+    static constexpr const char *sizes[] = {"", " (720p)", " (1080p)", " (576p)"};
+    std::string text = "#EXTM3U\n";
+    for (int i = 0; i < 60; ++i)
+    {
+        char line[320];
+        std::snprintf(line, sizeof(line),
+                      "#EXTINF:-1 tvg-id=\"c%02d.xx\" tvg-country=\"%s\" tvg-language=\"%s\" "
+                      "group-title=\"%s\",Channel %02d%s\n"
+                      "https://streams.example.invalid/c%02d/index.m3u8\n",
+                      i, i % 2 == 0 ? "US" : "DE", i % 2 == 0 ? "English" : "German", kinds[i % 5],
+                      i, sizes[i % 4], i);
+        text += line;
+    }
+    return text;
+}
+
+class AppTest : public ::testing::Test
+{
+  protected:
+    void SetUp() override
+    {
+        host::reset();
+        char pattern[] = "/tmp/prosperotv-app-XXXXXX";
+        dir_ = mkdtemp(pattern);
+        playlist_ = dir_ + "/playlist.m3u";
+        std::ofstream(playlist_) << playlist_text();
+        host::set_network(true, playlist_);
+        model_ = std::make_unique<ptv::Model>(dir_);
+        ASSERT_TRUE(model_->open());
+        for (int i = 0; i < 400 && model_->refreshing(); ++i)
+        {
+            model_->poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        ASSERT_TRUE(model_->has_catalog());
+        model_->take_notices();
+        make_app();
+    }
+
+    void TearDown() override
+    {
+        app_.reset();
+        if (model_)
+            model_->close();
+        model_.reset();
+        std::error_code error;
+        fs::remove_all(dir_, error);
+    }
+
+    void make_app()
+    {
+        app_ = std::make_unique<ptv::App>(*model_, font_set().fonts, 7u, ptv::Settings{}, "test");
+        idle(30);
+    }
+
+    // One frame: update with an input, then record the frame the way the
+    // renderer would be handed it.
+    void frame(const hui::InputFrame &input)
+    {
+        feedback_.clear();
+        app_->update(input, kDt, feedback_);
+        app_->draw(frame_);
+        cues_ += static_cast<int>(feedback_.cues.size());
+    }
+    void idle(int frames = 20)
+    {
+        hui::InputFrame input;
+        input.connected = true;
+        for (int i = 0; i < frames; ++i)
+            frame(input);
+    }
+    void press(Action action, int settle = 20)
+    {
+        hui::InputFrame input;
+        input.connected = true;
+        input.pressed = hui::action_bit(action);
+        input.held = input.pressed;
+        frame(input);
+        idle(settle);
+    }
+    void move(Direction direction, int settle = 12)
+    {
+        hui::InputFrame input;
+        input.connected = true;
+        input.nav = direction;
+        frame(input);
+        idle(settle);
+    }
+    // A button that goes down and stays down for that many frames.
+    void hold(Action action, int frames)
+    {
+        hui::InputFrame input;
+        input.connected = true;
+        input.pressed = hui::action_bit(action);
+        input.held = input.pressed;
+        frame(input);
+        input.pressed = 0;
+        for (int i = 1; i < frames; ++i)
+            frame(input);
+    }
+    // Downloads another playlist and starts the interface again on it.
+    void use_playlist(const std::string &text)
+    {
+        app_.reset();
+        std::ofstream(playlist_) << text;
+        model_->refresh();
+        for (int i = 0; i < 400 && model_->refreshing(); ++i)
+        {
+            model_->poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        model_->take_notices();
+        make_app();
+    }
+    int position() const
+    {
+        return model_->position_of(model_->view.focused_channel);
+    }
+
+    std::string dir_;
+    std::string playlist_;
+    std::unique_ptr<ptv::Model> model_;
+    std::unique_ptr<ptv::App> app_;
+    ptv::Frame frame_;
+    hui::ui::Feedback feedback_;
+    int cues_ = 0;
+};
+
+TEST_F(AppTest, OpensOnLiveTvWithTheWholeCatalog)
+{
+    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(model_->group(), ptv::Group::all);
+    EXPECT_EQ(model_->visible_count(), 60u);
+    EXPECT_FALSE(frame_.scene.empty());
+    EXPECT_TRUE(frame_.overlay.empty());
+    EXPECT_FALSE(frame_.glass);
+    EXPECT_EQ(frame_.backdrop.mode, hui::gfx::BackdropMode::aurora);
+    EXPECT_EQ(model_->view.focused_channel, model_->channel(0).id);
+}
+
+TEST_F(AppTest, CrossQueuesTheChannelInFocus)
+{
+    move(Direction::right);
+    move(Direction::down);
+    press(Action::confirm);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    // One to the right and one row of five down.
+    EXPECT_EQ(request.channel_id, model_->channel(6).id);
+    EXPECT_EQ(model_->view.focused_channel, request.channel_id);
+    EXPECT_GT(cues_, 0);
+}
+
+TEST_F(AppTest, TheMenuComesBackWhereItWas)
+{
+    press(Action::page_next); // Favorites
+    press(Action::page_prev);
+    move(Direction::down);
+    move(Direction::down);
+    move(Direction::right);
+    const std::string focused = model_->view.focused_channel;
+    EXPECT_EQ(focused, model_->channel(11).id);
+
+    // A channel plays: the interface is thrown away and made again.
+    app_.reset();
+    model_->close();
+    ASSERT_TRUE(model_->open());
+    make_app();
+    EXPECT_EQ(model_->view.focused_channel, focused);
+    press(Action::confirm);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, focused);
+}
+
+TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsHome)
+{
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(model_->group(), ptv::Group::favorites);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 2);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(model_->view.tab, 3);
+    press(Action::page_next); // About
+    EXPECT_EQ(app_->tab(), 4);
+    press(Action::page_next); // the last tab: nothing further
+    EXPECT_EQ(app_->tab(), 4);
+    // About only reads: nothing on it answers Cross.
+    press(Action::confirm);
+    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_FALSE(frame_.scene.empty());
+    press(Action::back);
+    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(model_->group(), ptv::Group::all);
+}
+
+TEST_F(AppTest, SquareStarsAndTheFavoritesTabListsIt)
+{
+    move(Direction::right);
+    press(Action::west);
+    EXPECT_TRUE(model_->is_favorite(model_->channel(1)));
+    EXPECT_FALSE(frame_.overlay.empty()); // the toast
+    EXPECT_TRUE(frame_.glass);
+
+    press(Action::page_next);
+    EXPECT_EQ(model_->visible_count(), 1u);
+    EXPECT_EQ(model_->view.focused_channel, model_->channel(1).id);
+    press(Action::west);
+    EXPECT_EQ(model_->visible_count(), 0u);
+    // An empty list offers the way back to Live TV.
+    press(Action::confirm);
+    EXPECT_EQ(app_->tab(), 0);
+}
+
+TEST_F(AppTest, TheListsAreReachedFromTheTopRow)
+{
+    move(Direction::up);    // onto the chips
+    move(Direction::right); // Recent (empty)
+    EXPECT_EQ(model_->group(), ptv::Group::recent);
+    EXPECT_EQ(model_->visible_count(), 0u);
+    move(Direction::right); // News
+    EXPECT_EQ(model_->group(), ptv::Group::news);
+    EXPECT_EQ(model_->visible_count(), 12u);
+    move(Direction::down); // back into the grid
+    press(Action::confirm);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, model_->channel(1).id);
+    EXPECT_EQ(model_->view.live_group, ptv::Group::news);
+}
+
+TEST_F(AppTest, BackGoesToTheTopThenToTheFirstList)
+{
+    move(Direction::up);
+    move(Direction::right);
+    move(Direction::right); // News
+    move(Direction::down);
+    move(Direction::down);
+    move(Direction::right);
+    EXPECT_EQ(model_->view.focused_channel, model_->channel(model_->visible(6)).id);
+    press(Action::back); // to the top of the list
+    EXPECT_EQ(model_->view.focused_channel, model_->channel(model_->visible(0)).id);
+    press(Action::back); // onto the chips
+    press(Action::back); // to All
+    EXPECT_EQ(model_->group(), ptv::Group::all);
+    EXPECT_EQ(model_->visible_count(), 60u);
+}
+
+TEST_F(AppTest, TheSearchDrawerNarrowsTheListBehindIt)
+{
+    press(Action::north);
+    ASSERT_TRUE(app_->searching());
+    EXPECT_TRUE(frame_.glass);
+
+    host::set_keyboard_text("channel 0");
+    press(Action::confirm); // the keyboard
+    EXPECT_EQ(model_->query(), "channel 0");
+    EXPECT_EQ(model_->visible_count(), 10u); // 00..09
+
+    move(Direction::down);  // Country
+    press(Action::confirm); // its list
+    move(Direction::down);
+    press(Action::confirm); // the first country
+    EXPECT_FALSE(model_->country().empty());
+    const unsigned narrowed = model_->visible_count();
+    EXPECT_EQ(narrowed, 5u);
+
+    move(Direction::down);  // Category
+    move(Direction::down);  // Language
+    move(Direction::down);  // Picture size
+    move(Direction::right); // SD
+    EXPECT_EQ(model_->quality(), static_cast<unsigned>(ptv::kQualitySd));
+    move(Direction::down); // Show the channels
+    press(Action::confirm);
+    EXPECT_FALSE(app_->searching());
+    EXPECT_TRUE(model_->filtering());
+
+    // Circle undoes the search before anything else.
+    press(Action::back);
+    EXPECT_FALSE(model_->filtering());
+    EXPECT_EQ(model_->visible_count(), 60u);
+    EXPECT_EQ(app_->tab(), 0);
+}
+
+TEST_F(AppTest, SquareInTheDrawerResetsAndCircleClosesIt)
+{
+    press(Action::north);
+    host::set_keyboard_text("news");
+    press(Action::confirm);
+    EXPECT_TRUE(model_->filtering());
+    press(Action::west);
+    EXPECT_FALSE(model_->filtering());
+    EXPECT_TRUE(app_->searching());
+    press(Action::back);
+    EXPECT_FALSE(app_->searching());
+}
+
+TEST_F(AppTest, AChannelThatFailedIsAskedAboutFirst)
+{
+    const std::string id = model_->channel(4).id;
+    app_.reset();
+    model_->close();
+    ASSERT_TRUE(model_->open());
+    model_->report_playback_failure(id.c_str(), "Channel 04", -5, 2, "The stream did not answer.");
+    make_app();
+    ASSERT_TRUE(app_->asking());
+    // The dialog takes the input: the tabs do not turn under it.
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 0);
+    press(Action::confirm); // Try again
+    EXPECT_FALSE(app_->asking());
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, id);
+}
+
+TEST_F(AppTest, ASourceIsSetUpFromItsRow)
+{
+    press(Action::page_next);
+    press(Action::page_next); // Sources
+    move(Direction::down);    // Custom playlist
+    press(Action::confirm);   // not set up: its form
+    EXPECT_EQ(host::keyboard_requests(), 1);
+    EXPECT_EQ(host::keyboard_title(), "Playlist address");
+    host::set_keyboard_text("https://lists.example.invalid/mine.m3u");
+    idle(4);
+    EXPECT_EQ(model_->active_source(), iptv::SourceKind::Custom);
+    for (int i = 0; i < 200 && model_->refreshing(); ++i)
+    {
+        idle(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_TRUE(model_->has_catalog());
+    EXPECT_EQ(model_->view.focused_source, 1);
+}
+
+TEST_F(AppTest, SettingsAreChangedAndReported)
+{
+    press(Action::page_prev); // wraps to nothing: stays on Live TV
+    EXPECT_EQ(app_->tab(), 0);
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 3);
+    EXPECT_FALSE(app_->take_settings_changed());
+    press(Action::confirm); // Reduce motion
+    EXPECT_TRUE(app_->settings().reduced_motion);
+    EXPECT_TRUE(app_->take_settings_changed());
+    EXPECT_FALSE(app_->take_settings_changed());
+    move(Direction::down);
+    press(Action::confirm); // Interface sounds off
+    EXPECT_FALSE(app_->settings().sounds);
+    cues_ = 0;
+    move(Direction::down);
+    move(Direction::right); // Menu sharpness
+    EXPECT_EQ(app_->settings().resolution, static_cast<int>(ptv::Settings::kFullHd));
+    EXPECT_EQ(cues_, 0); // and nothing sounds any more
+}
+
+TEST_F(AppTest, OptionsStartsAnUpdateOnce)
+{
+    host::set_network(true, playlist_, 200);
+    const int before = host::fetch_count();
+    press(Action::menu, 2);
+    EXPECT_TRUE(model_->refreshing());
+    press(Action::menu, 2); // a second press while it runs starts nothing more
+    for (int i = 0; i < 200 && model_->refreshing(); ++i)
+    {
+        idle(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_FALSE(model_->refreshing());
+    EXPECT_EQ(host::fetch_count(), before + 1);
+    EXPECT_EQ(model_->view.focused_channel, model_->channel(0).id);
+}
+
+// Seven channels under each of A, C, M and T, and two that start with a digit.
+std::string lettered_playlist()
+{
+    std::string text = "#EXTM3U\n";
+    int id = 0;
+    for (const char *word : {"Tern", "Alder", "Moss", "Cedar"})
+        for (int i = 0; i < 7; ++i, ++id)
+        {
+            char line[200];
+            std::snprintf(line, sizeof(line),
+                          "#EXTINF:-1 tvg-id=\"l%02d.xx\",%s %d\n"
+                          "https://streams.example.invalid/l%02d/index.m3u8\n",
+                          id, word, i, id);
+            text += line;
+        }
+    text += "#EXTINF:-1 tvg-id=\"n1.xx\",1 Plus\nhttps://streams.example.invalid/n1/index.m3u8\n";
+    text += "#EXTINF:-1 tvg-id=\"n2.xx\",24 Hours\nhttps://streams.example.invalid/n2/index.m3u8\n";
+    return text;
+}
+
+TEST_F(AppTest, RightFromTheLastColumnLeadsOntoTheLetters)
+{
+    use_playlist(lettered_playlist());
+    ASSERT_EQ(model_->visible_count(), 30u);
+    EXPECT_EQ(position(), 0); // "1 Plus", under '#'
+    for (int i = 0; i < 4; ++i)
+        move(Direction::right);
+    EXPECT_FALSE(app_->on_letters());
+    EXPECT_EQ(position(), 4);
+    move(Direction::right);
+    EXPECT_TRUE(app_->on_letters());
+    EXPECT_EQ(position(), 4); // nothing moved yet: Alder 2 is under A
+
+    // Down goes to the next letter that has channels: C, then M, then T.
+    move(Direction::down);
+    EXPECT_EQ(position(), model_->letter_start(3));
+    EXPECT_EQ(model_->channel(model_->visible(static_cast<unsigned>(position()))).name, "Cedar 0");
+    move(Direction::down);
+    EXPECT_EQ(position(), model_->letter_start(13));
+    move(Direction::down);
+    EXPECT_EQ(position(), model_->letter_start(20));
+    move(Direction::down); // nothing after T
+    EXPECT_EQ(position(), model_->letter_start(20));
+    move(Direction::up);
+    EXPECT_EQ(position(), model_->letter_start(13));
+
+    // Cross on a letter does not play: it hands the focus to its channels.
+    press(Action::confirm);
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model_->take_play_request(&request));
+    EXPECT_FALSE(app_->on_letters());
+    press(Action::confirm);
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_name, "Moss 0");
+}
+
+TEST_F(AppTest, CircleAndLeftLeaveTheLetters)
+{
+    use_playlist(lettered_playlist());
+    for (int i = 0; i < 5; ++i)
+        move(Direction::right);
+    ASSERT_TRUE(app_->on_letters());
+    move(Direction::up); // '#'
+    EXPECT_EQ(position(), 0);
+    press(Action::back);
+    EXPECT_FALSE(app_->on_letters());
+    EXPECT_EQ(app_->tab(), 0);
+    for (int i = 0; i < 5; ++i)
+        move(Direction::right);
+    ASSERT_TRUE(app_->on_letters());
+    move(Direction::left);
+    EXPECT_FALSE(app_->on_letters());
+    // A held Right stops at the end of the row instead of slipping onto them.
+    hui::InputFrame input;
+    input.connected = true;
+    input.nav = Direction::right;
+    input.nav_repeat = true;
+    for (int i = 0; i < 8; ++i)
+    {
+        frame(input);
+        idle(4);
+    }
+    EXPECT_FALSE(app_->on_letters());
+    EXPECT_EQ(position() % 5, 4);
+}
+
+TEST_F(AppTest, AHeldTriggerKeepsTurningPages)
+{
+    // One press is one page of ten.
+    press(Action::jump_next);
+    EXPECT_EQ(position(), 10);
+    press(Action::jump_prev);
+    EXPECT_EQ(position(), 0);
+
+    // Held for a second: the first page at once, a wait, then a steady run.
+    hold(Action::jump_next, 60);
+    const int after = position();
+    EXPECT_GE(after, 40);
+    EXPECT_LT(after, 60);
+    // Let go: it stops where it is.
+    idle(40);
+    EXPECT_EQ(position(), after);
+
+    // Held to the end of the list: it stops on the last channel and stays.
+    hold(Action::jump_next, 200);
+    EXPECT_EQ(position(), 59);
+    // And back the same way.
+    hold(Action::jump_prev, 240);
+    EXPECT_EQ(position(), 0);
+}
+
+TEST_F(AppTest, AHoldEndsWhenSomethingElseTakesTheController)
+{
+    hold(Action::jump_next, 10);
+    EXPECT_EQ(position(), 10);
+    // The drawer opens with R2 still down; closing it turns no page.
+    hui::InputFrame input;
+    input.connected = true;
+    input.held = hui::action_bit(Action::jump_next);
+    input.pressed = hui::action_bit(Action::north);
+    frame(input);
+    ASSERT_TRUE(app_->searching());
+    input.pressed = 0;
+    for (int i = 0; i < 60; ++i)
+        frame(input);
+    input.pressed = hui::action_bit(Action::back);
+    frame(input);
+    input.pressed = 0;
+    for (int i = 0; i < 60; ++i)
+        frame(input);
+    EXPECT_FALSE(app_->searching());
+    EXPECT_EQ(position(), 10);
+}
+
+// Returning from a channel far down a long list: its rows are there at once,
+// not after the wave of the entrance has walked down from the first row.
+TEST_F(AppTest, AListOpenedDeepShowsItsTilesAtOnce)
+{
+    std::string text = "#EXTM3U\n";
+    for (int i = 0; i < 3000; ++i)
+    {
+        char line[200];
+        std::snprintf(line, sizeof(line),
+                      "#EXTINF:-1 tvg-id=\"d%04d.xx\",Channel %04d\n"
+                      "https://streams.example.invalid/d%04d/index.m3u8\n",
+                      i, i, i);
+        text += line;
+    }
+    use_playlist(text);
+    ASSERT_EQ(model_->visible_count(), 3000u);
+    idle(60);
+    const std::size_t at_the_top = frame_.scene.instances().size();
+
+    app_.reset();
+    model_->view.focused_channel = model_->channel(model_->visible(2990)).id;
+    make_app();
+    EXPECT_EQ(position(), 2990);
+    EXPECT_GT(frame_.scene.instances().size() * 10, at_the_top * 6);
+}
+
+iptv::Channel written(const char *name, const char *id = "")
+{
+    iptv::Channel channel;
+    channel.name = name;
+    channel.tvg_id = id;
+    return channel;
+}
+
+TEST(ShownNames, AreWrittenInTheScriptsTheFontsHold)
+{
+    const hui::ui::Fonts &fonts = font_set().fonts;
+    // Accents, Cyrillic and Greek are baked: the name is shown as written.
+    EXPECT_EQ(ptv::shown_name(fonts, written("Ni\xC3\xB1os T\xC3\xA9l\xC3\xA9 (720p)")),
+              "Ni\xC3\xB1os T\xC3\xA9l\xC3\xA9");
+    const char *cyrillic =
+        "\xD0\x9F\xD0\xB5\xD1\x80\xD0\xB2\xD1\x8B\xD0\xB9 \xD0\xBA\xD0\xB0\xD0\xBD\xD0\xB0\xD0\xBB";
+    EXPECT_EQ(ptv::shown_name(fonts, written(cyrillic)), cyrillic);
+    const char *greek = "\xCE\x95\xCE\xA1\xCE\xA4 1";
+    EXPECT_EQ(ptv::shown_name(fonts, written(greek)), greek);
+    // Every letter of a shown name can be drawn by the face it is drawn in.
+    for (const char *name : {cyrillic, greek, "Ni\xC3\xB1os"})
+    {
+        const hui::ui::FontRef &face = ptv::title_face(fonts, name);
+        const std::string_view text(name);
+        for (std::size_t index = 0; index < text.size();)
+        {
+            const std::uint32_t codepoint = hui::gfx::next_codepoint(text, &index);
+            EXPECT_TRUE(codepoint <= 0x20 || face.font->has_glyph(codepoint)) << name;
+        }
+    }
+}
+
+TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
+{
+    const hui::ui::Fonts &fonts = font_set().fonts;
+    const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93";
+    // Most of a mixed name survives: it is kept without the letters that cannot be drawn.
+    EXPECT_EQ(ptv::shown_name(fonts, written("CCTV-1 \xE7\xBB\xBC\xE5\x90\x88", "CCTV1.cn")),
+              "CCTV-1");
+    // Nothing survives: the playlist's own id for the channel stands in.
+    EXPECT_EQ(ptv::shown_name(fonts, written(chinese, "CCTV4.cn@SD")), "CCTV4");
+    // And without an id the tile still says something.
+    EXPECT_EQ(ptv::shown_name(fonts, written(chinese)), "Channel");
+    // Notes are filtered the same way; one that cannot be written is dropped.
+    std::vector<std::string> notes;
+    const std::string noted = std::string("Alder [") + chinese + "] [Not 24/7]";
+    EXPECT_EQ(ptv::shown_name(fonts, written(noted.c_str()), &notes), "Alder");
+    ASSERT_EQ(notes.size(), 1u);
+    EXPECT_EQ(notes[0], "Not 24/7");
+    EXPECT_EQ(ptv::readable(fonts.regular, std::string("News | ") + chinese), "News");
+}
+
+// Whatever a player presses, in whatever order: nothing may fault, the tab
+// must stay a tab and every frame must record.
+TEST_F(AppTest, RandomInputNeverBreaksIt)
+{
+    std::mt19937 random(20261002u);
+    static constexpr Action actions[] = {
+        Action::confirm,   Action::back,      Action::north,     Action::west, Action::page_prev,
+        Action::page_next, Action::jump_prev, Action::jump_next, Action::menu, Action::touch};
+    static constexpr Direction directions[] = {Direction::up, Direction::down, Direction::left,
+                                               Direction::right};
+    for (int step = 0; step < 4000; ++step)
+    {
+        hui::InputFrame input;
+        input.connected = true;
+        const unsigned roll = random() % 100;
+        if (roll < 45)
+        {
+            input.nav = directions[random() % 4];
+            input.nav_repeat = random() % 4 == 0;
+        }
+        else if (roll < 80)
+        {
+            input.pressed = hui::action_bit(actions[random() % std::size(actions)]);
+            input.held = input.pressed;
+        }
+        if (random() % 40 == 0)
+            host::set_keyboard_text(random() % 2 == 0 ? "1" : "nothing matches this");
+        if (random() % 300 == 0)
+            host::set_network(random() % 2 == 0, playlist_, 20);
+        frame(input);
+        // A channel was chosen: the frame loop would play it and come back.
+        ptv::PlayRequest request;
+        if (model_->take_play_request(&request) && random() % 3 == 0)
+        {
+            app_.reset();
+            model_->close();
+            ASSERT_TRUE(model_->open());
+            if (random() % 2 == 0)
+                model_->report_playback_failure(request.channel_id.c_str(),
+                                                request.channel_name.c_str(), -1, 1, "");
+            make_app();
+        }
+        ASSERT_GE(app_->tab(), 0);
+        ASSERT_LT(app_->tab(), 5);
+        ASSERT_FALSE(frame_.scene.empty());
+    }
+}
+
+} // namespace

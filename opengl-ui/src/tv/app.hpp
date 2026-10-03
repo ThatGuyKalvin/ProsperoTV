@@ -1,0 +1,127 @@
+// ProsperoTV - The interface: tabs, the screens, and everything that floats.
+// Copyright (C) 2026 BlackBearReloaded
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include "tv/browse_screen.hpp"
+#include "tv/search_sheet.hpp"
+#include "tv/shared.hpp"
+#include "tv/sources_screen.hpp"
+#include "ui/components/dialog.hpp"
+#include "ui/components/form.hpp"
+#include "ui/components/tabs.hpp"
+
+#include <string>
+
+namespace ptv
+{
+
+// The whole menu as one object: the frame loop gives it the controller and
+// the elapsed time, it gives back a frame to draw and the sounds to play.
+// It is made when the menu opens and thrown away when a channel starts; what
+// must outlive that (the catalog, the filters, where the focus was) is in the
+// Model it is given.
+class App
+{
+  public:
+    // glass_texture is the renderer's blurred copy of the frame (panels frost
+    // it); version is shown on the About tab.
+    App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture, const Settings &settings,
+        std::string version);
+
+    void update(const InputFrame &input, float dt, ui::Feedback &feedback);
+    // Records the frame. It changes nothing: it may run more than once.
+    void draw(Frame &frame) const;
+
+    // The screen a channel opens on. The menu gives way to it as t goes from
+    // 0 to 1; its last picture, the bar still empty, is what the player keeps
+    // on the television until the channel's first picture. preview_fill draws
+    // the bar filled that far (pictures made on a PC only).
+    void draw_tuning(Frame &frame, const std::string &channel_id, float t,
+                     float preview_fill = 0.0f) const;
+    struct TuningBar
+    {
+        Rect rect;      // in the 1920 x 1080 picture
+        Color fill;     // what the player fills it with
+        float start;    // how full it is when the player takes over
+    };
+    static TuningBar tuning_bar();
+
+    const Settings &settings() const
+    {
+        return shared_.settings;
+    }
+    // True once after the player changed a setting: time to save them.
+    bool take_settings_changed();
+
+    // ---- where the interface is, for tests ----
+    int tab() const
+    {
+        return tabs_.active();
+    }
+    bool searching() const
+    {
+        return search_.is_open();
+    }
+    bool asking() const
+    {
+        return failure_.is_open();
+    }
+    bool on_letters() const
+    {
+        return browsing() && browse_.on_letters();
+    }
+
+  private:
+    enum Tab : int
+    {
+        kLive,
+        kFavorites,
+        kSources,
+        kSettings,
+        kAbout,
+        kTabCount,
+    };
+
+    bool browsing() const
+    {
+        return tabs_.active() <= kFavorites;
+    }
+    void show_tab(int index, bool glide);
+    void tab_changed();
+    void refresh(ui::Feedback &feedback);
+    void open_failure(ui::Feedback &feedback);
+    void handle_screen(const InputFrame &input, ui::Feedback &feedback);
+    void apply_settings();
+    void follow_channel(float dt);
+
+    void draw_header(ui::Canvas &canvas) const;
+    void draw_status(ui::Canvas &canvas) const;
+    void draw_settings(ui::Canvas &canvas) const;
+    void draw_about(ui::Canvas &canvas) const;
+    void draw_hints(ui::Canvas &canvas) const;
+
+    Shared shared_;
+    BrowseScreen browse_;
+    SourcesScreen sources_;
+    SearchSheet search_;
+    ui::TabBar tabs_;
+    ui::Form form_;
+    ui::Dialog failure_;
+    // What the app itself announces (a newer version): top right, for longer.
+    ui::ToastStack announcements_;
+
+    std::uint32_t glass_texture_ = 0;
+    std::string version_;
+    bool settings_changed_ = false;
+    bool failure_seen_ = false;
+    float page_age_ = 10.0f; // seconds since the tab changed
+    // The backdrop leans toward the colour of the channel in focus.
+    ui::SpringColor lean_;
+    ui::SpringColor lean_dark_;
+    tween::Spring lean_amount_;
+    float drift_ = 0.0f;
+};
+
+} // namespace ptv

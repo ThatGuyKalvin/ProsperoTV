@@ -1,0 +1,43 @@
+# The 4K channels through the drawer's Picture size: the first three, each
+# played for 25 s; a refusal's notice is closed with Circle before the next.
+# (the built-in list names no countries or languages: those rows are passed over)
+wait 2
+until catalog 420
+wait 2
+watch 25
+press triangle
+wait 1
+press down 2
+press right 4
+wait 1
+press down
+press cross
+wait 2
+status
+shot 01-4k-channels
+press cross
+until menu 120
+wait 2
+status
+shot 02-after-first
+press circle
+wait 1
+press right
+press cross
+until menu 120
+wait 2
+status
+shot 03-after-second
+press circle
+wait 1
+press right
+press cross
+until menu 120
+wait 2
+status
+shot 04-after-third
+press circle
+wait 1
+press circle
+wait 1
+quit 45

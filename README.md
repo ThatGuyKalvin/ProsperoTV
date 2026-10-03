@@ -21,6 +21,11 @@ Demo available by clicking the image below.
 
 [![ProsperoTV Live TV screen](docs/images/prosperotv.png)](https://i.imgur.com/oziiCgb.mp4)
 
+> [!NOTE]
+> **A new interface is in development in [`opengl-ui/`](opengl-ui/).** It is built on
+> [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) and is not part of
+> a release yet; the app described below is the released one.
+
 ## Highlights
 
 - Browse thousands of community-maintained IPTV channels from the iptv-org

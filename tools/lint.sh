@@ -22,6 +22,11 @@ for file in "${repository_files[@]}"; do
             # Third-party sources retain their upstream licence headers.
             continue
             ;;
+        opengl-ui/*)
+            # The next interface carries ProsperoTV's own headers and is
+            # checked by its own tests (opengl-ui/tools/run-tests.sh).
+            continue
+            ;;
         *.c|*.cc|*.cpp|*.h|*.hpp|*.ld|*.py|*.ps1|*.sh|*.yml|*.yaml|Makefile|.clang-format|.clang-tidy|.env.example)
             header=$(head -n 20 "$file")
             grep -Eq 'ps5-native-app-boilerplate|PS5 Radio' <<<"$header"

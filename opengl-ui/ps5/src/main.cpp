@@ -1,0 +1,851 @@
+// ProsperoTV - Application entry point: the menu and the player take turns.
+// Copyright (C) 2026 BlackBearReloaded
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The menu is drawn with OpenGL and the video is presented by the player's
+// own AGC presenter. The two must never own the display at the same time, so
+// the process alternates: open the menu (display, renderer, controller,
+// sounds), run it until a channel is chosen, close all of it, play the
+// channel, and open the menu again where it was.
+
+#include "audio/cues.hpp"
+#include "audio/mixer.hpp"
+#include "core/frame_stats.hpp"
+#include "core/input.hpp"
+#include "core/save_file.hpp"
+#include "core/version.hpp"
+#include "gfx/canvas.hpp"
+#include "gfx/renderer.hpp"
+#include "iptv_ime.h"
+#include "iptv_player.h"
+#include "iptv_store.h"
+#include "platform/ps5/audio_out.hpp"
+#include "platform/ps5/display_egl.hpp"
+#include "platform/ps5/pad.hpp"
+#include "platform/ps5/system.hpp"
+#include "tv/app.hpp"
+#include "tv_build_options.h"
+#include "tv_dev.hpp"
+#include "tv_tuning.h"
+#include "tv/platform.hpp"
+#include "update_check.h"
+
+#include <GL/glcorearb.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <atomic>
+#include <span>
+#include <string>
+#include <vector>
+
+#ifndef IPTV_AUTOTEST_ENABLED
+#define IPTV_AUTOTEST_ENABLED 0
+#endif
+
+extern "C" int sceKernelUsleep(std::uint32_t microseconds);
+extern "C" int sceSysmoduleLoadModule(std::uint32_t id);
+extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
+                                                std::size_t size, int blocking);
+extern "C" long write(int descriptor, const void *buffer, std::size_t bytes);
+extern "C" void hui_heap_stats(std::size_t *live_bytes, std::size_t *peak_bytes,
+                               std::size_t *blocks, std::size_t *failures);
+
+namespace
+{
+
+using namespace hui;
+
+constexpr char kDataDir[] = "/download0";
+// The player's decoders (iptv_native_backend.c uses the same numbers).
+constexpr std::uint32_t kVideodecModule = 0x00CF;
+constexpr std::uint32_t kAudiodecModule = 0x0088;
+constexpr char kAssets[] = "/app0/assets";
+
+// Whether Cross is down right now, whatever it is mapped to.
+bool g_cross_held = false;
+bool g_splash_hidden = false;
+std::uint64_t g_menu_sessions = 0;
+
+struct NotificationRequest
+{
+    std::uint8_t reserved[45];
+    char message[3075];
+};
+
+// A failure the player must see even though nothing can be drawn.
+void notify_failure(const char *stage)
+{
+    NotificationRequest request{};
+    std::snprintf(request.message, sizeof(request.message), "ProsperoTV could not open: %s",
+                  stage != nullptr ? stage : "unknown stage");
+    sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);
+}
+
+void log_heap(const char *when)
+{
+    std::size_t live = 0;
+    std::size_t peak = 0;
+    std::size_t blocks = 0;
+    std::size_t failures = 0;
+    hui_heap_stats(&live, &peak, &blocks, &failures);
+    sys::log("[TV] heap %s live=%zu peak=%zu blocks=%zu failures=%zu", when, live, peak, blocks,
+             failures);
+}
+
+// Pictures of a scripted run: half size is enough to read every label.
+constexpr int kCaptureWidth = 960;
+constexpr int kCaptureHeight = 540;
+
+// The bound framebuffer, bottom row first, as a 24-bit BMP.
+bool save_picture(const std::string &path, int width, int height)
+{
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 4);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    const std::uint32_t row = (static_cast<std::uint32_t>(width) * 3 + 3) & ~3u;
+    const std::uint32_t size = 54 + row * static_cast<std::uint32_t>(height);
+    unsigned char header[54] = {'B', 'M'};
+    const auto put = [&](int at, std::uint32_t value)
+    {
+        for (int i = 0; i < 4; ++i)
+            header[at + i] = static_cast<unsigned char>(value >> (8 * i));
+    };
+    put(2, size);
+    put(10, 54);
+    put(14, 40);
+    put(18, static_cast<std::uint32_t>(width));
+    put(22, static_cast<std::uint32_t>(height));
+    header[26] = 1;
+    header[28] = 24;
+    put(34, size - 54);
+    std::FILE *file = std::fopen(path.c_str(), "wb");
+    if (file == nullptr)
+        return false;
+    bool ok = std::fwrite(header, 1, sizeof(header), file) == sizeof(header);
+    std::vector<unsigned char> line(row);
+    for (int y = 0; ok && y < height; ++y)
+    {
+        const unsigned char *in = pixels.data() + static_cast<std::size_t>(y) * width * 4;
+        for (int x = 0; x < width; ++x)
+        {
+            line[static_cast<std::size_t>(x) * 3 + 0] = in[x * 4 + 2];
+            line[static_cast<std::size_t>(x) * 3 + 1] = in[x * 4 + 1];
+            line[static_cast<std::size_t>(x) * 3 + 2] = in[x * 4 + 0];
+        }
+        ok = std::fwrite(line.data(), 1, line.size(), file) == line.size();
+    }
+    return std::fclose(file) == 0 && ok;
+}
+
+bool load_font(gfx::Renderer &renderer, const char *name, gfx::Font *font, ui::FontRef *ref)
+{
+    std::string data;
+    const std::string path = std::string(kAssets) + "/fonts/" + name;
+    if (!save::read_file(path, &data) || !font->load(data))
+    {
+        sys::log("[TV] font %s failed: %s", name, font->error().c_str());
+        return false;
+    }
+    ref->font = font;
+    ref->texture = renderer.batch().create_font_texture(*font);
+    return true;
+}
+
+// The sharpest mode the settings allow, then 1080p.
+bool open_display(ps5::Display &display, const ptv::Settings &settings)
+{
+    if (settings.resolution == ptv::Settings::kBest && ps5::Display::supports_display_modes())
+    {
+        if (display.open(3840, 2160))
+            return true;
+        sys::log("[TV] 2160p menu failed, using 1080p");
+    }
+    return display.open(1920, 1080);
+}
+
+// Whether homebrew.page lists a newer ProsperoTV: asked once per launch, on a
+// thread of its own, and said by the menu when the answer is there.
+struct UpdateCheck
+{
+    update_check_result result{};
+    std::atomic<int> state{0}; // 0 not asked, 1 asking, 2 answered, 3 said
+    char title_id[10] = {};
+    char installed[12] = {};
+};
+UpdateCheck g_update;
+
+void *update_check_entry(void *)
+{
+    if (g_update.title_id[0] != '\0')
+        update_check_run(g_update.title_id, g_update.installed, &g_update.result);
+    else
+        update_check_run_self(&g_update.result);
+    g_update.state.store(2, std::memory_order_release);
+    return nullptr;
+}
+
+void start_update_check()
+{
+    // A test build can ask as another title and version (dev/update-as.txt:
+    // "PPSA99003 01.000.000"), since the test title is not in the catalog.
+    std::string as;
+    if (TV_DEV_SCRIPTS != 0 && save::read_file("/app0/dev/update-as.txt", &as, 64))
+        std::sscanf(as.c_str(), "%9s %11s", g_update.title_id, g_update.installed);
+    g_update.state.store(1, std::memory_order_release);
+    void *thread = ptv::platform::thread_start(update_check_entry, nullptr, 512u * 1024u,
+                                               "prosperotv-update");
+    if (thread == nullptr)
+        g_update.state.store(3, std::memory_order_release);
+    else
+        (void)ptv::platform::thread_detach(thread);
+}
+
+// Once, when the answer has arrived: a notice that stays ten seconds.
+void say_update(ptv::Model &model)
+{
+    int answered = 2;
+    if (!g_update.state.compare_exchange_strong(answered, 3, std::memory_order_acq_rel))
+        return;
+    const update_check_result &result = g_update.result;
+    sys::log("[TV] update check: state=%d reason=%s http=%d error=0x%08x installed=%s "
+             "available=%s",
+             static_cast<int>(result.state), update_check_reason_text(result.reason),
+             result.http_status, static_cast<unsigned>(result.platform_error), result.installed,
+             result.available);
+    if (result.state != UPDATE_CHECK_AVAILABLE)
+        return;
+    const std::string version = result.version[0] != '\0' ? result.version : result.available;
+    model.announce(ptv::Level::busy, "ProsperoTV " + version + " is available",
+                   "Get it from homebrew.page.", 10.0f);
+}
+
+// One frame of the menu, onto the television.
+void render(gfx::Renderer &renderer, const ps5::Display &display, const ptv::Frame &frame)
+{
+    renderer.begin();
+    renderer.backdrop(frame.backdrop);
+    renderer.draw(frame.scene);
+    if (frame.glass)
+        renderer.glass();
+    renderer.draw(frame.overlay);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    renderer.present(0, display.width(), display.height());
+}
+
+// The channel is chosen: the menu gives way to the tuning screen, and a
+// picture of it (its bar still empty) goes to the player, which keeps it on
+// the television, the bar moving, until the channel's first picture.
+void hand_over_to_channel(const ptv::App &app, gfx::Renderer &renderer, ps5::Display &display,
+                          ptv::Frame &frame, const std::string &channel_id, bool reduced)
+{
+    const std::int64_t started = sys::monotonic_us();
+    const int steps = reduced ? 1 : 22;
+    for (int step = 1; step <= steps; ++step)
+    {
+        app.draw_tuning(frame, channel_id, static_cast<float>(step) / static_cast<float>(steps));
+        render(renderer, display, frame);
+        if (!display.swap())
+            break;
+    }
+
+    // The last frame once more, at the picture's size, into memory.
+    constexpr int kPictureWidth = 1920;
+    constexpr int kPictureHeight = 1080;
+    std::vector<unsigned char> rgba(static_cast<std::size_t>(kPictureWidth) * kPictureHeight * 4);
+    gfx::Canvas target;
+    bool taken = target.create(kPictureWidth, kPictureHeight, 1);
+    if (taken)
+    {
+        target.bind();
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        renderer.present(target.framebuffer(), kPictureWidth, kPictureHeight);
+        glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer());
+        glReadPixels(0, 0, kPictureWidth, kPictureHeight, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        taken = glGetError() == GL_NO_ERROR;
+    }
+    if (taken)
+    {
+        // OpenGL hands the bottom row over first; the picture starts at the top.
+        const std::size_t row = static_cast<std::size_t>(kPictureWidth) * 4;
+        std::vector<unsigned char> swap(row);
+        for (int y = 0; y < kPictureHeight / 2; ++y)
+        {
+            unsigned char *top = rgba.data() + static_cast<std::size_t>(y) * row;
+            unsigned char *bottom =
+                rgba.data() + static_cast<std::size_t>(kPictureHeight - 1 - y) * row;
+            std::memcpy(swap.data(), top, row);
+            std::memcpy(top, bottom, row);
+            std::memcpy(bottom, swap.data(), row);
+        }
+        const ptv::App::TuningBar bar = ptv::App::tuning_bar();
+        const auto byte = [](float value)
+        { return static_cast<std::uint8_t>(value <= 0.0f ? 0 : value >= 1.0f ? 255 : value * 255.0f + 0.5f); };
+        const std::uint8_t fill[3] = {byte(bar.fill.r), byte(bar.fill.g), byte(bar.fill.b)};
+        tv_tuning_set_picture(rgba.data(), bar.rect.x, bar.rect.y, bar.rect.w, bar.rect.h, fill,
+                              bar.start);
+    }
+    else
+    {
+        tv_tuning_clear();
+    }
+    sys::log("[TV] tuning picture %s in %lld ms", taken ? "taken" : "not available",
+             static_cast<long long>((sys::monotonic_us() - started) / 1000));
+}
+
+// What the last channel left behind for the menu to say.
+struct LastPlayback
+{
+    std::string channel_id;
+    std::string channel_name;
+    int result = 0;
+    unsigned attempts = 0;
+};
+
+// One menu session. Returns true with a channel to play; false when the menu
+// could not be opened at all.
+bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &last,
+              ptv::PlayRequest *request, tv_dev::Script &script)
+{
+    *request = {};
+    ++g_menu_sessions;
+    const std::int64_t opened = sys::monotonic_us();
+    sys::log("[TV] menu open session=%llu", static_cast<unsigned long long>(g_menu_sessions));
+
+    ps5::Display display;
+    if (!open_display(display, *settings))
+    {
+        sys::log("[TV] fatal: display open failed");
+        notify_failure("display");
+        return false;
+    }
+
+    gfx::Renderer renderer;
+    gfx::Font regular;
+    gfx::Font semibold;
+    gfx::Font display_font;
+    gfx::Font mono;
+    ui::Fonts fonts;
+    if (!renderer.init() ||
+        !load_font(renderer, "inter-regular.huifont", &regular, &fonts.regular) ||
+        !load_font(renderer, "inter-semibold.huifont", &semibold, &fonts.semibold) ||
+        !load_font(renderer, "montserrat-medium.huifont", &display_font, &fonts.display) ||
+        !load_font(renderer, "dejavu-sans-mono.huifont", &mono, &fonts.mono))
+    {
+        sys::log("[TV] fatal: renderer init failed");
+        notify_failure("renderer");
+        renderer.release();
+        display.close();
+        return false;
+    }
+    // Dusk uses four faces; the other two slots are for the scripts channel
+    // names need.
+    fonts.pixel = fonts.mono;
+    fonts.hand = fonts.regular;
+
+    // The controller opens the user service, which the keyboard needs too.
+    ps5::Pad pad;
+    const bool pad_ready = pad.open();
+
+    audio::Mixer mixer;
+    ps5::AudioOut audio_out;
+    const bool audio_ready = audio_out.start(mixer);
+    audio::SoundBank sounds;
+    const audio::SoundBank::Stats bank = sounds.load(std::string(kAssets) + "/audio/sfx");
+
+    const bool model_ready = model.open();
+    if (last.result < 0)
+        model.report_playback_failure(last.channel_id.c_str(), last.channel_name.c_str(),
+                                      last.result, last.attempts, iptv_player_last_error());
+    sys::log("[TV] menu ready display=%dx%d pad=%d audio=%d sounds=%d keyboard=%d model=%d "
+             "catalog=%u in %lld ms",
+             display.width(), display.height(), pad_ready ? 1 : 0, audio_ready ? 1 : 0, bank.files,
+             model.keyboard_ready() ? 1 : 0, model_ready ? 1 : 0, model.channel_count(),
+             static_cast<long long>((sys::monotonic_us() - opened) / 1000));
+
+    const std::string version = read_content_version("/app0/sce_sys/param.json");
+    script.menu_opened(g_menu_sessions);
+    bool chosen = false;
+    {
+        // On the heap: the interface holds every screen and is no small object.
+        const std::unique_ptr<ptv::App> owned =
+            std::make_unique<ptv::App>(model, fonts, renderer.glass_texture(), *settings,
+                                       version.empty() ? "unknown" : version);
+        ptv::App &app = *owned;
+        InputTracker tracker;
+        ui::Feedback feedback;
+        ptv::Frame frame;
+        FrameStats stats;
+        PadSample samples[64];
+        gfx::Canvas capture;
+        std::uint64_t frames = 0;
+        std::int64_t previous = sys::monotonic_us();
+        std::int64_t last_frame_start = previous;
+        while (!chosen)
+        {
+            const std::int64_t now = sys::monotonic_us();
+            // Animation time is start-to-start (one full frame), and a hitch
+            // must not teleport the animations.
+            float dt =
+                frames == 0 ? 1.0f / 60.0f : static_cast<float>(now - last_frame_start) / 1e6f;
+            last_frame_start = now;
+            if (dt > 0.05f)
+                dt = 0.05f;
+            std::size_t count = pad.read(samples);
+            if (script.active())
+            {
+                // The script is the controller: one sample a frame, nothing else.
+                const std::uint32_t buttons = script.step(dt, model, app);
+                samples[0] = PadSample{};
+                samples[0].buttons = buttons;
+                samples[0].l2 = (buttons & pad_bits::kL2) != 0 ? 255 : 0;
+                samples[0].r2 = (buttons & pad_bits::kR2) != 0 ? 255 : 0;
+                samples[0].connected = true;
+                samples[0].timestamp_us = static_cast<std::uint64_t>(now);
+                count = 1;
+            }
+            const InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
+                                                    static_cast<std::uint64_t>(now));
+            if (count > 0)
+                g_cross_held = samples[count - 1].connected &&
+                               (samples[count - 1].buttons & pad_bits::kCross) != 0;
+
+            say_update(model);
+            feedback.clear();
+            app.update(input, dt, feedback);
+            for (const audio::CueEvent &event : feedback.cues)
+                sounds.play(
+                    mixer, event.set == audio::SoundSet::count ? audio::SoundSet::glass : event.set,
+                    event);
+            if (feedback.rumble_strength > 0.0f)
+                pad.rumble(feedback.rumble_strength, feedback.rumble_seconds);
+            pad.tick(dt);
+            if (app.take_settings_changed())
+            {
+                *settings = app.settings();
+                if (!ptv::save_settings(kDataDir, *settings))
+                    sys::log("[TV] settings could not be saved");
+            }
+            chosen = model.take_play_request(request);
+
+            app.draw(frame);
+            renderer.begin();
+            renderer.backdrop(frame.backdrop);
+            renderer.draw(frame.scene);
+            if (frame.glass)
+                renderer.glass();
+            renderer.draw(frame.overlay);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            renderer.present(0, display.width(), display.height());
+            if (!script.capture().empty())
+            {
+                // The same frame once more, into a small off-screen target:
+                // reading the display surface back is slow.
+                if (capture.texture() == 0)
+                    capture.create(kCaptureWidth, kCaptureHeight, 1);
+                capture.bind();
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                renderer.present(capture.framebuffer(), kCaptureWidth, kCaptureHeight);
+                glBindFramebuffer(GL_FRAMEBUFFER, capture.framebuffer());
+                const bool saved = save_picture(script.capture(), kCaptureWidth, kCaptureHeight);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                script.capture_done(saved);
+                last_frame_start = sys::monotonic_us(); // saving is slow; the frame was not
+            }
+            if (!display.swap())
+            {
+                sys::log("[TV] fatal: swap failed frame=%llu error=%s",
+                         static_cast<unsigned long long>(frames),
+                         ps5::egl_error_name(display.last_error()));
+                notify_failure("display swap");
+                sys::park();
+            }
+            ++frames;
+            const std::int64_t presented = sys::monotonic_us();
+            if (frames == 1)
+            {
+                sys::log("[TV] first-swap ok shapes=%zu draws=%zu", renderer.last_instances(),
+                         renderer.last_draw_calls());
+                if (!g_splash_hidden)
+                {
+                    g_splash_hidden = true;
+                    sys::log("[TV] splash hidden=%d", sys::hide_splash_screen() ? 1 : 0);
+                }
+                log_heap("first frame");
+            }
+            else
+            {
+                stats.add(static_cast<double>(presented - previous) / 1000.0);
+            }
+            previous = presented;
+            if (stats.count() == 600)
+            {
+                char summary[160];
+                stats.format(summary, sizeof(summary));
+                sys::log("[TV] %s draws=%zu shapes=%zu", summary, renderer.last_draw_calls(),
+                         renderer.last_instances());
+                stats.reset();
+            }
+            if (script.wants_quit())
+            {
+                // A scripted run ends the app itself, the way the system
+                // would close it: nothing is killed.
+                sys::log("[TV] closing: the test script ended");
+                model.close();
+                audio_out.stop();
+                pad.close();
+                sys::quit();
+            }
+        }
+        if (chosen)
+            hand_over_to_channel(app, renderer, display, frame, request->channel_id,
+                                 settings->reduced_motion);
+        sys::log("[TV] menu closing frames=%llu channel=%s addresses=%zu",
+                 static_cast<unsigned long long>(frames), request->channel_id.c_str(),
+                 request->urls.size());
+    }
+    // Let the sound of the choice end before its port closes.
+    for (int wait = 0; audio_ready && wait < 40 && mixer.active_voices() > 0; ++wait)
+        sceKernelUsleep(10000);
+
+    // Everything the menu holds goes before the player starts: its download,
+    // the keyboard, the sound port, the controller, every GL object and
+    // finally the display itself.
+    model.close();
+    audio_out.stop();
+    pad.close();
+    g_cross_held = false;
+    renderer.release();
+    display.close();
+    log_heap("menu closed");
+    sys::log("[TV] menu closed");
+    return chosen;
+}
+
+struct PlaybackOutcome
+{
+    int result = -1;
+    unsigned attempts = 0;
+    unsigned selected = 0;
+};
+
+constexpr unsigned kAutotestMaxCandidates = 8;
+constexpr unsigned kAutotestMaxCancelMs = 10u * 60u * 1000u;
+constexpr char kAutotestArchivePath[] = "/download0/iptv-autotest-receipts.txt";
+constexpr char kLatestReceiptPath[] = "/download0/iptv-last-receipt.txt";
+
+void write_stdout(const char *text, std::size_t bytes)
+{
+    while (text != nullptr && bytes != 0)
+    {
+        const long written = write(1, text, bytes);
+        if (written <= 0)
+            return;
+        text += static_cast<std::size_t>(written);
+        bytes -= static_cast<std::size_t>(written);
+    }
+}
+
+void write_autotest_marker(const char *archive_path, const char *marker, int marker_bytes)
+{
+    if (archive_path == nullptr || marker == nullptr || marker_bytes <= 0)
+        return;
+    const std::size_t bytes = std::strlen(marker);
+    write_stdout(marker, bytes);
+    if (std::FILE *archive = std::fopen(archive_path, "ab"))
+    {
+        std::fwrite(marker, 1, bytes, archive);
+        std::fclose(archive);
+    }
+}
+
+void append_autotest_receipt(const char *archive_path, const char *receipt_path)
+{
+    std::FILE *archive = std::fopen(archive_path, "ab");
+    if (archive == nullptr)
+        return;
+    if (std::FILE *receipt = std::fopen(receipt_path, "rb"))
+    {
+        char chunk[1024]{};
+        std::size_t bytes = 0;
+        while ((bytes = std::fread(chunk, 1, sizeof(chunk), receipt)) != 0)
+            std::fwrite(chunk, 1, bytes, archive);
+        std::fclose(receipt);
+    }
+    else
+    {
+        std::fputs("IPTV_RECEIPT_MISSING\n", archive);
+    }
+    std::fclose(archive);
+}
+
+// Plays the channel's addresses in order until one opens.
+PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_after_ms,
+                                const char *archive_path)
+{
+    PlaybackOutcome outcome{};
+    for (std::size_t candidate = 0; candidate < request.urls.size(); ++candidate)
+    {
+        ++outcome.attempts;
+        char marker[128]{};
+        if (archive_path != nullptr)
+        {
+            const int marker_bytes =
+                std::snprintf(marker, sizeof(marker), "IPTV_AUTOTEST_ATTEMPT_BEGIN candidate=%u\n",
+                              static_cast<unsigned>(candidate + 1u));
+            write_autotest_marker(archive_path, marker, marker_bytes);
+            std::remove(kLatestReceiptPath);
+        }
+        outcome.result =
+            stop_after_ms != 0
+                ? iptv_player_run_controlled(request.urls[candidate].c_str(),
+                                             request.channel_name.c_str(), stop_after_ms)
+                : iptv_player_run_with_headers(
+                      request.urls[candidate].c_str(), request.channel_name.c_str(),
+                      request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
+                      request.referrer.empty() ? nullptr : request.referrer.c_str(),
+                      request.reconnect_live ? 1 : 0);
+        if (archive_path != nullptr)
+        {
+            append_autotest_receipt(archive_path, kLatestReceiptPath);
+            const int marker_bytes = std::snprintf(
+                marker, sizeof(marker), "IPTV_AUTOTEST_ATTEMPT_END candidate=%u result=%d\n",
+                static_cast<unsigned>(candidate + 1u), outcome.result);
+            write_autotest_marker(archive_path, marker, marker_bytes);
+        }
+        if (outcome.result >= 0)
+        {
+            outcome.selected = static_cast<unsigned>(candidate + 1u);
+            break;
+        }
+    }
+    return outcome;
+}
+
+char *trim_field(char *field)
+{
+    while (field != nullptr && (*field == ' ' || *field == '\t'))
+        ++field;
+    if (field == nullptr)
+        return nullptr;
+    char *end = field + std::strlen(field);
+    while (end != field && (end[-1] == ' ' || end[-1] == '\t'))
+        *--end = '\0';
+    return field;
+}
+
+struct AutotestCase
+{
+    char *urls[kAutotestMaxCandidates]{};
+    unsigned count = 0;
+    unsigned cancel_ms = 0;
+};
+
+bool parse_autotest_case(char *line, AutotestCase *test)
+{
+    if (line == nullptr || test == nullptr)
+        return false;
+    *test = {};
+    bool first_field = true;
+    for (char *field = line; field != nullptr;)
+    {
+        char *next = std::strchr(field, '\t');
+        if (next != nullptr)
+            *next++ = '\0';
+        char *value = trim_field(field);
+        if (value == nullptr || *value == '\0')
+            return false;
+        static constexpr char kCancelPrefix[] = "@cancel-ms=";
+        if (first_field && std::strncmp(value, kCancelPrefix, sizeof(kCancelPrefix) - 1u) == 0)
+        {
+            char *end = nullptr;
+            const unsigned long parsed = std::strtoul(value + sizeof(kCancelPrefix) - 1u, &end, 10);
+            if (end == nullptr || *end != '\0' || parsed == 0 || parsed > kAutotestMaxCancelMs)
+                return false;
+            test->cancel_ms = static_cast<unsigned>(parsed);
+        }
+        else
+        {
+            if (test->count == kAutotestMaxCandidates)
+                return false;
+            test->urls[test->count++] = value;
+        }
+        first_field = false;
+        field = next;
+    }
+    return test->count != 0;
+}
+
+// The controlled acceptance run of test builds: plays the addresses listed in
+// /app0/iptv-autotest.txt before the menu opens and keeps their receipts.
+bool run_autotest_if_present()
+{
+    std::FILE *file = std::fopen("/app0/iptv-autotest.txt", "rb");
+    if (file == nullptr)
+        return false;
+    if (std::FILE *archive = std::fopen(kAutotestArchivePath, "wb"))
+    {
+        std::fputs("IPTV_AUTOTEST_RECEIPTS_V2\n", archive);
+        std::fclose(archive);
+    }
+
+    char line[4097]{};
+    unsigned test_index = 0;
+    while (std::fgets(line, sizeof(line), file) != nullptr)
+    {
+        std::size_t bytes = std::strlen(line);
+        const bool oversized = bytes == sizeof(line) - 1u && bytes != 0 && line[bytes - 1u] != '\n';
+        if (oversized)
+        {
+            int discarded = 0;
+            while ((discarded = std::fgetc(file)) != EOF && discarded != '\n')
+            {
+            }
+        }
+        while (bytes != 0 && (line[bytes - 1u] == '\r' || line[bytes - 1u] == '\n' ||
+                              line[bytes - 1u] == ' ' || line[bytes - 1u] == '\t'))
+            line[--bytes] = '\0';
+        char *content = line;
+        while (*content == ' ' || *content == '\t')
+            ++content;
+        if (*content == '\0' || *content == '#')
+            continue;
+        ++test_index;
+        AutotestCase test{};
+        const bool parsed = !oversized && parse_autotest_case(content, &test);
+        char marker[192]{};
+        int marker_bytes = std::snprintf(
+            marker, sizeof(marker), "IPTV_AUTOTEST_BEGIN index=%u candidates=%u cancel_ms=%u\n",
+            test_index, test.count, test.cancel_ms);
+        write_autotest_marker(kAutotestArchivePath, marker, marker_bytes);
+        PlaybackOutcome outcome{};
+        if (parsed)
+        {
+            ptv::PlayRequest request{};
+            char name[64]{};
+            std::snprintf(name, sizeof(name), "controlled acceptance %u", test_index);
+            request.channel_name = name;
+            request.urls.reserve(test.count);
+            for (unsigned candidate = 0; candidate < test.count; ++candidate)
+                request.urls.emplace_back(test.urls[candidate]);
+            outcome = play_candidates(request, test.cancel_ms, kAutotestArchivePath);
+        }
+        marker_bytes =
+            std::snprintf(marker, sizeof(marker),
+                          "IPTV_AUTOTEST_END index=%u result=%d attempts=%u selected=%u\n",
+                          test_index, outcome.result, outcome.attempts, outcome.selected);
+        write_autotest_marker(kAutotestArchivePath, marker, marker_bytes);
+        sceKernelUsleep(250000);
+    }
+    std::fclose(file);
+    return test_index != 0;
+}
+
+} // namespace
+
+// The keyboard waits for Cross to be let go before it opens, so the press
+// that asked for it is not typed into it.
+extern "C" bool iptv_ime_confirm_held(void)
+{
+    return g_cross_held;
+}
+
+int main()
+{
+    sys::log("[TV] entry");
+
+    // Once the OpenGL runtime has started, the video decoder's system module
+    // no longer loads (0x80020016 on hardware). Loaded first, it stays for the
+    // life of the process, and the player's own loads and unloads only count.
+    const int videodec = sceSysmoduleLoadModule(kVideodecModule);
+    const int audiodec = sceSysmoduleLoadModule(kAudiodecModule);
+    sys::log("[TV] modules videodec2=0x%08x audiodec=0x%08x", static_cast<unsigned>(videodec),
+             static_cast<unsigned>(audiodec));
+
+    // Acceptance fixtures are opt-in test builds. Production must ignore a
+    // stale iptv-autotest.txt left in an already-mounted development folder.
+    if (IPTV_AUTOTEST_ENABLED != 0)
+        (void)run_autotest_if_present();
+
+    static ptv::Model model(kDataDir);
+    ptv::Settings settings = ptv::load_settings(kDataDir);
+    // A request a PC left beside the test title turns this launch into a
+    // scripted run (see tv_dev.hpp). Release builds never read one.
+    static tv_dev::Script script;
+    if (TV_DEV_SCRIPTS != 0 && script.load("/app0/dev/request.txt", "/download0/prosperotv/dev"))
+    {
+        sys::log("[TV] scripted run: the controller is not read");
+        // Pictures of the tuning screen as the television showed it.
+        tv_tuning_set_dump_dir("/download0/prosperotv/dev");
+    }
+    start_update_check();
+    LastPlayback last;
+    for (;;)
+    {
+        ptv::PlayRequest request;
+        if (!run_menu(model, &settings, last, &request, script))
+            sys::park();
+
+        // The menu's display and the player's must never overlap: give the
+        // closed one a moment to let go.
+        sceKernelUsleep(100000);
+        const std::int64_t started = sys::monotonic_us();
+        // A scripted run plays each channel for a set time; the player stops it.
+        const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
+        const long long seconds = (sys::monotonic_us() - started) / 1000000;
+        sys::log("[TV] playback result=%d attempts=%u selected=%u seconds=%lld", outcome.result,
+                 outcome.attempts, outcome.selected, seconds);
+        if (script.active())
+        {
+            script.note("played \"%s\" result=%d attempts=%u selected=%u seconds=%lld",
+                        request.channel_name.c_str(), outcome.result, outcome.attempts,
+                        outcome.selected, seconds);
+            // What the player wrote down about it: a few lines in the report,
+            // the whole of it beside the pictures.
+            static unsigned played = 0;
+            std::string receipt;
+            if (save::read_file("/download0/iptv-last-receipt.txt", &receipt, 65536))
+            {
+                char name[64];
+                std::snprintf(name, sizeof(name), "/download0/prosperotv/dev/receipt-%02u.txt",
+                              ++played);
+                save::write_atomic(name, receipt);
+                int lines = 0;
+                for (std::size_t from = 0; from < receipt.size() && lines < 14; ++lines)
+                {
+                    std::size_t to = receipt.find('\n', from);
+                    if (to == std::string::npos)
+                        to = receipt.size();
+                    script.note("receipt %s", receipt.substr(from, to - from).c_str());
+                    from = to + 1;
+                }
+            }
+        }
+        tv_tuning_clear();
+        const iptv::StoreStatus history =
+            iptv::RecordPlaybackResult(iptv::kDefaultPlaybackHistoryPath, request.source_id,
+                                       request.channel_id, outcome.result >= 0, outcome.result);
+        if (history != iptv::StoreStatus::ok)
+            sys::log("[TV] history channel=%s result=%d store=%u", request.channel_id.c_str(),
+                     outcome.result, static_cast<unsigned>(history));
+        last = {};
+        last.result = outcome.result;
+        if (outcome.result < 0)
+        {
+            last.channel_id = request.channel_id;
+            last.channel_name = request.channel_name;
+            last.attempts = outcome.attempts;
+        }
+        sceKernelUsleep(100000);
+    }
+}

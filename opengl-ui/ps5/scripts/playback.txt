@@ -1,0 +1,65 @@
+# Channels that are known to stream, found by search text, each played for 25 s
+# and left; then a 4K channel chosen through the search drawer's Picture size.
+wait 2
+until catalog 420
+wait 2
+status
+watch 25
+query france 24
+wait 1
+status
+shot 01-france-24
+press cross
+until menu 120
+wait 2
+status
+shot 02-back-from-france-24
+press circle
+wait 1
+query al jazeera
+wait 1
+status
+shot 03-al-jazeera
+press cross
+until menu 120
+wait 2
+status
+shot 04-back-from-al-jazeera
+press circle
+wait 1
+query nasa
+wait 1
+status
+press cross
+until menu 120
+wait 2
+status
+shot 05-back-from-nasa
+press circle
+wait 1
+query -
+wait 1
+# ---- the drawer: Picture size 4K, then show the channels ----
+# (the built-in list names no countries or languages: those rows are passed over)
+press triangle
+wait 1
+press down 2
+press right 4
+wait 1
+shot 06-drawer-4k
+press down
+press cross
+wait 2
+status
+shot 07-4k-channels
+press cross
+until menu 120
+wait 2
+status
+shot 08-back-from-4k
+press circle
+wait 1
+press circle
+wait 1
+status
+quit 45
