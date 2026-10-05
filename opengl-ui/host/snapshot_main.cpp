@@ -368,7 +368,8 @@ int main(int argc, char **argv)
     }
     // The update: offered, downloading, unpacking, ready to close, and failed.
     {
-        const auto run = [&](int count, std::uint32_t press = 0)
+        const auto run = [&](int count, std::uint32_t press = 0,
+                             hui::Direction nav = hui::Direction::none)
         {
             for (int i = 0; i < count; ++i)
             {
@@ -378,6 +379,7 @@ int main(int argc, char **argv)
                 {
                     input.pressed = press;
                     input.held = press;
+                    input.nav = nav;
                 }
                 feedback.clear();
                 app.update(input, kDt, feedback);
@@ -401,11 +403,43 @@ int main(int argc, char **argv)
         offer.installed = "01.000.015";
         offer.available = "01.000.020";
         offer.size = 41u * 1024u * 1024u;
+        offer.notes = "Highlights\n"
+        "- The alphabet beside every list: Right from the last column, then up and down.\n"
+        "- Hold L2 or R2 and the pages keep turning.\n"
+        "- A tuning screen from Cross to the channel's first picture.\n"
+        "\n"
+        "Warning: this version moves your sources and favorites to /data/prosperotv the first time it starts.\n"
+        "\n"
+        "Fixes\n"
+        "- Channels play again after the menu has been drawn with OpenGL.\n"
+        "- Greek channel names read as written.\n"
+        "- The launch picture stays until the menu is there.\n"
+        "- The player's messages no longer appear as notifications.\n"
+        "\n"
+        "Note: the update keeps everything you saved.\n"
+        "\n"
+        "Thanks\n"
+        "To everyone who tested the new interface on their console and wrote back with what they saw, "
+        "and to the maintainers of the public channel list.\n"
+        "- More languages for channel names are next.\n"
+        "- So is a way to sort a list by country.\n"
+        "- And the guide, where a source provides one.";
+        offer.notes_truncated = true;
         host::offer_update(offer);
         run(8);
         render("35-update-arriving");
         run(70);
         render("36-update-offer");
+        // What's new: the release notes, then further down, then back.
+        run(20, 0, hui::Direction::right);
+        run(60, cross);
+        render("36a-update-notes");
+        run(10, 0, hui::Direction::down);
+        run(10, 0, hui::Direction::down);
+        run(50, 0, hui::Direction::down);
+        render("36b-update-notes-scrolled");
+        run(40, hui::action_bit(hui::Action::back));
+        run(30, 0, hui::Direction::left);
         host::set_update_progress(at(UpdatePhase::starting, 0, 0));
         run(40, cross);
         render("37-update-starting");

@@ -6,6 +6,7 @@
 
 #include "tv/draw.hpp"
 #include "ui/components/overlay.hpp"
+#include "ui/glyphs.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,7 +20,16 @@ namespace
 {
 
 constexpr float kTau = 6.2831853f;
-constexpr Rect kPanel{(kWidth - 1040.0f) * 0.5f, (kHeight - 548.0f) * 0.5f, 1040.0f, 548.0f};
+constexpr float kPanelWidth = 1040.0f;
+constexpr float kPanelHeight = 548.0f;
+// With the release notes the panel is taller, and the text scrolls in a
+// window between its title and its buttons.
+constexpr float kNotesPanelHeight = 864.0f;
+constexpr float kNotesTop = 150.0f;
+constexpr float kNotesBottomRoom = 168.0f;
+constexpr float kNotesText = 23.0f;
+constexpr float kNotesHeading = 28.0f;
+constexpr float kNotesStep = 132.0f; // one press of up or down
 constexpr float kOrbRadius = 104.0f;
 constexpr float kOrbThickness = 12.0f;
 constexpr float kButtonHeight = 64.0f;
@@ -52,6 +62,140 @@ UpdateSheet::UpdateSheet(Shared &shared) : shared_(shared)
 {
 }
 
+Rect UpdateSheet::panel() const
+{
+    const float height = std::max(kPanelHeight, panel_height_.value);
+    return {(kWidth - kPanelWidth) * 0.5f, (kHeight - height) * 0.5f, kPanelWidth, height};
+}
+
+Rect UpdateSheet::notes_window() const
+{
+    const Rect full{(kWidth - kPanelWidth) * 0.5f, (kHeight - kNotesPanelHeight) * 0.5f, kPanelWidth,
+                    kNotesPanelHeight};
+    return {full.x + 64.0f, full.y + kNotesTop, full.w - 128.0f - 18.0f,
+            full.h - kNotesTop - kNotesBottomRoom};
+}
+
+float UpdateSheet::notes_max_scroll() const
+{
+    return std::max(0.0f, notes_height_ - notes_window().h);
+}
+
+// The catalog gives plain text: lines, list items starting "- ", and GitHub's
+// callouts as "Warning: ...". A short line without closing punctuation reads
+// as a heading.
+void UpdateSheet::layout_notes()
+{
+    note_lines_.clear();
+    note_boxes_.clear();
+    const ui::Fonts &fonts = shared_.fonts;
+    const float full = notes_window().w;
+    const auto starts = [](std::string_view text, std::string_view prefix)
+    { return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0; };
+
+    float y = 0.0f;
+    bool gap_before = false;
+    const std::string &all = offer_.notes;
+    for (std::size_t at = 0; at <= all.size();)
+    {
+        const std::size_t end = std::min(all.find('\n', at), all.size());
+        std::string_view line = std::string_view{all}.substr(at, end - at);
+        at = end + 1;
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\r'))
+            line.remove_suffix(1);
+        if (line.empty())
+        {
+            gap_before = !note_lines_.empty();
+            continue;
+        }
+        const bool bullet = starts(line, "- ");
+        if (bullet)
+            line.remove_prefix(2);
+        const bool warning = !bullet && (starts(line, "Warning:") || starts(line, "Caution:") ||
+                                         starts(line, "Important:"));
+        const bool note = !bullet && (starts(line, "Note:") || starts(line, "Tip:"));
+        const char last = line.back();
+        const bool heading = !bullet && !warning && !note && line.size() <= 48 && last != '.' &&
+                             last != ':' && last != '!' && last != '?' && last != ',' &&
+                             last != ';' && last != ')';
+        const bool boxed = warning || note;
+        const float size = heading ? kNotesHeading : kNotesText;
+        const float pitch = std::round(size * (heading ? 1.45f : 1.6f));
+        const float indent = bullet ? 30.0f : boxed ? 26.0f : 0.0f;
+        const ui::FontRef &face = heading ? fonts.semibold : fonts.regular;
+
+        if (!note_lines_.empty())
+            y += heading ? 22.0f : boxed ? 18.0f : gap_before ? 14.0f : bullet ? 4.0f : 8.0f;
+        gap_before = false;
+        const float block_top = y;
+        if (boxed)
+            y += 14.0f;
+        const std::string readable_line = readable(face, line);
+        bool first = true;
+        for (std::string &piece :
+             face.font->wrap(readable_line, size, full - indent - (boxed ? 22.0f : 0.0f)))
+        {
+            NoteLine out;
+            out.text = std::move(piece);
+            out.y = y;
+            out.size = size;
+            out.indent = indent;
+            out.heading = heading;
+            out.bullet = bullet && first;
+            note_lines_.push_back(std::move(out));
+            first = false;
+            y += pitch;
+        }
+        if (boxed)
+        {
+            y += 14.0f;
+            note_boxes_.push_back({block_top, y, warning});
+        }
+    }
+    if (offer_.notes_truncated)
+    {
+        y += 20.0f;
+        NoteLine out;
+        out.text = "The rest is on the app's page on homebrew.page.";
+        out.y = y;
+        out.size = kNotesText;
+        out.muted = true;
+        note_lines_.push_back(std::move(out));
+        y += std::round(kNotesText * 1.6f);
+    }
+    notes_height_ = y;
+}
+
+void UpdateSheet::open_notes(ui::Feedback &feedback)
+{
+    stage_ = Stage::notes;
+    age_ = 0.0f;
+    stage_mix_.snap(0.0f);
+    notes_target_ = 0.0f;
+    notes_scroll_.snap(0.0f);
+    notes_bounce_.snap(0.0f);
+    focus_ = 0;
+    focus_x_.snap(0.0f);
+    feedback.play(audio::Cue::open);
+}
+
+void UpdateSheet::scroll_notes(float by, bool repeat, ui::Feedback &feedback)
+{
+    const float target = std::clamp(notes_target_ + by, 0.0f, notes_max_scroll());
+    if (target == notes_target_)
+    {
+        // Already at that end: the text gives a little and comes back.
+        if (!repeat)
+        {
+            notes_bounce_.value = by > 0.0f ? 18.0f : -18.0f;
+            notes_bounce_.velocity = 0.0f;
+        }
+        return;
+    }
+    notes_target_ = target;
+    feedback.play(audio::Cue::focus, 1.0f, 0.0f, repeat ? 0.5f : 1.0f);
+}
+
 bool UpdateSheet::visible() const
 {
     return stage_ != Stage::closed || fade_.value > 0.004f;
@@ -62,6 +206,8 @@ int UpdateSheet::button_count() const
     switch (stage_)
     {
     case Stage::offer:
+        return has_notes() ? 3 : 2;
+    case Stage::notes:
     case Stage::failed:
         return 2;
     case Stage::working:
@@ -77,7 +223,11 @@ const char *UpdateSheet::button_label(int index) const
     switch (stage_)
     {
     case Stage::offer:
+        if (has_notes() && index == 1)
+            return "What's new";
         return index == 0 ? "Update now" : "Later";
+    case Stage::notes:
+        return index == 0 ? "Update now" : "Back";
     case Stage::failed:
         return index == 0 ? "Try again" : "Close";
     case Stage::working:
@@ -103,6 +253,11 @@ void UpdateSheet::open(platform::UpdateOffer offer, ui::Feedback &feedback)
     ring_.snap(0.0f);
     stage_mix_.snap(0.0f);
     focus_x_.snap(0.0f);
+    panel_height_.snap(kPanelHeight);
+    notes_target_ = 0.0f;
+    notes_scroll_.snap(0.0f);
+    notes_bounce_.snap(0.0f);
+    layout_notes();
     feedback.play(audio::Cue::modal_open);
 }
 
@@ -148,6 +303,22 @@ void UpdateSheet::handle(const InputFrame &input, ui::Feedback &feedback)
     const int count = button_count();
     if (count == 0)
         return; // cancelling and closing take no answer
+    if (stage_ == Stage::notes)
+    {
+        // Up and down read on; the triggers turn a whole window.
+        if (input.nav == Direction::up || input.nav == Direction::down)
+        {
+            scroll_notes(input.nav == Direction::down ? kNotesStep : -kNotesStep, input.nav_repeat,
+                         feedback);
+            return;
+        }
+        if (input.is_pressed(Action::jump_next) || input.is_pressed(Action::jump_prev))
+        {
+            const float page = notes_window().h - 60.0f;
+            scroll_notes(input.is_pressed(Action::jump_next) ? page : -page, false, feedback);
+            return;
+        }
+    }
     if (input.nav == Direction::left || input.nav == Direction::right)
     {
         const int next = focus_ + (input.nav == Direction::right ? 1 : -1);
@@ -170,7 +341,29 @@ void UpdateSheet::handle(const InputFrame &input, ui::Feedback &feedback)
         press_.trigger();
     switch (stage_)
     {
+    case Stage::notes:
+        if (choice == 0)
+        {
+            begin(feedback);
+        }
+        else
+        {
+            // Back to the offer, on the button that led here.
+            stage_ = Stage::offer;
+            age_ = 0.0f;
+            stage_mix_.snap(0.0f);
+            focus_ = 1;
+            focus_x_.snap(1.0f);
+            feedback.play(audio::Cue::back);
+        }
+        break;
     case Stage::offer:
+        if (has_notes() && choice == 1)
+        {
+            open_notes(feedback);
+            break;
+        }
+        [[fallthrough]];
     case Stage::failed:
         if (choice == 0)
         {
@@ -210,6 +403,18 @@ void UpdateSheet::update(float dt, ui::Feedback &feedback)
     focus_x_.update(dt, 18.0f);
     press_.update(dt, 7.0f);
     ripple_.update(dt, 1.6f);
+    panel_height_.target = stage_ == Stage::notes ? kNotesPanelHeight : kPanelHeight;
+    notes_scroll_.target = notes_target_;
+    notes_bounce_.target = 0.0f;
+    if (shared_.settings.reduced_motion)
+    {
+        panel_height_.snap(panel_height_.target);
+        notes_scroll_.snap(notes_target_);
+        notes_bounce_.snap(0.0f);
+    }
+    panel_height_.update(dt, 16.0f);
+    notes_scroll_.update(dt, 18.0f);
+    notes_bounce_.update(dt, 14.0f);
 
     if (stage_ == Stage::working || stage_ == Stage::cancelling)
     {
@@ -422,6 +627,70 @@ void UpdateSheet::draw_orb(ui::Canvas &canvas, float cx, float cy) const
     }
 }
 
+// The release notes: a title, the text in its window, a bar that says how far.
+void UpdateSheet::draw_notes(ui::Canvas &canvas, const Rect &panel) const
+{
+    gfx::DrawList &list = canvas.list;
+    const ui::Fonts &fonts = canvas.fonts;
+    const ui::Theme &theme = shared_.theme;
+    ui::Painter paint(list, fonts, theme, canvas.glass);
+    const float mix = tween::clamp01(stage_mix_.value);
+    const float x = panel.x + 64.0f;
+
+    list.push_opacity(mix);
+    ui::text(list, fonts.semibold, "WHAT'S NEW", x, panel.y + 70.0f, 17.0f, tone::accent,
+             gfx::Align::left, 4.0f);
+    paint.heading("ProsperoTV " + spoken(offer_.version), x - 2.0f, panel.y + 122.0f, 44.0f);
+
+    Rect window = notes_window();
+    window.y = panel.y + kNotesTop;
+    window.h = panel.h - kNotesTop - kNotesBottomRoom;
+    const float scroll = notes_scroll_.value + notes_bounce_.value;
+    list.push_clip({window.x - 8.0f, window.y, window.w + 16.0f, window.h});
+    for (const NoteBox &box : note_boxes_)
+    {
+        const Rect r{window.x, window.y + box.top - scroll, window.w, box.bottom - box.top};
+        if (r.y > window.y + window.h || r.y + r.h < window.y)
+            continue;
+        const Color color = box.warning ? tone::wait : tone::accent;
+        list.rounded_rect(r, 12.0f, color.with_alpha(0.10f));
+        list.rounded_rect({r.x, r.y, 5.0f, r.h}, 2.5f, color);
+    }
+    for (const NoteLine &line : note_lines_)
+    {
+        const float top = window.y + line.y - scroll;
+        if (top > window.y + window.h || top + line.size * 1.6f < window.y)
+            continue;
+        const float baseline = top + line.size * 1.05f;
+        if (line.bullet)
+            list.circle(window.x + 11.0f, baseline - line.size * 0.32f, 4.0f, tone::accent);
+        ui::text(list, line.heading ? fonts.semibold : fonts.regular, line.text,
+                 window.x + line.indent, baseline, line.size,
+                 line.heading ? theme.text : line.muted ? theme.text_muted
+                                                        : theme.text.with_alpha(0.86f));
+    }
+    list.pop_clip();
+
+    // More above or below: the bar says where.
+    const float most = notes_max_scroll();
+    if (most > 0.0f)
+    {
+        const float track_x = window.x + window.w + 14.0f;
+        list.rounded_rect({track_x, window.y, 4.0f, window.h}, 2.0f, kWhite.with_alpha(0.10f));
+        const float thumb = std::max(48.0f, window.h * window.h / notes_height_);
+        const float at = (window.h - thumb) * tween::clamp01(notes_scroll_.value / most);
+        list.rounded_rect({track_x, window.y + at, 4.0f, thumb}, 2.0f, tone::accent);
+        ui::Hint hints[] = {{ui::Button::dpad, "Scroll"}, {ui::Button::l2, "Page", ui::Button::r2}};
+        ui::HintLayout layout;
+        layout.size = 30.0f;
+        layout.text_size = 20.0f;
+        layout.cy = panel.y + panel.h - 58.0f - kButtonHeight * 0.5f;
+        layout.item_gap = 26.0f;
+        ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 2, x, false, layout);
+    }
+    list.pop_opacity();
+}
+
 // Download, unpack, restart: where the update is.
 void UpdateSheet::draw_steps(ui::Canvas &canvas, float x, float y, float width) const
 {
@@ -470,6 +739,7 @@ void UpdateSheet::draw(ui::Canvas &canvas) const
     const bool still = shared_.settings.reduced_motion;
     const float fade = tween::clamp01(fade_.value);
     const float pop = pop_.value;
+    const Rect kPanel = panel(); // it grows for the notes
 
     list.rounded_rect({0.0f, 0.0f, kWidth, kHeight}, 0.0f, tone::night.with_alpha(0.66f * fade));
     list.push_opacity(tween::clamp01(fade * 1.5f));
@@ -480,7 +750,16 @@ void UpdateSheet::draw(ui::Canvas &canvas) const
                 Color::rgb(0x000000, 0.5f));
     ui::draw_overlay_panel(canvas, theme, kPanel, true, 0.6f);
     ui::Painter paint(list, fonts, theme, canvas.glass);
+    const float right = kPanel.x + kPanel.w - 64.0f;
+    const float x = kPanel.x + 76.0f + kOrbRadius * 2.0f + 64.0f;
+    const float width = right - x;
 
+    if (stage_ == Stage::notes)
+    {
+        draw_notes(canvas, kPanel);
+    }
+    else
+    {
     // ---- left: the orb ----
     const float orb_x = kPanel.x + 76.0f + kOrbRadius;
     const float orb_y = kPanel.y + 66.0f + kOrbRadius + 20.0f;
@@ -490,9 +769,6 @@ void UpdateSheet::draw(ui::Canvas &canvas) const
     list.pop_transform();
 
     // ---- right: what is happening ----
-    const float x = kPanel.x + 76.0f + kOrbRadius * 2.0f + 64.0f;
-    const float right = kPanel.x + kPanel.w - 64.0f;
-    const float width = right - x;
     const float mix = tween::clamp01(stage_mix_.value);
     const float slide = still ? 0.0f : 16.0f * (1.0f - mix);
     list.push_opacity(mix);
@@ -601,6 +877,7 @@ void UpdateSheet::draw(ui::Canvas &canvas) const
 
     if (stage_ == Stage::working || stage_ == Stage::closing)
         draw_steps(canvas, x, kPanel.y + kPanel.h - 196.0f, width);
+    } // not the notes
 
     // ---- the answers ----
     const int count = button_count();

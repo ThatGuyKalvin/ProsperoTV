@@ -83,7 +83,8 @@ bool read_lines(const std::string &path, std::string *lines, int count)
 // Test builds: dev/update-offer.txt beside the app replaces the catalog's
 // answer (and so skips its signature), so the update can be tried before the
 // catalog lists a newer release. Five lines: the new content version, the
-// release's name, its ZIP on GitHub, its SHA-256, its size in bytes.
+// release's name, its ZIP on GitHub, its SHA-256, its size in bytes; any
+// further lines are the release notes.
 bool test_offer(self_update_offer *out)
 {
     std::string lines[5];
@@ -98,6 +99,18 @@ bool test_offer(self_update_offer *out)
     std::snprintf(filled.artifact, sizeof(filled.artifact), "%s", lines[2].c_str());
     std::snprintf(filled.sha256, sizeof(filled.sha256), "%s", lines[3].c_str());
     filled.size = std::strtoull(lines[4].c_str(), nullptr, 10);
+    if (std::FILE *file = std::fopen(tv::storage::app_file("dev/update-offer.txt").c_str(), "rb"))
+    {
+        std::string notes;
+        char line[700];
+        for (int number = 0; std::fgets(line, sizeof(line), file) != nullptr; ++number)
+            if (number >= 5)
+                notes += line;
+        std::fclose(file);
+        while (!notes.empty() && (notes.back() == '\n' || notes.back() == '\r'))
+            notes.pop_back();
+        std::snprintf(filled.notes, sizeof(filled.notes), "%s", notes.c_str());
+    }
     // Like the catalog, only a newer version is offered (content versions
     // compare as text).
     if (std::strcmp(filled.available, filled.installed) <= 0)
@@ -214,6 +227,8 @@ bool update_take(UpdateOffer *out)
         out->installed = g_offer.installed;
         out->available = g_offer.available;
         out->size = g_offer.size;
+        out->notes = g_offer.notes;
+        out->notes_truncated = g_offer.notes_truncated != 0;
     }
     return true;
 }

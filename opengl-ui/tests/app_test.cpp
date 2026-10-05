@@ -665,6 +665,91 @@ TEST_F(AppTest, ANewerVersionIsOfferedAndLaterLeavesEverythingAlone)
     EXPECT_EQ(app_->tab(), 1);
 }
 
+// Release notes as the catalog gives them: headings, list items, callouts.
+const char *release_notes()
+{
+    return "Highlights\n"
+        "- The alphabet beside every list: Right from the last column, then up and down.\n"
+        "- Hold L2 or R2 and the pages keep turning.\n"
+        "- A tuning screen from Cross to the channel's first picture.\n"
+        "\n"
+        "Warning: this version moves your sources and favorites to /data/prosperotv the first time it starts.\n"
+        "\n"
+        "Fixes\n"
+        "- Channels play again after the menu has been drawn with OpenGL.\n"
+        "- Greek channel names read as written.\n"
+        "- The launch picture stays until the menu is there.\n"
+        "- The player's messages no longer appear as notifications.\n"
+        "\n"
+        "Note: the update keeps everything you saved.\n"
+        "\n"
+        "Thanks\n"
+        "To everyone who tested the new interface on their console and wrote back with what they saw, "
+        "and to the maintainers of the public channel list.\n"
+        "- More languages for channel names are next.\n"
+        "- So is a way to sort a list by country.\n"
+        "- And the guide, where a source provides one.";
+}
+
+TEST_F(AppTest, AReleaseWithNotesOffersWhatsNewAndTheNotesScroll)
+{
+    ptv::platform::UpdateOffer offer = newer_version();
+    offer.notes = release_notes();
+    offer.notes_truncated = true;
+    host::offer_update(offer);
+    idle(30);
+    const ptv::UpdateSheet &sheet = app_->update_sheet();
+    ASSERT_EQ(sheet.stage(), Stage::offer);
+    // Three answers now: Update now, What's new, Later.
+    move(Direction::right);
+    move(Direction::right);
+    EXPECT_EQ(sheet.focus(), 2);
+    move(Direction::right); // nothing further
+    EXPECT_EQ(sheet.focus(), 2);
+    move(Direction::left);
+    press(Action::confirm);
+    ASSERT_EQ(sheet.stage(), Stage::notes);
+    EXPECT_EQ(host::update_calls().begin, 0);
+
+    // The text is longer than its window: it scrolls, and stops at its end.
+    ASSERT_GT(sheet.notes_max_scroll(), 0.0f);
+    EXPECT_EQ(sheet.notes_scroll(), 0.0f);
+    move(Direction::up); // already at the top
+    EXPECT_EQ(sheet.notes_scroll(), 0.0f);
+    move(Direction::down);
+    EXPECT_GT(sheet.notes_scroll(), 0.0f);
+    for (int i = 0; i < 40; ++i)
+        move(Direction::down, 2);
+    EXPECT_EQ(sheet.notes_scroll(), sheet.notes_max_scroll());
+    press(Action::jump_prev);
+    EXPECT_LT(sheet.notes_scroll(), sheet.notes_max_scroll());
+
+    // Circle goes back to the offer, on the button that led here.
+    press(Action::back);
+    ASSERT_EQ(sheet.stage(), Stage::offer);
+    EXPECT_EQ(sheet.focus(), 1);
+    EXPECT_EQ(app_->tab(), 0);
+
+    // And the update can be started from the notes.
+    press(Action::confirm);
+    ASSERT_EQ(sheet.stage(), Stage::notes);
+    host::set_update_progress(progress(UpdatePhase::starting));
+    press(Action::confirm);
+    EXPECT_EQ(sheet.stage(), Stage::working);
+    EXPECT_EQ(host::update_calls().begin, 1);
+}
+
+TEST_F(AppTest, WithoutNotesTheOfferKeepsItsTwoAnswers)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    move(Direction::right);
+    move(Direction::right);
+    EXPECT_EQ(app_->update_sheet().focus(), 1);
+    press(Action::confirm); // Later
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+}
+
 TEST_F(AppTest, CircleOnTheOfferMeansLater)
 {
     host::offer_update(newer_version());

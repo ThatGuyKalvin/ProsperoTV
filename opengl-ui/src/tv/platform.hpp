@@ -49,6 +49,10 @@ struct UpdateOffer
     std::string installed;    // this build's content version
     std::string available;    // the release's content version
     std::uint64_t size = 0;   // the download in bytes; 0 when the catalog does not say
+    // What the developer wrote on the release, as the catalog gives it: plain
+    // text, lines split by \n, list items starting "- ". Empty when it has none.
+    std::string notes;
+    bool notes_truncated = false; // the catalog cut them; the rest is on the app's page
 };
 enum class UpdatePhase : std::uint8_t
 {
