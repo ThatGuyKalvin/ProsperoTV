@@ -17,9 +17,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg" alt="GPL-3.0-or-later"></a>
 </p>
 
-Demo available by clicking the image below.
-
-[![ProsperoTV Live TV screen](docs/images/prosperotv.png)](https://i.imgur.com/oziiCgb.mp4)
+![ProsperoTV Live TV screen](docs/images/prosperotv.png)
 
 > [!NOTE]
 > **A new interface is in development in [`opengl-ui/`](opengl-ui/).** It is built on
