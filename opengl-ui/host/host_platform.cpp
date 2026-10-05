@@ -42,8 +42,20 @@ struct Network
     std::atomic<int> fetches{0};
 };
 
+struct Update
+{
+    bool offered = false;
+    ptv::platform::UpdateOffer offer;
+    ptv::platform::UpdateProgress progress;
+    bool refuse_begin = false;
+    bool refuse_apply = false;
+    bool begun = false;
+    host::UpdateCalls calls;
+};
+
 Keyboard g_keyboard;
 Network g_network;
+Update g_update;
 // 0: the PC's own clock. The catalog store stamps its files with that clock,
 // so a test moves this one forward from it.
 std::atomic<std::uint64_t> g_unix_time{0};
@@ -109,9 +121,32 @@ void set_unix_time(std::uint64_t seconds)
     g_unix_time.store(seconds);
 }
 
+void offer_update(const ptv::platform::UpdateOffer &offer)
+{
+    g_update.offer = offer;
+    g_update.offered = true;
+}
+
+void set_update_progress(const ptv::platform::UpdateProgress &progress)
+{
+    g_update.progress = progress;
+}
+
+void refuse_update(bool begin, bool apply)
+{
+    g_update.refuse_begin = begin;
+    g_update.refuse_apply = apply;
+}
+
+UpdateCalls update_calls()
+{
+    return g_update.calls;
+}
+
 void reset()
 {
     g_keyboard = {};
+    g_update = {};
     set_network(false, "", 0);
     g_network.fetches.store(0);
     g_network.cancelled.store(false);
@@ -268,6 +303,52 @@ iptv::http::FetchResult fetch(const char *, char *buffer, std::size_t capacity,
     if (more)
         return {iptv::http::Status::response_too_large, bytes, 200, 0};
     return {iptv::http::Status::ok, bytes, 200, 0};
+}
+
+} // namespace ptv::platform
+
+// ---- the update ---------------------------------------------------------------
+
+namespace ptv::platform
+{
+
+bool update_take(UpdateOffer *offer)
+{
+    if (!g_update.offered)
+        return false;
+    g_update.offered = false;
+    if (offer != nullptr)
+        *offer = g_update.offer;
+    return true;
+}
+
+bool update_begin()
+{
+    ++g_update.calls.begin;
+    g_update.begun = !g_update.refuse_begin;
+    return g_update.begun;
+}
+
+UpdateProgress update_poll()
+{
+    return g_update.begun ? g_update.progress : UpdateProgress{};
+}
+
+void update_cancel()
+{
+    ++g_update.calls.cancel;
+}
+
+bool update_apply()
+{
+    ++g_update.calls.apply;
+    return !g_update.refuse_apply;
+}
+
+void update_finish()
+{
+    ++g_update.calls.finish;
+    g_update.begun = false;
 }
 
 } // namespace ptv::platform

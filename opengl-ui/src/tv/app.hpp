@@ -8,6 +8,7 @@
 #include "tv/search_sheet.hpp"
 #include "tv/shared.hpp"
 #include "tv/sources_screen.hpp"
+#include "tv/update_sheet.hpp"
 #include "ui/components/dialog.hpp"
 #include "ui/components/form.hpp"
 #include "ui/components/tabs.hpp"
@@ -54,6 +55,12 @@ class App
     }
     // True once after the player changed a setting: time to save them.
     bool take_settings_changed();
+    // True once a newer version is staged: the app must close itself now, so
+    // its files can be replaced.
+    bool wants_quit() const
+    {
+        return update_.wants_quit();
+    }
 
     // ---- where the interface is, for tests ----
     int tab() const
@@ -67,6 +74,10 @@ class App
     bool asking() const
     {
         return failure_.is_open();
+    }
+    const UpdateSheet &update_sheet() const
+    {
+        return update_;
     }
     bool on_letters() const
     {
@@ -109,6 +120,7 @@ class App
     ui::TabBar tabs_;
     ui::Form form_;
     ui::Dialog failure_;
+    UpdateSheet update_;
     // What the app itself announces (a newer version): top right, for longer.
     ui::ToastStack announcements_;
 

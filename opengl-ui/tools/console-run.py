@@ -13,10 +13,11 @@ for the script's report; download the report, the pictures and the app log;
 wait for the app to close itself (when the script ends with "quit"); remove
 the request.
 
-The script file holds the steps the app understands (ps5/src/tv_dev.hpp). The
-app runs in its sandbox: everything it writes is in its own storage, which a
-PC reads only while it runs, so the script must end with "quit <seconds>"
-long enough for the download (40 s is plenty).
+The script file holds the steps the app understands (ps5/src/tv_dev.hpp). With
+filesystem access the app writes to /data/prosperotv/logs, which a PC can
+always read. Without it everything is in the title's own storage, which a PC
+reads only while the title runs, so a script should still end with
+"quit <seconds>" long enough for the download (40 s is plenty).
 
 It never kills the app and never retries. The only things it deletes on the
 console are its own request file and upload leftovers. If something is wrong
@@ -29,6 +30,9 @@ Environment:
   RUN_TIMEOUT       seconds to wait for the report (default 600)
   DEV_SWITCHES      comma-separated files to put beside the request for this run
   SETTLE_SECONDS    pause before the installed files are verified again (default 0: skipped)
+  UPDATED_APP       a built app folder the app is expected to update itself to during the run
+                    (with DEV_SWITCHES=update-offer.txt=<file>): once the app has closed, the
+                    installed files must be that folder's
 """
 
 import hashlib
@@ -179,6 +183,7 @@ def main():
     timeout = int(os.environ.get("RUN_TIMEOUT", "600"))
     settle = int(os.environ.get("SETTLE_SECONDS", "0"))
     switches = [name for name in os.environ.get("DEV_SWITCHES", "").split(",") if name]
+    updated_app = os.environ.get("UPDATED_APP", "")
     home = Path.home()
     protocol = Path(os.environ.get("PS5_PROTOCOL", home / "ps5-homebrew-dev-protocol"))
     sdk = os.environ.get("PS5_PAYLOAD_SDK",
@@ -282,9 +287,10 @@ def main():
             done.set()
             stop("the console stopped answering during the run; do not retry, look at klog.txt")
 
-    # The app writes in its own storage, which is only there while it runs.
+    # With filesystem access the app writes under /data/prosperotv; without
+    # it, in its own storage, which is only there while it runs.
     storage = f"/mnt/sandbox/{title}_000/download0"
-    places = [f"{storage}/prosperotv/dev"]
+    places = ["/data/prosperotv/logs/dev", f"{storage}/prosperotv/dev"]
     dev = None
     while time.time() - started < 120 and dev is None:
         time.sleep(3)
@@ -316,10 +322,12 @@ def main():
     console = connect()
     if report:
         (results / "report.txt").write_text(report)
-    log = console.read(f"{storage}/prosperotv/app.log") or b""
+    elevated = dev.startswith("/data/")
+    logs = "/data/prosperotv/logs" if elevated else f"{storage}/prosperotv"
+    log = console.read(f"{logs}/app.log") or b""
     (results / "app.log").write_bytes(log)
     for name in ("iptv-last-receipt.txt", "iptv-attempt-receipt.txt"):
-        receipt = console.read(f"{storage}/{name}")
+        receipt = console.read(f"{logs if elevated else storage}/{name}")
         if receipt:
             (results / name).write_bytes(receipt)
     # Only what this run made: the app's storage keeps earlier runs' files.
@@ -340,7 +348,7 @@ def main():
     say(f"Downloaded the log and {len(pictures)} pictures to {results}")
 
     closed = False
-    if quits or not report:
+    if quits or not report or updated_app:
         say("Waiting for the app to close itself")
         for _ in range(24):
             console = connect()
@@ -390,6 +398,28 @@ def main():
         problems.append("app.log: no 'first-swap ok' line")
     if quits and not closed:
         problems.append("the app did not close itself after 'quit'")
+    if updated_app:
+        # The helper replaces the files once the app has gone.
+        if not closed:
+            problems.append("the app did not close itself for the update")
+        expected = {p.relative_to(updated_app).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in sorted(Path(updated_app).rglob("*")) if p.is_file()}
+        different = sorted(expected)
+        for _ in range(12):
+            time.sleep(5)
+            console = connect()
+            different = [name for name, digest in expected.items()
+                         if hashlib.sha256(console.read(f"{remote}/{name}") or b"").hexdigest() != digest]
+            staging = console.entries(f"/data/self-update/{title}")
+            console.close()
+            if not different and staging is None:
+                break
+        say(f"After the update: {len(expected) - len(different)} of {len(expected)} files are the "
+            f"new version's; staging folder {'still there' if staging is not None else 'gone'}")
+        problems += [f"not updated: {name}" for name in different[:8]]
+        if staging is not None:
+            problems.append("the update's staging folder was left behind")
+        manifest = expected if not different else manifest
     klog_file = results / "klog.txt"
     if klog_file.is_file():
         for line in klog_file.read_text(errors="replace").splitlines():

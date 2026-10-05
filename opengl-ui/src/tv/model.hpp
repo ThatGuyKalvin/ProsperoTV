@@ -111,9 +111,10 @@ class Model
     static constexpr unsigned kFacetMax = 24;
     static constexpr unsigned kSourceCount = 3;
 
-    // data_dir is where the app keeps its files: the title's own storage on
-    // the console, any folder on a PC.
-    explicit Model(std::string data_dir = "/download0");
+    // data_dir is where the app keeps its files: the title's own storage or
+    // /data/prosperotv/config on the console, any folder on a PC. cache_dir
+    // holds the downloaded channel lists; empty means beside the rest.
+    explicit Model(std::string data_dir, std::string cache_dir = {});
     Model(const Model &) = delete;
     Model &operator=(const Model &) = delete;
 
@@ -371,6 +372,7 @@ class Model
     static void on_account_password(const char *text, void *self);
 
     std::string data_dir_;
+    std::string cache_dir_;
     bool opened_once_ = false;
     bool keyboard_ready_ = false;
 

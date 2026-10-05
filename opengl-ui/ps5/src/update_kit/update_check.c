@@ -9,8 +9,6 @@
  * length is checked, strings are copied only into buffers that hold them, and
  * nesting is bounded. A value that doesn't fit is an error, never a truncation.
  */
-/* ProsperoTV runs in its sandbox and has the system's HTTPS: no libcurl. */
-#define UPDATE_CHECK_USE_SCEHTTP 1
 #include "update_check.h"
 
 #include <string.h>

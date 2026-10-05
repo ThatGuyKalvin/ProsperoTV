@@ -22,7 +22,8 @@ APP_STATIC_ARCHIVES := $(FFMPEG)/lib/libavcodec.a $(FFMPEG)/lib/libswresample.a 
 	$(FFMPEG)/lib/libavutil.a .deps/ps5-opengl/libps5opengl-group.a
 APP_IMPORT_STUBS := $(OPENGL_SDK)/lib/libSceAgc.so $(OPENGL_SDK)/lib/libSceAgcDriver.so
 APP_RUNTIME_MODULES ?=
-PACBREW_PACKAGES ?=
+# libcurl with OpenSSL: every request the app makes, and the update kit.
+PACBREW_PACKAGES ?= libcurl
 PACBREW_INCLUDE_PATHS := include
 PACBREW_STATIC_ARCHIVES := lib/libsqlite3.a
 BUILD_JOBS ?= $(shell nproc 2>/dev/null || echo 2)

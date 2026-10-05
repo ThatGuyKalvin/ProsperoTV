@@ -26,9 +26,11 @@
 #include "tv/app.hpp"
 #include "tv_build_options.h"
 #include "tv_dev.hpp"
+#include "tv_paths.h"
+#include "tv_storage.hpp"
 #include "tv_tuning.h"
+#include "tv_update.hpp"
 #include "tv/platform.hpp"
-#include "update_check.h"
 
 #include <GL/glcorearb.h>
 
@@ -38,7 +40,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <atomic>
 #include <span>
 #include <string>
 #include <vector>
@@ -49,6 +50,11 @@
 
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
 extern "C" int sceSysmoduleLoadModule(std::uint32_t id);
+extern "C" int sceCommonDialogInitialize(void);
+// The player's decoders, loaded and woken (ps5/patch_tree.py adds it to the
+// player's backend): [0] the video module, [1] its compute part, [2..4] H.264,
+// HEVC and VP9, [5] the audio module and its AAC library.
+extern "C" void iptv_native_backend_warm(std::int32_t results[6]);
 extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
                                                 std::size_t size, int blocking);
 extern "C" long write(int descriptor, const void *buffer, std::size_t bytes);
@@ -60,11 +66,8 @@ namespace
 
 using namespace hui;
 
-constexpr char kDataDir[] = "/download0";
-// The player's decoders (iptv_native_backend.c uses the same numbers).
-constexpr std::uint32_t kVideodecModule = 0x00CF;
-constexpr std::uint32_t kAudiodecModule = 0x0088;
-constexpr char kAssets[] = "/app0/assets";
+// The system keyboard (iptv_ime.c uses the same number).
+constexpr std::uint32_t kKeyboardModule = 0x0096;
 
 // Whether Cross is down right now, whatever it is mapped to.
 bool g_cross_held = false;
@@ -144,7 +147,7 @@ bool save_picture(const std::string &path, int width, int height)
 bool load_font(gfx::Renderer &renderer, const char *name, gfx::Font *font, ui::FontRef *ref)
 {
     std::string data;
-    const std::string path = std::string(kAssets) + "/fonts/" + name;
+    const std::string path = tv::storage::app_file(std::string("assets/fonts/") + name);
     if (!save::read_file(path, &data) || !font->load(data))
     {
         sys::log("[TV] font %s failed: %s", name, font->error().c_str());
@@ -165,62 +168,6 @@ bool open_display(ps5::Display &display, const ptv::Settings &settings)
         sys::log("[TV] 2160p menu failed, using 1080p");
     }
     return display.open(1920, 1080);
-}
-
-// Whether homebrew.page lists a newer ProsperoTV: asked once per launch, on a
-// thread of its own, and said by the menu when the answer is there.
-struct UpdateCheck
-{
-    update_check_result result{};
-    std::atomic<int> state{0}; // 0 not asked, 1 asking, 2 answered, 3 said
-    char title_id[10] = {};
-    char installed[12] = {};
-};
-UpdateCheck g_update;
-
-void *update_check_entry(void *)
-{
-    if (g_update.title_id[0] != '\0')
-        update_check_run(g_update.title_id, g_update.installed, &g_update.result);
-    else
-        update_check_run_self(&g_update.result);
-    g_update.state.store(2, std::memory_order_release);
-    return nullptr;
-}
-
-void start_update_check()
-{
-    // A test build can ask as another title and version (dev/update-as.txt:
-    // "PPSA99003 01.000.000"), since the test title is not in the catalog.
-    std::string as;
-    if (TV_DEV_SCRIPTS != 0 && save::read_file("/app0/dev/update-as.txt", &as, 64))
-        std::sscanf(as.c_str(), "%9s %11s", g_update.title_id, g_update.installed);
-    g_update.state.store(1, std::memory_order_release);
-    void *thread = ptv::platform::thread_start(update_check_entry, nullptr, 512u * 1024u,
-                                               "prosperotv-update");
-    if (thread == nullptr)
-        g_update.state.store(3, std::memory_order_release);
-    else
-        (void)ptv::platform::thread_detach(thread);
-}
-
-// Once, when the answer has arrived: a notice that stays ten seconds.
-void say_update(ptv::Model &model)
-{
-    int answered = 2;
-    if (!g_update.state.compare_exchange_strong(answered, 3, std::memory_order_acq_rel))
-        return;
-    const update_check_result &result = g_update.result;
-    sys::log("[TV] update check: state=%d reason=%s http=%d error=0x%08x installed=%s "
-             "available=%s",
-             static_cast<int>(result.state), update_check_reason_text(result.reason),
-             result.http_status, static_cast<unsigned>(result.platform_error), result.installed,
-             result.available);
-    if (result.state != UPDATE_CHECK_AVAILABLE)
-        return;
-    const std::string version = result.version[0] != '\0' ? result.version : result.available;
-    model.announce(ptv::Level::busy, "ProsperoTV " + version + " is available",
-                   "Get it from homebrew.page.", 10.0f);
 }
 
 // One frame of the menu, onto the television.
@@ -358,7 +305,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
     ps5::AudioOut audio_out;
     const bool audio_ready = audio_out.start(mixer);
     audio::SoundBank sounds;
-    const audio::SoundBank::Stats bank = sounds.load(std::string(kAssets) + "/audio/sfx");
+    const audio::SoundBank::Stats bank = sounds.load(tv::storage::app_file("assets/audio/sfx"));
 
     const bool model_ready = model.open();
     if (last.result < 0)
@@ -370,7 +317,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
              model.keyboard_ready() ? 1 : 0, model_ready ? 1 : 0, model.channel_count(),
              static_cast<long long>((sys::monotonic_us() - opened) / 1000));
 
-    const std::string version = read_content_version("/app0/sce_sys/param.json");
+    const std::string version = read_content_version(tv::storage::app_file("sce_sys/param.json"));
     script.menu_opened(g_menu_sessions);
     bool chosen = false;
     {
@@ -417,7 +364,6 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 g_cross_held = samples[count - 1].connected &&
                                (samples[count - 1].buttons & pad_bits::kCross) != 0;
 
-            say_update(model);
             feedback.clear();
             app.update(input, dt, feedback);
             for (const audio::CueEvent &event : feedback.cues)
@@ -430,7 +376,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             if (app.take_settings_changed())
             {
                 *settings = app.settings();
-                if (!ptv::save_settings(kDataDir, *settings))
+                if (!ptv::save_settings(tv::storage::config_dir(), *settings))
                     sys::log("[TV] settings could not be saved");
             }
             chosen = model.take_play_request(request);
@@ -496,6 +442,18 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                          renderer.last_instances());
                 stats.reset();
             }
+            if (app.wants_quit())
+            {
+                // The new version is staged and its helper waits for this
+                // process to end: the app closes the way the system would
+                // close it, and its files are replaced behind it.
+                sys::log("[TV] closing: the update is staged");
+                script.closing("the update is staged");
+                model.close();
+                audio_out.stop();
+                pad.close();
+                sys::quit();
+            }
             if (script.wants_quit())
             {
                 // A scripted run ends the app itself, the way the system
@@ -541,8 +499,9 @@ struct PlaybackOutcome
 
 constexpr unsigned kAutotestMaxCandidates = 8;
 constexpr unsigned kAutotestMaxCancelMs = 10u * 60u * 1000u;
-constexpr char kAutotestArchivePath[] = "/download0/iptv-autotest-receipts.txt";
-constexpr char kLatestReceiptPath[] = "/download0/iptv-last-receipt.txt";
+// Where the app's data is (tv_paths.h): the pointers are settled in main.
+const char *const kAutotestArchivePath = tv_data_file("iptv-autotest-receipts.txt");
+const char *const kLatestReceiptPath = tv_data_file("iptv-last-receipt.txt");
 
 void write_stdout(const char *text, std::size_t bytes)
 {
@@ -687,10 +646,11 @@ bool parse_autotest_case(char *line, AutotestCase *test)
 }
 
 // The controlled acceptance run of test builds: plays the addresses listed in
-// /app0/iptv-autotest.txt before the menu opens and keeps their receipts.
+// iptv-autotest.txt beside the app before the menu opens and keeps their
+// receipts.
 bool run_autotest_if_present()
 {
-    std::FILE *file = std::fopen("/app0/iptv-autotest.txt", "rb");
+    std::FILE *file = std::fopen(tv::storage::app_file("iptv-autotest.txt").c_str(), "rb");
     if (file == nullptr)
         return false;
     if (std::FILE *archive = std::fopen(kAutotestArchivePath, "wb"))
@@ -764,31 +724,50 @@ int main()
 {
     sys::log("[TV] entry");
 
-    // Once the OpenGL runtime has started, the video decoder's system module
-    // no longer loads (0x80020016 on hardware). Loaded first, it stays for the
-    // life of the process, and the player's own loads and unloads only count.
-    const int videodec = sceSysmoduleLoadModule(kVideodecModule);
-    const int audiodec = sceSysmoduleLoadModule(kAudiodecModule);
-    sys::log("[TV] modules videodec2=0x%08x audiodec=0x%08x", static_cast<unsigned>(videodec),
-             static_cast<unsigned>(audiodec));
+    // The system modules the app will ask for, loaded before anything else.
+    // With filesystem access the process no longer sees the sandbox the
+    // system loader resolves modules in, and once the OpenGL runtime has
+    // started the video decoder's module no longer loads either (0x80020016 on
+    // hardware). Loaded first, they stay for the life of the process, and the
+    // player's and the keyboard's own loads and unloads only count. The
+    // decoders load parts of themselves at their first use: they are asked
+    // now, so those parts are there too.
+    std::int32_t decoders[6] = {};
+    iptv_native_backend_warm(decoders);
+    const int dialogs = sceCommonDialogInitialize();
+    const int keyboard = sceSysmoduleLoadModule(kKeyboardModule);
+
+    // Filesystem access, and with it where every file of the app is. It must
+    // be asked for while the process has a single thread: nothing above or in
+    // it starts one.
+    tv::storage::initialize();
+    // Said after it: the log moved with the app's data.
+    sys::log("[TV] modules videodec2=0x%08x compute=0x%08x h264=0x%08x hevc=0x%08x vp9=0x%08x "
+             "audiodec=0x%08x dialogs=0x%08x keyboard=0x%08x",
+             static_cast<unsigned>(decoders[0]), static_cast<unsigned>(decoders[1]),
+             static_cast<unsigned>(decoders[2]), static_cast<unsigned>(decoders[3]),
+             static_cast<unsigned>(decoders[4]), static_cast<unsigned>(decoders[5]),
+             static_cast<unsigned>(dialogs), static_cast<unsigned>(keyboard));
 
     // Acceptance fixtures are opt-in test builds. Production must ignore a
     // stale iptv-autotest.txt left in an already-mounted development folder.
     if (IPTV_AUTOTEST_ENABLED != 0)
         (void)run_autotest_if_present();
 
-    static ptv::Model model(kDataDir);
-    ptv::Settings settings = ptv::load_settings(kDataDir);
+    static ptv::Model model(tv::storage::config_dir(), tv::storage::cache_dir());
+    ptv::Settings settings = ptv::load_settings(tv::storage::config_dir());
     // A request a PC left beside the test title turns this launch into a
     // scripted run (see tv_dev.hpp). Release builds never read one.
     static tv_dev::Script script;
-    if (TV_DEV_SCRIPTS != 0 && script.load("/app0/dev/request.txt", "/download0/prosperotv/dev"))
+    static const std::string dev_dir = tv::storage::logs_dir() + "/dev";
+    if (TV_DEV_SCRIPTS != 0 &&
+        script.load(tv::storage::app_file("dev/request.txt"), dev_dir))
     {
         sys::log("[TV] scripted run: the controller is not read");
         // Pictures of the tuning screen as the television showed it.
-        tv_tuning_set_dump_dir("/download0/prosperotv/dev");
+        tv_tuning_set_dump_dir(dev_dir.c_str());
     }
-    start_update_check();
+    tv::start_update_check();
     LastPlayback last;
     for (;;)
     {
@@ -814,10 +793,10 @@ int main()
             // the whole of it beside the pictures.
             static unsigned played = 0;
             std::string receipt;
-            if (save::read_file("/download0/iptv-last-receipt.txt", &receipt, 65536))
+            if (save::read_file(kLatestReceiptPath, &receipt, 65536))
             {
-                char name[64];
-                std::snprintf(name, sizeof(name), "/download0/prosperotv/dev/receipt-%02u.txt",
+                char name[200];
+                std::snprintf(name, sizeof(name), "%s/receipt-%02u.txt", dev_dir.c_str(),
                               ++played);
                 save::write_atomic(name, receipt);
                 int lines = 0;

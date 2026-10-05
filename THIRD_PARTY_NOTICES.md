@@ -64,6 +64,34 @@ and builds static libraries under ignored `.deps/ffmpeg-audio/`.
 and the PS5 portability adjustment. FFmpeg's upstream license files remain
 in `.deps/ffmpeg-8.0.1/`; no proprietary decoder is redistributed.
 
+## The next interface (`opengl-ui/`)
+
+The interface in `opengl-ui/` is not part of a release yet. Its build adds:
+
+- [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui)
+  (GPL-3.0-or-later) and the
+  [ps5-opengl](https://github.com/blackbearreloaded/ps5-opengl) SDK it draws
+  with, both fetched at pinned versions when it is built; nothing of either is
+  kept in this repository.
+- [PS5-Lapy-JB-Daemon](https://github.com/ArkSama/PS5-Lapy-JB-Daemon), created
+  by ArkSama, MIT. The build fetches the cooperative owned-root helper from
+  [mpereiraesaa's fork](https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon) at
+  commit `54a095c0f19161825e845daa760a03b446e654fa`, builds it unmodified for
+  the app's title with the PS5 Payload SDK v0.40 that upstream requires, and
+  packages it as `lapy.elf` with `licenses/Lapy-MIT.txt`. The client that
+  talks to it (`opengl-ui/ps5/src/elevation/`) and the update kit
+  (`opengl-ui/ps5/src/update_kit/`, `opengl-ui/ps5/update_helper/`) come from
+  the PS5 Native App Boilerplate and ProsperoEden, GPL-3.0-or-later.
+- [miniz](https://github.com/richgel999/miniz) 3.0.2, MIT, in
+  `opengl-ui/ps5/third_party/miniz/` with its license and the hashes of its
+  files: the self-update helper unpacks releases with it.
+- [curl](https://curl.se/) (curl license), [OpenSSL](https://www.openssl.org/)
+  (Apache-2.0), [libpsl](https://github.com/rockdaboot/libpsl) (MIT),
+  [zlib](https://zlib.net/) (zlib license) and
+  [Zstandard](https://github.com/facebook/zstd) (BSD-3-Clause), linked from
+  the PacBrew prefix described below: every request the interface makes, and
+  the check of the catalog's signature.
+
 ## Host test dependency
 
 The host unit-test target downloads

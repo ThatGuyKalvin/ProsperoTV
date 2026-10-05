@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "tv/platform.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -28,6 +30,22 @@ int fetch_count();
 
 // The clock the logic sees (seconds since 1970); 0 is the PC's own clock.
 void set_unix_time(std::uint64_t seconds);
+
+// The stand-in update. offer_update: what the next update_take() answers,
+// once. set_update_progress: what update_poll() answers from now on.
+// refuse_update: update_begin() (or update_apply()) says no.
+void offer_update(const ptv::platform::UpdateOffer &offer);
+void set_update_progress(const ptv::platform::UpdateProgress &progress);
+void refuse_update(bool begin, bool apply);
+// How often each was asked for since reset().
+struct UpdateCalls
+{
+    int begin = 0;
+    int cancel = 0;
+    int apply = 0;
+    int finish = 0;
+};
+UpdateCalls update_calls();
 
 // Forgets everything above (between tests).
 void reset();

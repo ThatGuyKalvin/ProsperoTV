@@ -10,6 +10,7 @@ silently.
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -198,6 +199,142 @@ swap("src/iptv_player.cpp",
      '#include "iptv_player.h"\n',
      '#include "iptv_player.h"\n#include "tv_tuning.h"\n')
 
+# ---- where the app's files are. The player and the stores name their files
+#      by fixed sandbox paths; with filesystem access the files are in
+#      /data/prosperotv and the app's folder is not /app0. Each constant
+#      becomes a pointer that src/tv_storage.cpp settles before anything is
+#      opened (src/tv_paths.h). ----
+constant = re.compile(r'constexpr char (k\w+)\[\] =\s*"/download0/([^"/]+)";')
+constants = 0
+for folder in ("include", "src"):
+    for file in sorted((tree / folder).glob("iptv_*")):
+        text = file.read_text(encoding="utf-8")
+        patched, count = constant.subn(r'const char *const \1 = tv_data_file("\2");', text)
+        if count == 0:
+            continue
+        constants += count
+        if file.suffix == ".h":
+            # Before the header's first include.
+            patched, placed = re.subn(r"^#include ", '#include "tv_paths.h"\n#include ', patched,
+                                      count=1, flags=re.MULTILINE)
+            if placed != 1:
+                sys.exit(f"{file.name}: no place for tv_paths.h")
+        file.write_text(patched, encoding="utf-8", newline="\n")
+if constants != 9:
+    sys.exit(f"expected 9 fixed data paths in the copied sources, found {constants}")
+swap("src/iptv_player.cpp", '"/download0/iptv-attempt-receipt.txt"',
+     'tv_data_file("iptv-attempt-receipt.txt")', 2)
+swap("src/iptv_player.cpp", '#include "iptv_player.h"\n#include "tv_tuning.h"\n',
+     '#include "iptv_player.h"\n#include "tv_paths.h"\n#include "tv_tuning.h"\n')
+swap("src/iptv_native_agc_present.c",
+     '    static const char path[] = "/app0/ui/fonts/lvgl-bitmap/Montserrat-32.tga";\n',
+     '    const char *path = tv_app_file("ui/fonts/lvgl-bitmap/Montserrat-32.tga");\n')
+swap("src/iptv_native_agc_present.c",
+     '#include "iptv_native_agc_present.h"\n#include "tv_tuning.h"\n',
+     '#include "iptv_native_agc_present.h"\n#include "tv_paths.h"\n#include "tv_tuning.h"\n')
+# Nothing else may name a sandbox path: only the code that decides where the
+# files are, and the update kit's defaults (replaced just below).
+for file in sorted(tree.glob("src/**/*")) + sorted(tree.glob("include/*")):
+    relative = file.relative_to(tree).as_posix()
+    if not file.is_file() or file.suffix not in (".c", ".cpp", ".h", ".hpp") or \
+            relative.startswith(("src/elevation/", "src/update_kit/", "src/kit/")) or \
+            relative in ("src/tv_storage.cpp", "src/runtime/runtime_shims.c"):
+        continue
+    text = file.read_text(encoding="utf-8", errors="replace")
+    if '"/download0' in text or '"/app0' in text:
+        sys.exit(f"{relative} names a sandbox path; use tv_paths.h or tv_storage.hpp")
+
+# ---- the decoders, woken before filesystem access. The system loads parts
+#      of its video and audio decoders only when they are first used, and with
+#      filesystem access the process no longer sees the sandbox those parts are
+#      loaded from (on hardware: "load_prx failed due to 0x63", then
+#      0x811D0111 from the first Videodec2 call). main() calls this first: it
+#      loads both modules for the life of the process and asks each decoder the
+#      questions that make it load the rest. Nothing is allocated or started. ----
+swap("src/iptv_native_backend.c",
+     "int32_t iptv_native_backend_init(iptv_native_backend_t *backend)\n{\n",
+     "void iptv_native_backend_warm(int32_t results[6])\n"
+     "{\n"
+     "    /* One row of each codec: 1080p H.264, 1080p HEVC, 1080p VP9. */\n"
+     "    static const unsigned rows[3] = {1u, 5u, 8u};\n"
+     "    videodec2_compute_memory_t compute = {0};\n"
+     "    unsigned index;\n"
+     "\n"
+     "    results[0] = sceSysmoduleLoadModule(VIDEO_MODULE_ID);\n"
+     "    compute.size = sizeof(compute);\n"
+     "    results[1] = sceVideodec2QueryComputeMemoryInfo(&compute);\n"
+     "    for (index = 0; index < 3u; ++index)\n"
+     "    {\n"
+     "        const native_video_mode_t *mode = &video_modes[rows[index]];\n"
+     "        videodec2_decoder_config_t config = {0};\n"
+     "        videodec2_decoder_memory_t memory = {0};\n"
+     "\n"
+     "        config.size = sizeof(config);\n"
+     "        config.resource_type = 1;\n"
+     "        config.codec_type = mode->decoder_codec;\n"
+     "        config.profile = mode->decoder_profile;\n"
+     "        config.max_level = mode->max_level;\n"
+     "        config.max_width = (int32_t)mode->decoder_max_width;\n"
+     "        config.max_height = (int32_t)mode->decoder_max_height;\n"
+     "        config.max_dpb_frames = 4;\n"
+     "        config.pipeline_depth = 1u;\n"
+     "        config.cpu_affinity = 0x3f;\n"
+     "        config.cpu_priority = 700;\n"
+     "        memory.size = sizeof(memory);\n"
+     "        results[2u + index] = sceVideodec2QueryDecoderMemoryInfo(&config, &memory);\n"
+     "    }\n"
+     "    results[5] = sceSysmoduleLoadModule(AUDIO_MODULE_ID);\n"
+     "    if (results[5] >= 0)\n"
+     "    {\n"
+     "        results[5] = sceAudiodecInitLibrary(AUDIODEC_AAC);\n"
+     "        if (results[5] >= 0)\n"
+     "            (void)sceAudiodecTermLibrary(AUDIODEC_AAC);\n"
+     "    }\n"
+     "}\n"
+     "\n"
+     "int32_t iptv_native_backend_init(iptv_native_backend_t *backend)\n{\n")
+
+# ---- the self-update kit takes its three paths from the app (src/tv_update_paths.h) ----
+swap("src/update_kit/self_update_ps5.c", '#include "self_update.h"\n',
+     '#include "../tv_update_paths.h"\n\n#include "self_update.h"\n')
+
+# ---- HTTP: every call the catalog and the player make to the system's
+#      library goes to libcurl instead (src/tv_http.h says why). The calls
+#      keep their arguments; only the names change. ----
+http_names = {
+    "sceSslInit": ("tv_http_tls_init", 2),
+    "sceSslTerm": ("tv_http_tls_term", 2),
+    "sceHttpInit": ("tv_http_init", 2),
+    "sceHttpTerm": ("tv_http_term", 2),
+    "sceHttpCreateTemplate": ("tv_http_create_template", 2),
+    "sceHttpDeleteTemplate": ("tv_http_delete_template", 2),
+    "sceHttpCreateConnectionWithURL": ("tv_http_create_connection", 3),
+    "sceHttpDeleteConnection": ("tv_http_delete_connection", 2),
+    "sceHttpCreateRequestWithURL": ("tv_http_create_request", 3),
+    "sceHttpAbortRequest": ("tv_http_abort", 2),
+    "sceHttpDeleteRequest": ("tv_http_delete_request", 2),
+    "sceHttpAddRequestHeader": ("tv_http_add_header", 4),
+    "sceHttpSetAutoRedirect": ("tv_http_set_redirect", 3),
+    "sceHttpSetConnectTimeOut": ("tv_http_set_connect_timeout", 3),
+    "sceHttpSetRecvTimeOut": ("tv_http_set_receive_timeout", 3),
+    "sceHttpSetRecvBlockSize": ("tv_http_set_block_size", 2),
+    "sceHttpSetSendTimeOut": ("tv_http_set_send_timeout", 3),
+    "sceHttpSetResolveTimeOut": ("tv_http_set_resolve_timeout", 3),
+    "sceHttpSendRequest": ("tv_http_send", 3),
+    "sceHttpGetStatusCode": ("tv_http_status", 3),
+    "sceHttpGetAllResponseHeaders": ("tv_http_headers", 2),
+    "sceHttpReadData": ("tv_http_read", 5),
+}
+http_file = tree / "src/iptv_http.cpp"
+http_text = http_file.read_text(encoding="utf-8")
+for old, (new, expected) in http_names.items():
+    http_text, found = re.subn(rf"\b{old}\b", new, http_text)
+    if found != expected:
+        sys.exit(f"src/iptv_http.cpp: expected {expected} of {old}, found {found}")
+if re.search(r"\bsce(Http|Ssl)\w*", http_text):
+    sys.exit("src/iptv_http.cpp still calls the system's HTTP library")
+http_file.write_text(http_text, encoding="utf-8", newline="\n")
+
 # ---- build.sh: the audio decoders, and the system modules the public SDK
 #      has no import library for ----
 swap("tools/build.sh",
@@ -227,6 +364,17 @@ swap("tools/build.sh",
      '    "$native/ps5_radio_import_stub_audiodec.cpp" -std=c++20\n'
      '# The OpenGL runtime needs the process-lifetime heap in src/runtime/app_heap.c.\n')
 
+# libcurl sets its sockets up with fcntl, which the console's C library
+# refuses for a socket: every fcntl call goes through the wrapper in
+# src/update_kit/console_curl.c.
+swap("tools/build.sh", "wrap_options=()\n", "wrap_options=(--wrap=fcntl)\n")
+# The two programs the app sends to the payload loader (filesystem access and
+# the self-update) are built and packaged with the app.
+swap("tools/build.sh",
+     "printf '==> [zip] Archiving the application folder\\n'\n",
+     'bash "$root/tools/package-extras.sh" "$title_id" "$app"\n\n'
+     "printf '==> [zip] Archiving the application folder\\n'\n")
+
 # ---- param.json. TV_CATEGORY picks the area the title shows in:
 #   media (default)  as every release: Media, and no memory blocks
 #   game             what every OpenGL title of the kit declares: Games, with
@@ -249,8 +397,6 @@ elif category != "media":
 #      so a console test never touches the app the owner uses.
 test_title = os.environ.get("TV_TEST_TITLE", "")
 if test_title:
-    import re
-
     if not re.fullmatch(r"PPSA88\d{3}", test_title):
         sys.exit("TV_TEST_TITLE must be PPSA88 followed by three digits")
     param["titleId"] = test_title
@@ -259,6 +405,13 @@ if test_title:
     for language in param["localizedParameters"].values():
         if isinstance(language, dict):
             language["titleName"] = "ProsperoTV UI test"
+    # A test title can carry another version, to be the "newer release" of an
+    # update test (tools/console-run.py, UPDATED_APP).
+    test_version = os.environ.get("TV_TEST_VERSION", "")
+    if test_version:
+        if not re.fullmatch(r"\d{2}\.\d{3}\.\d{3}", test_version):
+            sys.exit("TV_TEST_VERSION must look like 01.000.990")
+        param["contentVersion"] = test_version
 param_path.write_text(json.dumps(param, indent=2, sort_keys=True) + "\n", encoding="utf-8",
                       newline="\n")
 # The test title also writes down what the video decoder asks of the system.
@@ -284,5 +437,7 @@ if test_title:
 # The test title also reads scripted runs a PC leaves beside it.
 (tree / "src/tv_build_options.h").write_text(
     "// ProsperoTV - What this build includes (written by ps5/patch_tree.py).\n#pragma once\n\n"
-    f"#define TV_DEV_SCRIPTS {1 if test_title else 0}\n", encoding="utf-8", newline="\n")
+    f"#define TV_DEV_SCRIPTS {1 if test_title else 0}\n"
+    "// The title this build installs as: its folder and its Lapy helper carry it.\n"
+    f"#define TV_TITLE_ID \"{param['titleId']}\"\n", encoding="utf-8", newline="\n")
 print("tree patched, category", category, "title", param["titleId"])

@@ -10,13 +10,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
 extern int sceKernelUsleep(uint32_t microseconds);
 
-/* The log goes into the title's own storage (a sandbox has no /data). While
- * the title runs, FTP reads it at
- * /mnt/sandbox/<TITLE_ID>_000/download0/prosperotv/app.log. */
+/* Until main has settled where the app's data is (tv_storage.cpp), the log
+ * goes into the title's own storage, which is always there:
+ * /mnt/sandbox/<TITLE_ID>_000/download0/prosperotv/app.log over FTP while the
+ * title runs. */
 #define TV_LOG_DIR "/download0/prosperotv"
 #define TV_LOG_PATH TV_LOG_DIR "/app.log"
 
@@ -35,6 +37,45 @@ __attribute__((constructor)) static void tv_open_log(void)
     stream = freopen(TV_LOG_PATH, "a", stderr);
     if (stream != NULL)
         setvbuf(stream, NULL, _IONBF, 0);
+}
+
+/* With filesystem access the log is kept with the app's data
+ * (/data/prosperotv/logs/app.log), where it can be read whether the title runs
+ * or not. Every write to that drive takes tens of milliseconds, so a line is
+ * written whole instead of piece by piece. */
+void tv_log_move(const char *directory)
+{
+    static char path[200];
+    static char previous[200];
+    static char out_line[1024];
+    static char err_line[1024];
+    char started[200];
+
+    if (directory == NULL || strcmp(directory, TV_LOG_DIR) == 0)
+        return;
+    snprintf(path, sizeof(path), "%s/app.log", directory);
+    snprintf(previous, sizeof(previous), "%s/app.prev.log", directory);
+    snprintf(started, sizeof(started), "%s/app.log", TV_LOG_DIR);
+    rename(path, previous);
+    /* What was written before the move comes along. */
+    FILE *before = fopen(started, "rb");
+    FILE *moved = fopen(path, "wb");
+    if (before != NULL && moved != NULL)
+    {
+        char chunk[512];
+        size_t count;
+        fflush(NULL);
+        while ((count = fread(chunk, 1, sizeof(chunk), before)) != 0)
+            fwrite(chunk, 1, count, moved);
+    }
+    if (before != NULL)
+        fclose(before);
+    if (moved != NULL)
+        fclose(moved);
+    if (freopen(path, "a", stdout) != NULL)
+        setvbuf(stdout, out_line, _IOLBF, sizeof(out_line));
+    if (freopen(path, "a", stderr) != NULL)
+        setvbuf(stderr, err_line, _IOLBF, sizeof(err_line));
 }
 
 /* Returning from main or calling exit() crashes a native title; stay alive
@@ -64,28 +105,6 @@ int mkstemps(char *template_name, int suffix_length)
 {
     (void)template_name;
     (void)suffix_length;
-    errno = ENOSYS;
-    return -1;
-}
-
-void openlog(const char *identifier, int option, int facility)
-{
-    (void)identifier;
-    (void)option;
-    (void)facility;
-}
-
-FILE *popen(const char *command, const char *mode)
-{
-    (void)command;
-    (void)mode;
-    errno = ENOSYS;
-    return NULL;
-}
-
-int pclose(FILE *stream)
-{
-    (void)stream;
     errno = ENOSYS;
     return -1;
 }

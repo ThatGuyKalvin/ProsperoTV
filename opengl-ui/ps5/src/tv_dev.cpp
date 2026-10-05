@@ -180,6 +180,15 @@ void Script::note(const char *format, ...)
     hui::sys::log("[TV] dev %s", line);
 }
 
+void Script::closing(const char *why)
+{
+    if (out_dir_.empty())
+        return;
+    note("closing: %s", why);
+    finish();
+    active_ = false;
+}
+
 void Script::menu_opened(std::uint64_t session)
 {
     // A press that chose a channel closed the menu in its first frame: it is

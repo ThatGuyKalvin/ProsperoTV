@@ -29,7 +29,8 @@ out=$(cd -- "$out" && pwd)
 [[ ! -e $out/.git ]] || { echo "the build tree must not be a repository" >&2; exit 2; }
 
 # Everything but the caches and the build output is made again.
-for stale in src include assets sce_sys vendor tools tooling runtime Makefile; do
+for stale in src include assets sce_sys vendor tools tooling runtime update_helper third_party \
+    Makefile; do
     rm -rf -- "${out:?}/$stale"
 done
 mkdir -p "$out"/{src,include,tools,vendor/ps5/sdk/stubs,assets/fonts,assets/audio/sfx}
@@ -43,6 +44,11 @@ for tool in build.sh build-host-tools.sh ninja-build.sh prepare-opengl.sh fetch-
     cp "$kit/tools/$tool" "$out/tools/$tool"
 done
 cp "$proto/ps5/Makefile" "$out/Makefile"
+# The two programs the app sends to the payload loader: upstream Lapy's
+# helper (fetched and built at its pinned commit) and the self-update helper.
+cp "$proto"/tools/{build-lapy-helper.py,validate-loader-elf.py,package-extras.sh} "$out/tools/"
+cp -a "$proto/ps5/update_helper" "$out/update_helper"
+cp -a "$proto/ps5/third_party" "$out/third_party"
 
 # ---- ProsperoTV: the player, the catalog, the stores, the keyboard ----
 for source in "$tv"/src/iptv_*.c "$tv"/src/iptv_*.cpp "$tv"/src/iptv_*.h "$tv/src/sqlite_compat.cpp"; do
@@ -95,6 +101,7 @@ seed() {
 seed native "$kit"
 seed pacbrew "$proto/../../prosperoradio-ui-build" "$tv"
 seed ffmpeg-audio "$tv"
+seed lapy "$proto/../../ps5-native-app-boilerplate"
 if [[ ! -e $out/.deps/ps5-opengl && -d $kit/.deps/ps5-opengl ]]; then
     mkdir -p "$out/.deps/ps5-opengl"
     for release in "$kit"/.deps/ps5-opengl/ps5-opengl-sdk-*; do

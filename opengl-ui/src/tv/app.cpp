@@ -70,7 +70,7 @@ const char *source_label(iptv::SourceKind source)
 App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
     : shared_(model, fonts, settings), browse_(shared_), sources_(shared_), search_(shared_),
-      glass_texture_(glass_texture), version_(std::move(version))
+      update_(shared_), glass_texture_(glass_texture), version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
 
@@ -327,6 +327,23 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
                    notice.seconds);
     }
 
+    // A newer version: offered when the app can install it itself, otherwise
+    // only said.
+    platform::UpdateOffer offer;
+    if (platform::update_take(&offer))
+    {
+        if (offer.installable)
+        {
+            search_.dismiss();
+            update_.open(std::move(offer), feedback);
+        }
+        else
+        {
+            announcements_.push(ui::StatusKind::info, "ProsperoTV " + offer.version + " is available",
+                                "Get it from homebrew.page.", 10.0f);
+        }
+    }
+
     // A channel that would not open is the first thing said when the menu
     // comes back.
     if (model.failure() != nullptr && !failure_seen_)
@@ -337,7 +354,11 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
     }
 
     // ---- input goes to whatever is on top ----
-    if (failure_.is_open())
+    if (update_.is_open())
+    {
+        update_.handle(input, feedback);
+    }
+    else if (failure_.is_open())
     {
         const ui::Event event = failure_.handle(input, feedback);
         if (event == ui::Event::activated || event == ui::Event::cancelled)
@@ -377,6 +398,7 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
     search_.update(dt);
     form_.update(dt);
     failure_.update(dt);
+    update_.update(dt, feedback);
     shared_.toasts.update(dt, feedback);
     announcements_.update(dt, feedback);
 
@@ -746,6 +768,7 @@ void App::draw(Frame &frame) const
     announcements_.draw(over);
     search_.draw(over);
     failure_.draw(over);
+    update_.draw(over);
     frame.glass = !frame.overlay.empty();
 }
 

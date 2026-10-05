@@ -1,0 +1,12 @@
+# After a self-update: the new version starts, has filesystem access, and
+# still has the channel list and the settings of the version before it.
+wait 2
+until catalog 120
+wait 2
+status
+shot 01-live-tv
+press r1 4
+wait 1
+shot 02-about
+status
+quit 20

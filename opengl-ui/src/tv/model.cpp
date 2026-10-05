@@ -178,8 +178,11 @@ std::string fetch_problem(iptv::http::Status network, const iptv::http::FetchRes
 
 } // namespace
 
-Model::Model(std::string data_dir) : data_dir_(std::move(data_dir))
+Model::Model(std::string data_dir, std::string cache_dir)
+    : data_dir_(std::move(data_dir)), cache_dir_(std::move(cache_dir))
 {
+    if (cache_dir_.empty())
+        cache_dir_ = data_dir_;
     health_.fill(SourceHealth::empty);
 }
 
@@ -193,13 +196,13 @@ std::string Model::cache_path(iptv::SourceKind source) const
     switch (source)
     {
     case iptv::SourceKind::Custom:
-        return path("prosperotv-custom-catalog.sqlite3");
+        return cache_dir_ + "/prosperotv-custom-catalog.sqlite3";
     case iptv::SourceKind::Xtream:
-        return path("prosperotv-xtream-catalog.sqlite3");
+        return cache_dir_ + "/prosperotv-xtream-catalog.sqlite3";
     case iptv::SourceKind::BuiltIn:
         break;
     }
-    return path("prosperotv-catalog.sqlite3");
+    return cache_dir_ + "/prosperotv-catalog.sqlite3";
 }
 
 std::uint64_t Model::source_id(iptv::SourceKind source) const

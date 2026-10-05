@@ -2,8 +2,8 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// A PC leaves /app0/dev/request.txt beside the installed test title (FTP into
-// its folder). Its first line is "run <token>"; every other line is a step:
+// A PC leaves dev/request.txt beside the installed test title (FTP into its
+// folder). Its first line is "run <token>"; every other line is a step:
 //
 //   wait <seconds>
 //   until catalog <seconds>     the channel list is loaded and not updating
@@ -18,8 +18,9 @@
 //   quit [seconds]              write the report, wait, then close the app
 //
 // While a script runs the controller is not read. The output (handled.txt,
-// report.txt, the pictures) goes to /download0/prosperotv/dev, which a PC
-// reads at /mnt/sandbox/<TITLE>_000/download0/prosperotv/dev while the title
+// report.txt, the pictures) goes to /data/prosperotv/logs/dev; without
+// filesystem access it goes to /download0/prosperotv/dev, which a PC reads at
+// /mnt/sandbox/<TITLE>_000/download0/prosperotv/dev only while the title
 // runs: that is why "quit" waits before it closes the app. A token is
 // honoured once.
 
@@ -66,6 +67,9 @@ class Script
         return quit_;
     }
     void note(const char *format, ...) __attribute__((format(printf, 2, 3)));
+    // The app is about to close for a reason of its own (an update): the
+    // report is written now, with why.
+    void closing(const char *why);
 
   private:
     enum class Kind

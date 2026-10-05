@@ -616,6 +616,156 @@ iptv::Channel written(const char *name, const char *id = "")
     return channel;
 }
 
+// ---- the update -------------------------------------------------------------
+
+ptv::platform::UpdateOffer newer_version()
+{
+    ptv::platform::UpdateOffer offer;
+    offer.installable = true;
+    offer.version = "01.000.020";
+    offer.installed = "01.000.015";
+    offer.available = "01.000.020";
+    offer.size = 40u * 1024u * 1024u;
+    return offer;
+}
+
+ptv::platform::UpdateProgress progress(ptv::platform::UpdatePhase phase, std::uint64_t done = 0,
+                                       std::uint64_t total = 0)
+{
+    ptv::platform::UpdateProgress value;
+    value.phase = phase;
+    value.done = done;
+    value.total = total;
+    return value;
+}
+
+using Stage = ptv::UpdateSheet::Stage;
+using ptv::platform::UpdatePhase;
+
+TEST_F(AppTest, ANewerVersionIsOfferedAndLaterLeavesEverythingAlone)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    ASSERT_EQ(app_->update_sheet().stage(), Stage::offer);
+    EXPECT_FALSE(frame_.overlay.empty());
+    EXPECT_TRUE(frame_.glass);
+    // The offer has the controller: the tabs do not turn behind it.
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 0);
+    move(Direction::right);
+    EXPECT_EQ(app_->update_sheet().focus(), 1);
+    press(Action::confirm);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+    EXPECT_EQ(host::update_calls().begin, 0);
+    EXPECT_FALSE(app_->wants_quit());
+    // It is offered once a launch.
+    idle(60);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
+}
+
+TEST_F(AppTest, CircleOnTheOfferMeansLater)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    press(Action::back);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+    EXPECT_EQ(host::update_calls().begin, 0);
+}
+
+TEST_F(AppTest, AnUpdateDownloadsUnpacksAndClosesTheApp)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    host::set_update_progress(progress(UpdatePhase::starting));
+    press(Action::confirm);
+    ASSERT_EQ(app_->update_sheet().stage(), Stage::working);
+    EXPECT_EQ(host::update_calls().begin, 1);
+    host::set_update_progress(progress(UpdatePhase::downloading, 10u << 20, 40u << 20));
+    idle(30);
+    host::set_update_progress(progress(UpdatePhase::unpacking, 30u << 20, 90u << 20));
+    idle(30);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::working);
+    EXPECT_FALSE(app_->wants_quit());
+    host::set_update_progress(progress(UpdatePhase::ready));
+    idle(5);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closing);
+    EXPECT_EQ(host::update_calls().apply, 1);
+    // The closing picture is shown before the app goes, and nothing answers.
+    EXPECT_FALSE(app_->wants_quit());
+    press(Action::back);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closing);
+    idle(240);
+    EXPECT_TRUE(app_->wants_quit());
+    EXPECT_EQ(host::update_calls().apply, 1);
+    EXPECT_EQ(host::update_calls().cancel, 0);
+}
+
+TEST_F(AppTest, CancelStopsAnUpdateAndTheMenuComesBack)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    host::set_update_progress(progress(UpdatePhase::downloading, 1u << 20, 40u << 20));
+    press(Action::confirm);
+    ASSERT_EQ(app_->update_sheet().stage(), Stage::working);
+    press(Action::confirm); // the one button there is: Cancel
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::cancelling);
+    EXPECT_EQ(host::update_calls().cancel, 1);
+    host::set_update_progress(progress(UpdatePhase::cancelled));
+    idle(10);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+    EXPECT_EQ(host::update_calls().finish, 1);
+    EXPECT_EQ(host::update_calls().apply, 0);
+    EXPECT_FALSE(app_->wants_quit());
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
+}
+
+TEST_F(AppTest, AFailedUpdateSaysSoAndCanBeTriedAgain)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    host::refuse_update(true, false);
+    press(Action::confirm);
+    ASSERT_EQ(app_->update_sheet().stage(), Stage::failed);
+    host::refuse_update(false, false);
+    ptv::platform::UpdateProgress broken = progress(UpdatePhase::failed);
+    broken.error = "The download stopped.";
+    host::set_update_progress(broken);
+    press(Action::confirm); // Try again
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::failed);
+    EXPECT_EQ(host::update_calls().begin, 2);
+    move(Direction::right);
+    press(Action::confirm); // Close
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+    EXPECT_FALSE(app_->wants_quit());
+}
+
+TEST_F(AppTest, AStagedUpdateThatCannotBePutInPlaceFails)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    host::refuse_update(false, true);
+    host::set_update_progress(progress(UpdatePhase::ready));
+    press(Action::confirm);
+    idle(5);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::failed);
+    EXPECT_FALSE(app_->wants_quit());
+}
+
+TEST_F(AppTest, AVersionTheAppCannotInstallIsOnlyAnnounced)
+{
+    ptv::platform::UpdateOffer offer = newer_version();
+    offer.installable = false;
+    host::offer_update(offer);
+    idle(30);
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+    EXPECT_FALSE(frame_.overlay.empty()); // the notice at the top right
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
+}
+
 TEST(ShownNames, AreWrittenInTheScriptsTheFontsHold)
 {
     const hui::ui::Fonts &fonts = font_set().fonts;
@@ -689,6 +839,16 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
             host::set_keyboard_text(random() % 2 == 0 ? "1" : "nothing matches this");
         if (random() % 300 == 0)
             host::set_network(random() % 2 == 0, playlist_, 20);
+        if (random() % 250 == 0)
+            host::offer_update(newer_version());
+        if (random() % 60 == 0)
+        {
+            static constexpr UpdatePhase phases[] = {
+                UpdatePhase::starting, UpdatePhase::downloading, UpdatePhase::unpacking,
+                UpdatePhase::failed,   UpdatePhase::cancelled,   UpdatePhase::idle};
+            host::set_update_progress(progress(phases[random() % std::size(phases)],
+                                               random() % 5000, random() % 5000));
+        }
         frame(input);
         // A channel was chosen: the frame loop would play it and come back.
         ptv::PlayRequest request;

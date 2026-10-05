@@ -366,6 +366,69 @@ int main(int argc, char **argv)
         app.draw_tuning(frame, id, 1.0f, 0.62f);
         render_drawn("34-tuning");
     }
+    // The update: offered, downloading, unpacking, ready to close, and failed.
+    {
+        const auto run = [&](int count, std::uint32_t press = 0)
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                hui::InputFrame input;
+                input.connected = true;
+                if (i == 0)
+                {
+                    input.pressed = press;
+                    input.held = press;
+                }
+                feedback.clear();
+                app.update(input, kDt, feedback);
+            }
+        };
+        const auto at = [](ptv::platform::UpdatePhase phase, std::uint64_t done,
+                           std::uint64_t total, const char *left = "")
+        {
+            ptv::platform::UpdateProgress progress;
+            progress.phase = phase;
+            progress.done = done;
+            progress.total = total;
+            progress.time_left = left;
+            return progress;
+        };
+        using ptv::platform::UpdatePhase;
+        const std::uint32_t cross = hui::action_bit(hui::Action::confirm);
+        ptv::platform::UpdateOffer offer;
+        offer.installable = true;
+        offer.version = "01.000.020";
+        offer.installed = "01.000.015";
+        offer.available = "01.000.020";
+        offer.size = 41u * 1024u * 1024u;
+        host::offer_update(offer);
+        run(8);
+        render("35-update-arriving");
+        run(70);
+        render("36-update-offer");
+        host::set_update_progress(at(UpdatePhase::starting, 0, 0));
+        run(40, cross);
+        render("37-update-starting");
+        host::set_update_progress(
+            at(UpdatePhase::downloading, 17u << 20, 41u << 20, "about 12 s left"));
+        run(90);
+        render("38-update-downloading");
+        host::set_update_progress(at(UpdatePhase::unpacking, 52u << 20, 96u << 20));
+        run(90);
+        render("39-update-unpacking");
+        host::set_update_progress(at(UpdatePhase::ready, 0, 0));
+        run(50);
+        render("40-update-ready");
+        // And when it does not work.
+        host::reset();
+        host::offer_update(offer);
+        ptv::platform::UpdateProgress broken = at(UpdatePhase::failed, 0, 0);
+        broken.error = "The download stopped before the end.";
+        host::set_update_progress(broken);
+        run(200);
+        run(60, cross);
+        render("41-update-failed");
+    }
     std::fprintf(stderr, "walk: %ld frames simulated\n", frames);
     model.close();
     return ok ? 0 : 1;

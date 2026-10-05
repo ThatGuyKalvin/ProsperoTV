@@ -1,0 +1,30 @@
+# Filesystem access and the network on libcurl: download the channel list,
+# play one channel and come back, look at Settings and About, quit. The log
+# says how access was granted and where the files are.
+wait 2
+shot 01-start
+until catalog 420
+wait 2
+status
+shot 02-live-tv
+query France 24
+wait 2
+status
+watch 20
+press cross
+until menu 120
+wait 2
+status
+shot 03-back-from-channel
+press circle
+wait 1
+query -
+wait 1
+press r1 3
+wait 1
+shot 04-settings
+press r1
+wait 1
+shot 05-about
+status
+quit 20
