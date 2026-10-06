@@ -1,4 +1,8 @@
 # ps5-native-app-boilerplate - ProsperoTV lint, test, build, and release validation.
+#
+# A version tag is checked against param.json and built like any other commit.
+# It does not publish anything: a release is the app built from opengl-ui/ at
+# the tagged commit, tested on consoles and attached by the maintainer.
 # Copyright (C) 2026 BlackBearReloaded
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -22,7 +26,7 @@ concurrency:
 
 jobs:
   build:
-    name: Lint, test, and build release artifacts
+    name: Lint, test, and build
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -92,69 +96,3 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-
-  release:
-    name: GitHub release
-    if: github.ref_type == 'tag'
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: read
-      contents: write
-
-    steps:
-      - name: Download verified build
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh run download "$GITHUB_RUN_ID"
-          --repo "$GITHUB_REPOSITORY"
-          --name "prospero-tv-$GITHUB_SHA-release"
-          --dir release
-
-      - name: Prepare release assets
-        id: package
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd release
-          mapfile -d '' files < <(find . -type f -print0)
-          shopt -s nullglob
-          images=(PPSA*.ffpfsc)
-          folders=(PPSA*.zip)
-          if (( ${#files[@]} != 3 || ${#images[@]} != 1 || ${#folders[@]} != 1 )) || [[ ! -f SHA256SUMS ]]; then
-            echo "Expected exactly one FFPFSC image, one folder ZIP, and SHA256SUMS at the artifact root." >&2
-            exit 1
-          fi
-          sha256sum -c SHA256SUMS
-          echo "image=${images[0]}" >> "$GITHUB_OUTPUT"
-          echo "folder=${folders[0]}" >> "$GITHUB_OUTPUT"
-          echo "checksum=SHA256SUMS" >> "$GITHUB_OUTPUT"
-
-      - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ steps.package.outputs.image }}
-          FOLDER: ${{ steps.package.outputs.folder }}
-          CHECKSUM: ${{ steps.package.outputs.checksum }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          assets=("release/$IMAGE" "release/$FOLDER" "release/$CHECKSUM")
-          image_name="${IMAGE##*/}"
-          folder_name="${FOLDER##*/}"
-          checksum_name="${CHECKSUM##*/}"
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            while IFS= read -r old_asset; do
-              if [[ $old_asset != "$image_name" && $old_asset != "$folder_name" && $old_asset != "$checksum_name" ]]; then
-                gh release delete-asset "$GITHUB_REF_NAME" "$old_asset" --yes --repo "$GITHUB_REPOSITORY"
-              fi
-            done < <(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
-            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
-              --generate-notes \
-              --title "ProsperoTV $GITHUB_REF_NAME"
-          fi

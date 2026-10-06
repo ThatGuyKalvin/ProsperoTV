@@ -1,20 +1,21 @@
-# ProsperoTV's next interface
+# ProsperoTV's interface
 
-ProsperoTV with a new interface built on the
+ProsperoTV's interface since 01.000.020, built on the
 [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit:
 frosted panels over a red sky, a hero for the channel in focus, a scrolling
 grid with the alphabet beside it, a search drawer, a tuning screen that runs
 until a channel's first picture, and an update that installs itself when a
 newer version is listed on homebrew.page. It is drawn with OpenGL (ps5-opengl
-SDK) instead of the released app's SDL and RmlUi; the catalog, the stores and
-the player are the released app's own sources, used from the folder above.
+SDK) instead of the earlier versions' SDL and RmlUi; the catalog, the stores and
+the player are the same sources as before, used from the folder above.
 It asks for filesystem access the way ProsperoEden does, keeps its files in
 `/data/prosperotv`, and makes every request with libcurl.
 
-**It is not the released app yet.** The repository's root still builds and
-releases ProsperoTV as before; nothing in this folder is built by its
-`Makefile` or its workflow. This folder is developed and tested here until it
-replaces the root build.
+**This is the released app.** A release is this folder built at the tagged
+commit, run on consoles and attached to the GitHub Release. The repository's
+root `Makefile` still builds the interface of 01.000.015 and earlier, which
+shares those sources and keeps their tests; nothing in this folder is built by
+it or by the workflow.
 
 The kit is a dependency fetched when something is built; none of its code is
 kept in this repository. It compiles against two source trees:
@@ -152,8 +153,9 @@ by the newer version's, and the newer version starting with the same data.
 
 Not verified: a 4K channel (the ones tried were refused by their providers),
 the system keyboard under a script, how the home screen picks up the new
-artwork, an update listed by the real catalog (ProsperoTV's next release will
-be the first), and the app on a console without a payload loader.
+artwork, an update listed by the real catalog (01.000.020 is the first
+release that has the updater, so the one after it will be the first offered),
+and the app on a console without a payload loader.
 
 A picture made on a PC shows what the code draws, not the frame rate, the
 memory use or the sound of a console.

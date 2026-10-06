@@ -8,7 +8,8 @@
   <strong>A native IPTV client for PlayStation 5 homebrew</strong><br>
   Browse, search, and save channels from iptv-org, custom M3U playlists, or
   your own Xtream Codes provider with an offline-first SQLite cache, a
-  controller-first interface, and native PS5 video decoding.
+  controller-first interface, native PS5 video decoding, and updates that
+  install themselves.
 </p>
 
 <p align="center">
@@ -20,9 +21,10 @@
 ![ProsperoTV Live TV screen](docs/images/prosperotv.png)
 
 > [!NOTE]
-> **A new interface is in development in [`opengl-ui/`](opengl-ui/).** It is built on
-> [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) and is not part of
-> a release yet; the app described below is the released one.
+> **Version 01.000.020 brings a new interface.** It is built on
+> [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) and lives in
+> [`opengl-ui/`](opengl-ui/); the catalog, the stores, and the player are the ones earlier
+> versions used. Coming from 01.000.015 or older: see [Updating ProsperoTV](#updating-prosperotv).
 
 ## Highlights
 
@@ -34,10 +36,14 @@
 - Decode H.264, HEVC, and VP9 through native PS5 video paths at resolutions up
   to 4K.
 - Keep the catalog, favorites, recent channels, and source state fast and
-  persistent under `/download0`.
+  persistent under `/data/prosperotv`, where an update never touches them.
+- Update from inside the app: a newer version listed on
+  [homebrew.page](https://homebrew.page) is offered at launch with its release
+  notes, downloaded, and installed in place.
 - Handle live HLS buffering, stale segments, alternate URLs, and failed feeds
   without destabilizing the next playback session.
-- Use a polished full-screen RmlUi interface with DualSense navigation, native
+- Use a full-screen OpenGL interface at up to 4K with DualSense navigation,
+  channels drawn as television sets, an alphabet beside every list, native
   text input, dedicated Favorites, and an optional playback statistics overlay.
 
 ## Project foundations
@@ -68,27 +74,33 @@
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current version | `01.000.015` |
+| Current version | `01.000.020` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
-| Writable data | `/download0` only |
+| Writable data | `/data/prosperotv`; the title's own `/download0` when filesystem access is not available |
 
 ## Features
 
 - Open the last verified channel catalog immediately from a local SQLite cache
   while a refresh runs in the background.
 - Browse Live TV, Favorites, Recent, News, Sports, Kids, and other channel
-  groups with continuous controller pagination.
+  groups in alphabetical order, with pages that keep turning while L2 or R2 is
+  held and a column of letters to jump by.
 - Search case-insensitively by channel name and filter by country, language,
   category, and advertised quality using the native PS5 keyboard.
 - Keep favorites, recent channels, source selection, and catalog data under
-  `/download0`; failed refreshes leave the last good database untouched.
+  `/data/prosperotv`; failed refreshes leave the last good database untouched.
+- Load large providers: channel lists up to 64 MiB and 32,768 channels.
 - Add a custom HTTP(S) M3U or M3U8 playlist alongside the built-in iptv-org
   source.
 - Add a user-supplied Xtream server, username, and password through masked
   native password entry; authenticate with the Player API and cache its live
   categories and channels locally.
 - Return to the same screen, group, page, and channel after playback closes.
+- Show a tuning screen from Cross until the channel's first picture.
+- Offer a newer version at launch with **Update now**, **What's new** (the
+  release notes), and **Later**; the update downloads, replaces the app's
+  files after it closes, and keeps everything you saved.
 - Play HLS and direct MPEG-TS streams with H.264 or HEVC video and supported
   Native AAC-LC mono/stereo audio, plus software-decoded MP2, AAC Main,
   multichannel AAC, AAC-LATM, AC-3 and E-AC-3 through the same audio output
@@ -101,8 +113,10 @@
 - Report actionable failures for HTTP status, GeoIP restrictions, unavailable
   streams, unsupported encryption or codecs, malformed playlists, MPEG-TS
   synchronization, and native decoder errors.
-- Render a full-screen RmlUi interface with packaged multilingual bitmap fonts
-  and DualSense-focused navigation.
+- Render the interface with OpenGL through the
+  [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit,
+  with fonts covering Latin, Greek, and Cyrillic channel names, interface
+  sounds, and a Reduce motion setting.
 
 ## Video support
 
@@ -121,12 +135,13 @@ at 3840×2160. Codec and renderer details are documented in
 
 | Input | Action |
 | --- | --- |
-| D-pad / left stick | Move focus and continue across channel pages |
+| D-pad / left stick | Move focus; Right past the last column reaches the letters |
 | Cross | Select, open, or play |
 | Circle | Back, dismiss, or clear active filters |
 | Square | Add or remove a favorite |
 | Triangle | Open advanced search and filters |
-| L1 / R1 | Switch between Live TV, Favorites, and Sources |
+| L1 / R1 | Switch between Live TV, Favorites, Sources, Settings, and About |
+| L2 / R2 | Previous or next page; hold to keep turning |
 | Triangle on a configurable source | Edit the custom M3U URL or Xtream account |
 | Options | Refresh the selected catalog source |
 | Circle / Options during playback | Stop playback and return to the browser |
@@ -163,53 +178,71 @@ identity and release version. Keep `PPSA99003` when publishing an update;
 changing the title ID creates a separate PS5 title.
 
 ```bash
-# Lint, run all host tests, and build the complete title folder.
-make check
+# Lint and run the host tests of the shared catalog, stores, and player.
+make lint
+make test
 
-# Build the compressed release image.
-make ffpfsc
+# The released app: the interface in opengl-ui/ on top of those sources.
+opengl-ui/tools/run-tests.sh
+opengl-ui/ps5/assemble.sh
+make -C ../prosperotv-ui-build app
 ```
 
-Release outputs are written to:
+Release outputs are written beside the repository:
 
 ```text
-dist/PPSA99003/           complete title folder
-dist/PPSA99003.ffpfsc     compressed release image
+../prosperotv-ui-build/dist/PPSA99003/       complete title folder
+../prosperotv-ui-build/dist/PPSA99003.zip    the release download
 ```
 
-Tagged GitHub Releases provide both `PPSA99003.ffpfsc` and
-`PPSA99003.zip`, which contains the complete `PPSA99003` title folder.
+GitHub Releases provide `PPSA99003.zip`, which contains the complete
+`PPSA99003` title folder, and `SHA256SUMS`. See
+[`opengl-ui/README.md`](opengl-ui/README.md) for how that build is put
+together.
 
-An optional UFS2 `.ffpkg` development target is also available. See
-[Package formats](docs/FFPKG.md).
+The repository root still builds the interface of 01.000.015 and earlier
+(`make check`, `make ffpfsc`); it shares the catalog, stores, and player with
+the released app and is kept for their tests. It is no longer released.
 
 ## Install and development deployment
 
-Choose one release format:
-
-- copy `PPSA99003.ffpfsc` to `/data/homebrew`; or
-- extract `PPSA99003.zip` and upload its complete `PPSA99003` folder to
-  `/data/homebrew`, producing `/data/homebrew/PPSA99003/eboot.bin`.
+Extract `PPSA99003.zip` and upload its complete `PPSA99003` folder to
+`/data/homebrew`, producing `/data/homebrew/PPSA99003/eboot.bin`.
+[ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) then puts
+ProsperoTV on the home screen.
 
 Do not upload the ZIP itself or copy only `eboot.bin`; the app also requires
-its runtime module, UI, fonts, icons, artwork, and metadata. Do not keep the
-folder and `.ffpfsc` forms in ShadowMountPlus scan paths at the same time.
+its runtime module, fonts, sounds, artwork, metadata, and the two helper
+programs beside `eboot.bin`.
+
+ProsperoTV asks the console's payload loader (port 9021, which a
+ShadowMountPlus setup already runs) for filesystem access when it starts. With
+it, the app keeps its files in `/data/prosperotv` and can update itself.
+Without it, the app runs in its own storage as earlier versions did and is
+updated by hand.
 
 ### Updating ProsperoTV
 
-Fully close ProsperoTV before replacing its `.ffpfsc` or complete title folder;
-ShadowMountPlus may otherwise keep the previous version mounted. Replace the
-same format at the same path, then restart ShadowMountPlus cleanly or restart
-the PS5. Wait for ShadowMountPlus to rediscover the title before launching it.
+From 01.000.020 on, ProsperoTV checks [homebrew.page](https://homebrew.page)
+once per launch. When a newer version is listed it offers **Update now**,
+**What's new**, and **Later**. The update downloads the release, closes the
+app, and replaces its files; sources, favorites, recent channels, and settings
+stay as they are. An app installed as an image cannot update itself.
 
-Keeping the `PPSA99003` title ID preserves the separate `/download0` data used
-for the channel cache, favorites, history, and configured sources.
+Coming from 01.000.015 or older, update by hand once:
 
-For an FTP development deployment to an available PS5:
+1. Fully close ProsperoTV.
+2. If you installed `PPSA99003.ffpfsc`, delete it from `/data/homebrew`; the
+   image form is no longer published, and the folder and the image must not
+   both be in ShadowMountPlus scan paths.
+3. Upload the complete `PPSA99003` folder from the ZIP to `/data/homebrew`,
+   replacing the old one.
+4. Restart ShadowMountPlus or the PS5, and wait for the title to be
+   rediscovered before launching it.
 
-```bash
-make deploy PS5_HOST=192.168.1.100 DEPLOY_FORMAT=folder
-```
+Keeping the `PPSA99003` title ID lets the new version find the sources,
+favorites, history, and account the old one saved; it copies them to
+`/data/prosperotv` the first time it starts.
 
 > [!NOTE]
 > The first launch downloads, validates, and caches the iptv-org catalog. Keep
@@ -218,20 +251,17 @@ make deploy PS5_HOST=192.168.1.100 DEPLOY_FORMAT=folder
 
 Xtream support is for credentials supplied by the user. ProsperoTV does not
 include, sell, or discover provider accounts. The server, username, and
-password are stored in a local `/download0` record and are never written to the
+password are stored in a local record beside the app's other data and are never written to the
 application log; the credential record is not encrypted, so do not share title
 data copied from the console.
 
-Deployment writes only title-scoped paths under `/data/homebrew`. See
-[Deployment](docs/DEPLOYMENT.md) for the complete workflow.
 
 ## Test and quality gates
 
 ```bash
-make test            # GoogleTest unit suite and Python integration tests
-make lint            # formatting, static analysis, metadata, and shell checks
-make check           # lint + tests + complete folder build
-make ffpfsc          # production folder + compressed release image
+make test                      # GoogleTest unit suite and Python integration tests
+make lint                      # formatting, static analysis, metadata, and shell checks
+opengl-ui/tools/run-tests.sh   # the interface and its logic, under ASan and UBSan
 ```
 
 Host tests cover M3U and Xtream catalog parsing and persistence, HLS parsing,
@@ -240,16 +270,18 @@ native-app layout, runtime handoff, and presentation constraints. Hardware
 acceptance is performed separately on PS5 with bounded channel samples,
 decoder telemetry, and teardown checks.
 
-GitHub Actions runs linting, all host tests, deterministic runtime
-reproduction, and release packaging. Pushing a tag that exactly matches
-`contentVersion` publishes the verified `.ffpfsc` image, complete-folder ZIP,
-and `SHA256SUMS`.
+GitHub Actions runs linting, the host tests, and deterministic runtime
+reproduction on every push, and checks that a version tag matches
+`contentVersion`. It does not publish: a release is the app built from
+`opengl-ui/` at the tagged commit, run on consoles, and attached with its
+`SHA256SUMS`.
 
 ## Source layout
 
 ```text
-src/main.cpp                  Native SDL/RmlUi lifetime and renderer bridge
-src/iptv_app.cpp              Screens, focus, search, paging, and user state
+opengl-ui/                    The released interface, its logic, tests, and console build
+src/main.cpp                  Earlier interface: SDL/RmlUi lifetime and renderer bridge
+src/iptv_app.cpp              Earlier interface: screens, focus, search, and paging
 src/iptv_xtream.cpp           Xtream credentials, Player API parsing, and live URLs
 src/iptv_player.cpp           Stream selection, buffering, playback, and errors
 src/iptv_stream.cpp           MPEG-TS demux and H.264/HEVC access-unit assembly
@@ -258,7 +290,7 @@ src/iptv_catalog.cpp          Extended M3U catalog parser
 src/iptv_store.cpp            SQLite last-good catalog persistence
 src/iptv_webm.cpp             Bounded WebM/VP9 parser
 include/                      Public application and media interfaces
-ui/                           RML, RCSS, fonts, controller icons, and artwork
+ui/                           Earlier interface: RML, RCSS, fonts, and icons
 sce_sys/                      PS5 metadata and launcher assets
 runtime/                      Reproducible clean-room libc.prx output
 tooling/native/               ELF, FSELF, and runtime-generation tooling
@@ -269,16 +301,16 @@ docs/                         Architecture, build, testing, and deployment guide
 ## Versioning and releases
 
 `contentVersion` in [`sce_sys/param.json`](sce_sys/param.json) drives the
-packaged metadata, top-bar version, Git tag, and GitHub Release. It uses the
+packaged metadata, the version on the About page, the Git tag, and the GitHub Release. It uses the
 PS5 `NN.NNN.NNN` format without a `v` prefix.
 
 ```bash
 # After updating param.json and passing the release gates:
-git tag 01.000.015
-git push origin main 01.000.015
+git tag 01.000.020
+git push origin main 01.000.020
 ```
 
-The release workflow rejects a mismatched tag. See
+The workflow rejects a mismatched tag. See
 [Configuration](docs/CONFIGURATION.md) for the coordinated metadata fields.
 
 ## Stream compatibility and limitations
@@ -295,6 +327,8 @@ The release workflow rejects a mismatched tag. See
   decoder pitch to match visible width (standard 720p/1080p/1440p/2160p widths).
   Unsupported audio may
   continue as silent video when the video path remains valid.
+- A source may hold up to 32,768 channels in an answer of up to 64 MiB; a
+  larger provider loads its first 32,768 channels.
 - Catalog metadata describes a channel but cannot guarantee that its current
   stream is online, correctly labeled, or compatible with the PS5 decoder.
 
@@ -314,6 +348,9 @@ they are listed so they are not lost.
   Codes account.
 - **Video on demand.** The movies and TV shows an IPTV service offers beside
   its live channels, browsable and playable from the app.
+- **Managing lists from a phone.** A small web page served by the app on the
+  home network, to add and edit playlists and accounts from a phone's or a
+  computer's browser instead of the on-screen keyboard.
 
 <!-- bbr-footer:start -->
 <!-- Generated by ps5-homebrew-dev-protocol/scripts/readme-footer. Edit the template there, not here. -->
