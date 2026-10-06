@@ -14,7 +14,7 @@ namespace iptv
 namespace
 {
 
-constexpr std::size_t kHardMaxPlaylistBytes = 16u * 1024u * 1024u;
+constexpr std::size_t kHardMaxPlaylistBytes = 64u * 1024u * 1024u;
 constexpr std::size_t kHardMaxRecordBytes = 64u * 1024u;
 constexpr std::size_t kHardMaxUrlBytes = 8192u;
 constexpr std::size_t kHardMaxFieldBytes = 4096u;

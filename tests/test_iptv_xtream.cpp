@@ -2,6 +2,7 @@
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "iptv_http.h"
 #include "iptv_source_state.h"
 #include "iptv_xtream.h"
 
@@ -88,6 +89,57 @@ TEST(IptvXtreamTest, ConvertsLiveJsonIntoTheSharedCatalog)
     EXPECT_EQ(catalog.channels[1].url, "https://cdn.example/sports.ts");
     EXPECT_EQ(report.accepted, 2u);
     EXPECT_EQ(report.skipped, 1u);
+}
+
+TEST(IptvXtreamTest, LoadsAProviderWithTensOfThousandsOfChannels)
+{
+    // 33,000 streams of about 600 bytes each: an answer near 20 MiB, past the
+    // 16 MiB the app once stopped at ("playlist too large").
+    const iptv::XtreamCredentials credentials = Credentials();
+    const std::vector<iptv::XtreamCategory> categories;
+    constexpr int kStreams = 33000;
+    const std::string padding(430, 'x');
+    std::string streams = "[";
+    streams.reserve(21u * 1024u * 1024u);
+    for (int i = 0; i < kStreams; ++i)
+    {
+        if (i != 0)
+            streams += ',';
+        const std::string number = std::to_string(i + 1);
+        streams +=
+            R"({"num":)" + number + R"(,"name":"Channel )" + number +
+            R"(","stream_type":"live","stream_id":)" + number +
+            R"(,"stream_icon":"https:\/\/images.example\/)" + padding + number +
+            R"(.png","epg_channel_id":"channel.)" + number +
+            R"(","added":"1700000000","is_adult":"0","category_id":"1","custom_sid":"","tv_archive":0,"direct_source":"","tv_archive_duration":0})";
+    }
+    streams += "]";
+    ASSERT_GT(streams.size(), 16u * 1024u * 1024u);
+    ASSERT_LE(streams.size(), iptv::kMaxXtreamResponseBytes);
+
+    iptv::CatalogState catalog;
+    iptv::ParseReport report;
+    ASSERT_EQ(iptv::ParseXtreamLiveStreams(streams, credentials, categories, 0x5854000000001234u,
+                                           &catalog, &report),
+              iptv::XtreamStatus::ok);
+    // Every channel the app has room for; the rest are counted, not an error.
+    EXPECT_EQ(catalog.channels.size(), iptv::kDefaultMaxChannels);
+    EXPECT_EQ(report.skipped, static_cast<std::size_t>(kStreams) - iptv::kDefaultMaxChannels);
+    EXPECT_EQ(catalog.channels.front().name, "Channel 1");
+    EXPECT_EQ(catalog.channels.back().name, "Channel " + std::to_string(iptv::kDefaultMaxChannels));
+}
+
+TEST(IptvXtreamTest, ChannelListStorageHoldsTheLargestAnswer)
+{
+    iptv::http::ListBuffer buffer = iptv::http::AllocateListBuffer();
+    ASSERT_NE(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.max_bytes, iptv::http::kHardMaxPlaylistBytes);
+    EXPECT_EQ(buffer.size(), buffer.max_bytes + 1u);
+    EXPECT_GE(iptv::http::kHardMaxPlaylistBytes, iptv::kMaxXtreamResponseBytes);
+    // Never less than asked for as the least.
+    iptv::http::ListBuffer small = iptv::http::AllocateListBuffer(1024u, 4096u);
+    ASSERT_NE(small.data(), nullptr);
+    EXPECT_EQ(small.max_bytes, 4096u);
 }
 
 TEST(IptvXtreamTest, RejectsMalformedDataAndPersistsCredentialsAndSource)

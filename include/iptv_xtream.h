@@ -20,7 +20,7 @@ inline constexpr char kDefaultXtreamCredentialsPath[] =
     "/download0/prosperotv-xtream-v1.txt";
 inline constexpr std::size_t kMaxXtreamServerBytes = 1020u;
 inline constexpr std::size_t kMaxXtreamCredentialBytes = 255u;
-inline constexpr std::size_t kMaxXtreamResponseBytes = 16u * 1024u * 1024u;
+inline constexpr std::size_t kMaxXtreamResponseBytes = 64u * 1024u * 1024u;
 
 enum class XtreamStatus : std::uint8_t
 {

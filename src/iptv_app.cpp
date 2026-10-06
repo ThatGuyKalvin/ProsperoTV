@@ -1552,7 +1552,8 @@ void *IptvApp::RefreshThreadEntry(void *argument)
             app};
         if (app->refresh_source_ == SourceSelection::Xtream)
         {
-            std::vector<char> response(iptv::kMaxXtreamResponseBytes + 1u);
+            iptv::http::ListBuffer response =
+                iptv::http::AllocateListBuffer(iptv::kMaxXtreamResponseBytes);
             std::string endpoint;
             std::vector<iptv::XtreamCategory> categories;
             iptv::XtreamAuth auth;
@@ -1566,7 +1567,7 @@ void *IptvApp::RefreshThreadEntry(void *argument)
                 }
                 app->pending_fetch_ =
                     iptv::http::GetM3u(endpoint.c_str(), response.data(), response.size(),
-                                       iptv::kMaxXtreamResponseBytes, nullptr, &control);
+                                       response.max_bytes, nullptr, &control);
                 return app->pending_fetch_.status == iptv::http::Status::ok &&
                        !app->shutdown_requested_.load(std::memory_order_acquire);
             };
@@ -1603,10 +1604,10 @@ void *IptvApp::RefreshThreadEntry(void *argument)
         }
         else
         {
-            std::vector<char> playlist(iptv::http::kDefaultMaxPlaylistBytes + 1u);
+            iptv::http::ListBuffer playlist = iptv::http::AllocateListBuffer();
             app->pending_fetch_ =
                 iptv::http::GetM3u(app->refresh_url_.c_str(), playlist.data(), playlist.size(),
-                                   iptv::http::kDefaultMaxPlaylistBytes, nullptr, &control);
+                                   playlist.max_bytes, nullptr, &control);
             if (app->pending_fetch_.status == iptv::http::Status::ok &&
                 !app->shutdown_requested_.load(std::memory_order_acquire))
             {

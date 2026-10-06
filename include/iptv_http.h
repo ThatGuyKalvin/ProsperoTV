@@ -5,6 +5,8 @@
 #ifndef IPTV_HTTP_H
 #define IPTV_HTTP_H
 
+#include <memory>
+#include <new>
 #include <cstddef>
 #include <cstdint>
 
@@ -12,7 +14,8 @@ namespace iptv::http
 {
 
 inline constexpr std::size_t kDefaultMaxPlaylistBytes = 8u * 1024u * 1024u;
-inline constexpr std::size_t kHardMaxPlaylistBytes = 16u * 1024u * 1024u;
+// A provider with tens of thousands of channels answers with tens of megabytes.
+inline constexpr std::size_t kHardMaxPlaylistBytes = 64u * 1024u * 1024u;
 inline constexpr std::size_t kMaxUrlBytes = 4096u;
 inline constexpr std::size_t kMaxRedirects = 5u;
 inline constexpr std::size_t kMaxErrorResponseBytes = 511u;
@@ -25,7 +28,8 @@ inline constexpr std::uint32_t kResolveTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kConnectTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kSendTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kReceiveTimeoutUsec = 5000000u;
-inline constexpr std::uint64_t kPlaylistDeadlineUsec = 45000000u;
+// The whole download; a stalled one ends sooner, at the receive timeout.
+inline constexpr std::uint64_t kPlaylistDeadlineUsec = 180000000u;
 inline constexpr bool kAutoRedirect = false;
 
 enum class Status : std::uint8_t
@@ -93,6 +97,42 @@ void DescribeFailure(Status status, int http_status, int native_error, const cha
 
 Status NetworkInit();
 void NetworkShutdown();
+
+// Storage for one channel list answer: room for kHardMaxPlaylistBytes when the
+// memory is there, otherwise half of it, and so on down to `least`. The bytes
+// are not cleared, so a short answer touches little of it. max_bytes is what
+// to pass to GetM3u; it is 0 when not even `least` could be had.
+struct ListBuffer
+{
+    std::unique_ptr<char[]> bytes;
+    std::size_t max_bytes = 0;
+
+    char *data()
+    {
+        return bytes.get();
+    }
+    std::size_t size() const
+    {
+        return bytes ? max_bytes + 1u : 0u;
+    }
+};
+inline ListBuffer AllocateListBuffer(std::size_t wanted = kHardMaxPlaylistBytes,
+                                     std::size_t least = 1024u * 1024u)
+{
+    ListBuffer buffer;
+    for (std::size_t room = wanted < least ? least : wanted;; room = room / 2u < least ? least : room / 2u)
+    {
+        buffer.bytes.reset(new (std::nothrow) char[room + 1u]);
+        if (buffer.bytes)
+        {
+            buffer.bytes[0] = '\0';
+            buffer.max_bytes = room;
+            return buffer;
+        }
+        if (room == least)
+            return buffer;
+    }
+}
 void CancelActivePlaylistRequest();
 
 // Writes at most max_bytes into buffer and always NUL-terminates it on return.

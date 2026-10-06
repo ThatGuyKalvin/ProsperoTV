@@ -1067,7 +1067,8 @@ void Model::run_refresh()
             this};
         if (refresh_source_ == iptv::SourceKind::Xtream)
         {
-            std::vector<char> response(iptv::kMaxXtreamResponseBytes + 1u);
+            iptv::http::ListBuffer response =
+                iptv::http::AllocateListBuffer(iptv::kMaxXtreamResponseBytes);
             std::string endpoint;
             std::vector<iptv::XtreamCategory> categories;
             iptv::XtreamAuth auth;
@@ -1080,7 +1081,7 @@ void Model::run_refresh()
                     return false;
                 }
                 pending_fetch_ = platform::fetch(endpoint.c_str(), response.data(), response.size(),
-                                                 iptv::kMaxXtreamResponseBytes, &control);
+                                                 response.max_bytes, &control);
                 return pending_fetch_.status == iptv::http::Status::ok && !stopping();
             };
             pending_account_stage_ = "authentication";
@@ -1115,9 +1116,9 @@ void Model::run_refresh()
         }
         else
         {
-            std::vector<char> playlist(iptv::http::kDefaultMaxPlaylistBytes + 1u);
+            iptv::http::ListBuffer playlist = iptv::http::AllocateListBuffer();
             pending_fetch_ = platform::fetch(refresh_url_.c_str(), playlist.data(), playlist.size(),
-                                             iptv::http::kDefaultMaxPlaylistBytes, &control);
+                                             playlist.max_bytes, &control);
             if (pending_fetch_.status == iptv::http::Status::ok && !stopping())
             {
                 const std::string_view input(playlist.data(), pending_fetch_.bytes);

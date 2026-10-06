@@ -13,7 +13,7 @@
 
 namespace iptv {
 
-inline constexpr std::size_t kDefaultMaxPlaylistBytes = 8u * 1024u * 1024u;
+inline constexpr std::size_t kDefaultMaxPlaylistBytes = 64u * 1024u * 1024u;
 inline constexpr std::size_t kDefaultMaxRecordBytes = 16u * 1024u;
 inline constexpr std::size_t kDefaultMaxUrlBytes = 4096u;
 inline constexpr std::size_t kDefaultMaxFieldBytes = 2048u;
