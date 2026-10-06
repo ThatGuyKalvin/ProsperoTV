@@ -326,6 +326,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             std::make_unique<ptv::App>(model, fonts, renderer.glass_texture(), *settings,
                                        version.empty() ? "unknown" : version);
         ptv::App &app = *owned;
+        if (g_menu_sessions == 1)
+            app.play_intro();
         InputTracker tracker;
         ui::Feedback feedback;
         ptv::Frame frame;

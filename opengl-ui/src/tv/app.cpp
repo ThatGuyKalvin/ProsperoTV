@@ -8,6 +8,7 @@
 #include "ui/components/overlay.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace ptv
@@ -18,6 +19,13 @@ namespace
 
 constexpr Rect kSettingsPanel{kMargin, 250.0f, 1010.0f, 640.0f};
 constexpr Rect kGlancePanel{1144.0f, 250.0f, kWidth - kMargin - 1144.0f, 640.0f};
+// The opening: the set stands in the middle; its moments, in seconds.
+constexpr Rect kIntroSet{(kWidth - 800.0f) * 0.5f, 250.0f, 800.0f, 520.0f};
+constexpr float kIntroArrive = 0.55f; // the set comes out of the dark
+constexpr float kIntroLine = 0.90f;   // a line of light across its screen
+constexpr float kIntroOpen = 1.30f;   // the line opens into a picture
+constexpr float kIntroHold = 2.25f;   // the app's mark on the screen
+constexpr float kIntroEnd = 3.20f;    // through the glass, into the app
 // The tuning screen: the channel's picture in the middle, its bar below.
 constexpr Rect kTuningArt{(kWidth - 640.0f) * 0.5f, 214.0f, 640.0f, 360.0f};
 constexpr Rect kTuningBar{(kWidth - 560.0f) * 0.5f, 858.0f, 560.0f, 8.0f};
@@ -311,7 +319,30 @@ void App::follow_channel(float dt)
         drift_ += dt;
 }
 
+void App::play_intro()
+{
+    intro_ = shared_.settings.reduced_motion ? -1.0f : 0.0f;
+}
+
 void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
+{
+    if (intro_ < 0.0f)
+    {
+        step(input, dt, feedback);
+        return;
+    }
+    // The opening plays over the app, which keeps loading under it and is
+    // not handed the controller. A button goes straight to its last moment.
+    intro_ += dt;
+    if (input.pressed != 0 && intro_ < kIntroHold)
+        intro_ = kIntroHold;
+    if (intro_ >= kIntroEnd)
+        intro_ = -1.0f;
+    InputFrame none;
+    step(none, dt, feedback);
+}
+
+void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
     Model &model = shared_.model;
     const bool reduced = shared_.settings.reduced_motion;
@@ -659,11 +690,11 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     const Color accent = channel != nullptr ? art_colors(channel->id).accent : tone::ember;
     const float lift = reduced ? 0.0f : 18.0f * (1.0f - eased);
     const float scale = reduced ? 1.0f : 0.94f + 0.06f * eased;
-    list.glow(kTuningArt.inset(-40.0f), theme.radius_card + 40.0f, 240.0f,
-              accent.with_alpha(0.28f));
+    const Rect set = tv_body(kTuningArt);
+    list.glow(set.inset(-40.0f), theme.radius_card + 40.0f, 240.0f, accent.with_alpha(0.28f));
     list.push_transform(scale, kTuningArt.cx(), kTuningArt.cy(), 0.0f, lift);
-    list.shadow({kTuningArt.x, kTuningArt.y + 28.0f, kTuningArt.w, kTuningArt.h},
-                theme.radius_card, 60.0f, Color::rgb(0x000000, 0.55f));
+    list.shadow({set.x, set.y + 28.0f, set.w, set.h}, theme.radius_card, 60.0f,
+                Color::rgb(0x000000, 0.55f));
     if (channel != nullptr)
         draw_channel_art(list, fonts, kTuningArt, theme.radius_card, *channel);
     list.pop_transform();
@@ -770,6 +801,73 @@ void App::draw(Frame &frame) const
     failure_.draw(over);
     update_.draw(over);
     frame.glass = !frame.overlay.empty();
+    if (intro_ >= 0.0f)
+        draw_intro(over);
+}
+
+void App::draw_intro(ui::Canvas &canvas) const
+{
+    gfx::DrawList &list = canvas.list;
+    const float t = intro_;
+    const float arrive = tween::cubic_out(tween::inverse_lerp(0.0f, kIntroArrive, t));
+    const float line = tween::cubic_out(tween::inverse_lerp(kIntroArrive, kIntroLine, t));
+    const float open = tween::cubic_out(tween::inverse_lerp(kIntroLine, kIntroOpen, t));
+    const float mark = tween::smoothstep(tween::inverse_lerp(kIntroOpen - 0.05f, kIntroOpen + 0.4f, t));
+    const float dive = tween::cubic_in_out(tween::inverse_lerp(kIntroHold, kIntroEnd, t));
+
+    // The room is dark until the view is through the glass.
+    const float dark = 1.0f - tween::smoothstep(tween::inverse_lerp(0.35f, 0.9f, dive));
+    list.rounded_rect({-8.0f, -8.0f, kWidth + 16.0f, kHeight + 16.0f}, 0.0f,
+                      Color::rgb(0x070202, dark));
+
+    // Where the screen is before the set is drawn, so the view can aim at it.
+    const Rect body = tv_body(kIntroSet);
+    const float bezel = body.h * 0.075f;
+    const Rect glass{body.x + bezel, body.y + bezel, body.w - 2.0f * bezel - body.w * 0.135f,
+                     body.h - 2.0f * bezel};
+    // Into the screen: it grows until it is the whole view, and gives way.
+    const float full = std::max(kWidth / glass.w, kHeight / glass.h) * 1.12f;
+    const float scale = std::pow(full, dive);
+    const float settle = 0.96f + 0.04f * arrive;
+    list.push_opacity(arrive * (1.0f - tween::smoothstep(tween::inverse_lerp(0.5f, 1.0f, dive))));
+    list.push_transform(scale * settle, glass.cx(), glass.cy(), (kWidth * 0.5f - glass.cx()) * dive,
+                        (kHeight * 0.5f - glass.cy()) * dive + 14.0f * (1.0f - arrive));
+
+    // The light the picture throws on the room.
+    list.glow(body.inset(-30.0f), 60.0f, 260.0f, tone::ember.with_alpha(0.26f * open));
+    list.shadow({body.x, body.y + 30.0f, body.w, body.h}, 40.0f, 70.0f, Color::rgb(0x000000, 0.6f));
+    const ArtColors wood{Color::rgb(0xb4572a), Color::rgb(0x6e2a14),
+                         gfx::mix(tone::ember, Color::rgb(0x3a1410), 1.0f - open)};
+    const Rect screen = draw_tv_shell(list, kIntroSet, 44.0f, wood);
+    const float corner = screen.h * 0.13f;
+
+    // Off: dark glass. Then a line of light across it, which opens.
+    list.rounded_rect(screen, corner, Color::rgb(0x0b0504));
+    if (line > 0.0f)
+    {
+        const float lit_w = screen.w * (open > 0.0f ? 1.0f : 0.06f + 0.94f * line);
+        const float lit_h = tween::lerp(5.0f, screen.h, open);
+        const Rect lit{screen.cx() - lit_w * 0.5f, screen.cy() - lit_h * 0.5f, lit_w, lit_h};
+        list.push_clip(lit);
+        list.gradient_rect(screen, corner, Color::rgb(0xc8431f), tone::wine);
+        // The picture: the app's mark and name, as a station's card.
+        list.push_opacity(mark);
+        list.circle(screen.cx(), screen.cy() - 26.0f, 150.0f, kWhite.with_alpha(0.06f));
+        draw_mark(list, screen.cx(), screen.cy() - 34.0f, 132.0f);
+        ui::text(list, shared_.fonts.display, "ProsperoTV", screen.cx(), screen.cy() + 96.0f, 54.0f,
+                 kWhite.with_alpha(0.96f), gfx::Align::center);
+        list.pop_opacity();
+        // The tube warming up: white first, then the colour comes through.
+        list.rounded_rect(screen, corner, kWhite.with_alpha(0.92f * (1.0f - open)));
+        list.pop_clip();
+        list.glow(lit, std::min(corner, lit.h * 0.5f), 36.0f,
+                  kWhite.with_alpha(0.5f * (1.0f - open) * line));
+    }
+    list.gradient_rect({screen.x, screen.y, screen.w, screen.h * 0.46f}, corner,
+                       kWhite.with_alpha(0.10f), kWhite.with_alpha(0.0f));
+    list.bordered_rect(screen, corner, kClear, 2.0f, kWhite.with_alpha(0.16f));
+    list.pop_transform();
+    list.pop_opacity();
 }
 
 } // namespace ptv

@@ -138,8 +138,84 @@ ArtColors art_colors(std::string_view channel_id)
     return {Color::rgb(ground.top), Color::rgb(ground.bottom), Color::rgb(ground.accent)};
 }
 
+Rect tv_body(const Rect &r)
+{
+    const float antenna = r.h * 0.17f;
+    return {r.x, r.y + antenna, r.w, r.h - antenna};
+}
+
+void draw_antenna(gfx::DrawList &list, float cx, float base_y, float height, Color color)
+{
+    const float thick = std::max(2.0f, height * 0.085f);
+    const float tip = thick * 1.15f;
+    // Two rods, the left one leaning further, as on a set that has been tuned by hand.
+    const float left_x = cx - height * 0.95f;
+    const float left_y = base_y - height * 0.86f;
+    const float right_x = cx + height * 0.78f;
+    const float right_y = base_y - height;
+    list.line(cx - height * 0.1f, base_y, left_x, left_y, thick, color);
+    list.line(cx + height * 0.1f, base_y, right_x, right_y, thick, color);
+    list.circle(left_x, left_y, tip, color);
+    list.circle(right_x, right_y, tip, color);
+    // The mount they turn in.
+    const float mount = height * 0.56f;
+    list.rounded_rect({cx - mount * 0.5f, base_y - mount * 0.3f, mount, mount * 0.6f}, mount * 0.3f,
+                      color);
+}
+
 void draw_channel_art(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
                       const iptv::Channel &channel)
+{
+    const Rect screen = draw_tv_shell(list, r, radius, art_colors(channel.id));
+    draw_channel_screen(list, fonts, screen, screen.h * 0.13f, channel);
+}
+
+Rect draw_tv_shell(gfx::DrawList &list, const Rect &r, float radius, const ArtColors &colors)
+{
+    const Rect body = tv_body(r);
+    const Color metal = gfx::mix(colors.accent, kWhite, 0.45f).with_alpha(0.9f);
+    draw_antenna(list, body.cx(), body.y, r.h * 0.17f * 0.92f, metal);
+
+    // The shell, in the channel's colour gone dark.
+    const float corner = std::min(radius, body.h * 0.14f);
+    list.gradient_rect(body, corner, gfx::mix(colors.top, tone::night, 0.42f),
+                       gfx::mix(colors.bottom, tone::night, 0.70f));
+    list.bordered_rect(body, corner, kClear, std::max(1.5f, body.w * 0.004f),
+                       kWhite.with_alpha(0.18f));
+
+    // The screen on the left, the controls in a strip on the right.
+    const float bezel = body.h * 0.075f;
+    const float strip = body.w * 0.135f;
+    const Rect screen{body.x + bezel, body.y + bezel, body.w - 2.0f * bezel - strip,
+                      body.h - 2.0f * bezel};
+    list.rounded_rect(screen.inset(-bezel * 0.32f), screen.h * 0.13f + bezel * 0.32f,
+                      tone::night.with_alpha(0.62f));
+
+    const float kx = screen.x + screen.w + (strip + bezel) * 0.5f;
+    const float knob = strip * 0.27f;
+    for (int i = 0; i < 2; ++i)
+    {
+        const float ky = body.y + body.h * (0.25f + 0.24f * static_cast<float>(i));
+        list.circle(kx, ky, knob, tone::night.with_alpha(0.55f));
+        list.ring(kx, ky, knob, std::max(1.5f, knob * 0.16f), metal.with_alpha(0.75f));
+        // Each knob's mark, turned to its own place.
+        const float turn = i == 0 ? -0.7f : 0.5f;
+        list.line(kx, ky, kx + std::sin(turn) * knob * 0.72f, ky - std::cos(turn) * knob * 0.72f,
+                  std::max(1.5f, knob * 0.18f), metal);
+    }
+    // The speaker grille and the light that says the set is on.
+    for (int i = 0; i < 4; ++i)
+    {
+        const float gy = body.y + body.h * (0.68f + 0.05f * static_cast<float>(i));
+        list.line(kx - knob, gy, kx + knob, gy, std::max(1.5f, body.h * 0.008f),
+                  tone::night.with_alpha(0.55f));
+    }
+    list.circle(kx, body.y + body.h * 0.60f, std::max(2.0f, knob * 0.2f), colors.accent);
+    return screen;
+}
+
+void draw_channel_screen(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
+                         const iptv::Channel &channel)
 {
     const ArtColors colors = art_colors(channel.id);
     list.gradient_rect(r, radius, colors.top, colors.bottom);
@@ -150,6 +226,9 @@ void draw_channel_art(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r
     const float size = std::min(r.h * 0.44f, r.w * 0.3f);
     ui::text(list, fonts.display, letters, r.cx(), r.cy() + size * 0.36f, size,
              kWhite.with_alpha(0.94f), gfx::Align::center);
+    // The glass: light from above, fading before the middle.
+    list.gradient_rect({r.x, r.y, r.w, r.h * 0.46f}, radius, kWhite.with_alpha(0.11f),
+                       kWhite.with_alpha(0.0f));
     // A hairline of light is what makes a flat rectangle read as an object.
     list.bordered_rect(r, radius, kClear, std::max(1.5f, r.w * 0.004f), kWhite.with_alpha(0.16f));
 }
@@ -223,11 +302,17 @@ void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cel
 
     // At rest a tile is a veil over the page. In focus it turns solid: the
     // light the grid puts around it must not shine through and wash the text.
+    // The card is a television set: rods above it, the
+    // channel's picture as its screen. In focus the rods take the channel's light.
+    const Color metal = gfx::mix(kWhite.with_alpha(0.46f),
+                                 gfx::mix(art_colors(channel.id).accent, kWhite, 0.4f), focus);
+    draw_antenna(list, cell.cx(), cell.y + 1.0f, 18.0f, metal);
     list.rounded_rect(cell, kRadius,
                       gfx::mix(kWhite.with_alpha(0.06f), tone::panel_lit.with_alpha(0.97f), focus));
     list.bordered_rect(cell, kRadius, kClear, 1.5f, kWhite.with_alpha(0.12f + 0.14f * focus));
     const Rect art{cell.x + kInset, cell.y + kInset, cell.w - 2.0f * kInset, kArtHeight};
-    draw_channel_art(list, fonts, art, 13.0f, channel);
+    list.rounded_rect(art.inset(-2.0f), 18.0f, tone::night.with_alpha(0.5f));
+    draw_channel_screen(list, fonts, art, 16.0f, channel);
 
     const float x = cell.x + 20.0f;
     const float room = cell.w - 40.0f;

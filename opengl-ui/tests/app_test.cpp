@@ -750,6 +750,36 @@ TEST_F(AppTest, WithoutNotesTheOfferKeepsItsTwoAnswers)
     EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
 }
 
+TEST_F(AppTest, TheOpeningPlaysOnceKeepsTheControllerAndEndsByItself)
+{
+    app_->play_intro();
+    ASSERT_TRUE(app_->intro_playing());
+    // The controller is not read while it plays: the tab stays.
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 0);
+    // That button took it to its last moment; it is over within a second.
+    idle(70);
+    EXPECT_FALSE(app_->intro_playing());
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
+
+    // Left alone it runs its whole length, then hands over.
+    app_->play_intro();
+    idle(120);
+    EXPECT_TRUE(app_->intro_playing());
+    idle(100);
+    EXPECT_FALSE(app_->intro_playing());
+}
+
+TEST_F(AppTest, WithReduceMotionThereIsNoOpening)
+{
+    ptv::Settings settings;
+    settings.reduced_motion = true;
+    app_ = std::make_unique<ptv::App>(*model_, font_set().fonts, 7u, settings, "test");
+    app_->play_intro();
+    EXPECT_FALSE(app_->intro_playing());
+}
+
 TEST_F(AppTest, CircleOnTheOfferMeansLater)
 {
     host::offer_update(newer_version());

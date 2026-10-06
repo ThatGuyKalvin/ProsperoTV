@@ -33,8 +33,20 @@ struct ArtColors
     Color accent; // the light it gives off when focused
 };
 ArtColors art_colors(std::string_view channel_id);
+// The channel's picture as a television set standing in r: antenna on top,
+// the shell with its screen and knobs. tv_body() is the shell's
+// place in r, for whoever puts a shadow or a light behind it.
+Rect tv_body(const Rect &r);
 void draw_channel_art(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
                       const iptv::Channel &channel);
+// The set without a picture: rods, shell, knobs. Returns where its screen is
+// (the corner radius of a screen is 0.13 of its height).
+Rect draw_tv_shell(gfx::DrawList &list, const Rect &r, float radius, const ArtColors &colors);
+// Only the screen: the channel's ground and initials behind curved glass.
+void draw_channel_screen(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
+                         const iptv::Channel &channel);
+// The pair of rods of a set whose top edge is at base_y.
+void draw_antenna(gfx::DrawList &list, float cx, float base_y, float height, Color color);
 
 // The app's mark: a sun setting behind a horizon.
 void draw_mark(gfx::DrawList &list, float cx, float cy, float size);

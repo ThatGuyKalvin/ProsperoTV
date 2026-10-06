@@ -357,6 +357,18 @@ int main(int argc, char **argv)
         if (step.capture != nullptr)
             render(step.capture);
     }
+    {
+        // The opening, at six of its moments.
+        const std::pair<float, const char *> moments[] = {
+            {0.50f, "00a-intro-set"},   {0.80f, "00b-intro-line"}, {1.08f, "00c-intro-opening"},
+            {2.00f, "00d-intro-on"},    {2.72f, "00e-intro-into"}, {2.98f, "00f-intro-through"}};
+        for (const auto &[seconds, name] : moments)
+        {
+            app.set_intro_time(seconds);
+            render(name);
+        }
+        app.set_intro_time(-1.0f);
+    }
     // The tuning screen a channel opens on: halfway through the hand-over,
     // and as the player shows it with its bar part filled.
     {

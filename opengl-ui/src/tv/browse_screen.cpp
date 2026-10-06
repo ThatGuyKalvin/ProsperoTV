@@ -665,9 +665,10 @@ void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::Channel &channe
     gfx::DrawList &list = canvas.list;
     const Color accent = art_colors(channel.id).accent;
     list.push_opacity(alpha * appear(1));
-    list.shadow({kHeroArt.x, kHeroArt.y + 26.0f, kHeroArt.w, kHeroArt.h}, kHeroRadius, 56.0f,
+    const Rect set = tv_body(kHeroArt);
+    list.shadow({set.x, set.y + 26.0f, set.w, set.h}, kHeroRadius, 56.0f,
                 Color::rgb(0x000000, 0.5f));
-    list.glow(kHeroArt.inset(-4.0f), kHeroRadius + 4.0f, 80.0f, accent.with_alpha(0.24f));
+    list.glow(set.inset(-4.0f), kHeroRadius + 4.0f, 80.0f, accent.with_alpha(0.24f));
     draw_channel_art(list, canvas.fonts, kHeroArt, kHeroRadius, channel);
     list.pop_opacity();
 }

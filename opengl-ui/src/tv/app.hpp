@@ -32,6 +32,19 @@ class App
         std::string version);
 
     void update(const InputFrame &input, float dt, ui::Feedback &feedback);
+    // The opening, once per launch: an old television switches on, the view
+    // goes into its screen and the app is there. Any button ends it; with
+    // Reduce motion it is not played. Until it ends the controller is not read.
+    void play_intro();
+    bool intro_playing() const
+    {
+        return intro_ >= 0.0f;
+    }
+    // The opening at a moment of its own, in seconds (pictures made on a PC only).
+    void set_intro_time(float seconds)
+    {
+        intro_ = seconds;
+    }
     // Records the frame. It changes nothing: it may run more than once.
     void draw(Frame &frame) const;
 
@@ -112,6 +125,8 @@ class App
     void draw_settings(ui::Canvas &canvas) const;
     void draw_about(ui::Canvas &canvas) const;
     void draw_hints(ui::Canvas &canvas) const;
+    void draw_intro(ui::Canvas &canvas) const;
+    void step(const InputFrame &input, float dt, ui::Feedback &feedback);
 
     Shared shared_;
     BrowseScreen browse_;
@@ -134,6 +149,7 @@ class App
     ui::SpringColor lean_dark_;
     tween::Spring lean_amount_;
     float drift_ = 0.0f;
+    float intro_ = -1.0f; // seconds into the opening; negative: not playing
 };
 
 } // namespace ptv
