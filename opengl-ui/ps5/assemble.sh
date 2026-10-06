@@ -70,6 +70,7 @@ rm -f -- "$out/sce_sys/snd0.at9"
 
 # ---- the kit: renderer, components, input, sounds, the console's display ----
 while IFS= read -r relative; do
+    relative=${relative%$'\r'}
     [[ -n $relative ]] || continue
     mkdir -p "$out/src/kit/$(dirname "$relative")"
     cp "$kit/src/$relative" "$out/src/kit/$relative"

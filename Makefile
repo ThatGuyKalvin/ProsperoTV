@@ -56,6 +56,7 @@ APP_STATIC_ARCHIVES += .deps/ffmpeg-audio/root/lib/libavcodec.a .deps/ffmpeg-aud
 PACBREW_INCLUDE_PATHS += include
 PACBREW_STATIC_ARCHIVES += lib/libsqlite3.a
 HOST_UNIT_TEST := build/tests/iptv_core_tests
+HOST_ELEVATION_TEST := build/tests/elevation_client_test
 
 .PHONY: all app build init doctor test test-deps test-unit test-integration libc deps pacbrew pacbrew-list assets-check format format-check tidy lint check ffpkg ffpfsc packages deploy undeploy clean distclean help
 
@@ -76,9 +77,20 @@ test-deps:
 	@printf '%s\n' '==> [test-deps] Fetching the pinned host-only GoogleTest source'
 	@bash tools/setup-test-dependencies.sh >/dev/null
 
-test-unit: $(HOST_UNIT_TEST)
+test-unit: $(HOST_UNIT_TEST) $(HOST_ELEVATION_TEST)
 	@printf '%s\n' '==> [test-unit] Running host-native GoogleTest application tests'
 	@$(HOST_UNIT_TEST) $(GTEST_ARGS)
+	@printf '%s\n' '==> [test-unit] Running optional-Lapy elevation regression'
+	@$(HOST_ELEVATION_TEST)
+
+$(HOST_ELEVATION_TEST): tests/test_elevation.cpp \
+		opengl-ui/ps5/src/elevation/elevation.cpp \
+		opengl-ui/ps5/src/elevation/elevation.hpp \
+		opengl-ui/ps5/src/elevation/protocol.hpp
+	@printf '%s\n' '==> [test-unit] Compiling the optional-Lapy elevation regression'
+	@mkdir -p -- $(@D)
+	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) tests/test_elevation.cpp \
+		$(HOST_TEST_LDFLAGS) -o $@
 
 $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 		tests/test_iptv_hls.cpp tests/test_iptv_http.cpp \

@@ -12,14 +12,16 @@ The three files here are the PS5 Native App Boilerplate's client
 (`examples/sandbox-elevation`), as ProsperoEden uses it. `tv_storage.cpp` calls it once, first
 thing in `main`, while the process has a single thread:
 
-1. If `/data` can already be written, nothing is asked for.
+1. If `/data` can already be written and listed, nothing is asked for. A writable-only
+   ShadowMountPlus mount is not treated as elevation, so the Lapy payload remains optional.
 2. The client publishes the cooperative resident-service request through
    `/download0/elevate_proc` and waits 1.5 seconds for verified `/data` read/write access. If a
    resident service claimed the marker, the one-shot path is not started.
 3. Otherwise it cancels the marker, observes one further grace interval, and sends
    `/app0/lapy.elf` to the local ELF loader on TCP port 9021. The same connection carries
    upstream's fixed-width request/prepare/prepared/response exchange.
-4. Only a successful response followed by an actual `/data` write/read/delete probe counts.
+4. Only a successful response followed by an actual `/data` write/read/delete and directory-list
+   probe counts.
 
 With access the app keeps its files in `/data/prosperotv` and reads its own folder from where
 the console mounts it; without it (no resident service and no loader, or a refusal) it stays in
