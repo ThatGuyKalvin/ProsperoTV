@@ -616,6 +616,43 @@ static void discard_pending_video(backend_state_t *state)
     state->telemetry.pending_video_timestamps = 0;
 }
 
+/* Development: treat every 8-bit picture as interlaced, to time the blend
+ * below on a console with an ordinary channel. */
+static int g_force_field_blend;
+
+void iptv_native_backend_force_field_blend(int enabled)
+{
+    g_force_field_blend = enabled != 0;
+}
+
+/* An interlaced picture holds two moments, 1/50 s apart, on alternate lines:
+ * anything that moves shows as a comb. Each line becomes the mean of itself
+ * and the one under it, which merges the two fields; the price is a slightly
+ * softer picture. Done in place, on the copy the decoder handed out. */
+static void blend_rows(uint8_t *plane, uint32_t pitch, uint32_t rows, uint32_t bytes_per_row)
+{
+    uint32_t y;
+    uint32_t x;
+
+    for (y = 0; y + 1u < rows; ++y)
+    {
+        uint8_t *row = plane + (size_t)y * pitch;
+        const uint8_t *below = row + pitch;
+        for (x = 0; x < bytes_per_row; ++x)
+            row[x] = (uint8_t)((row[x] + below[x] + 1u) >> 1);
+    }
+}
+
+static void blend_fields(const videodec2_output_t *output)
+{
+    uint8_t *luma = (uint8_t *)output->buffer;
+
+    blend_rows(luma, output->pitch, output->height, output->width);
+    /* The colour plane: half the lines, pairs of bytes, the same width. */
+    blend_rows(luma + (size_t)output->pitch * output->height, output->pitch,
+               (output->height + 1u) / 2u, output->width);
+}
+
 static int frame_is_in_pool(const backend_state_t *state, const void *frame)
 {
     uint32_t index;
@@ -1475,6 +1512,16 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     if (result != 0)
         goto failed;
 
+    /* Before the clock below starts: the new interface's build places its
+     * own line between that clock and the next statement. */
+    if (state->config.bit_depth == 8 && (output->picture_count == 2 || g_force_field_blend))
+    {
+        const uint64_t blend_started = monotonic_us();
+        blend_fields(output);
+        elapsed = monotonic_us() - blend_started;
+        if (elapsed > state->telemetry.decode_max_us)
+            state->telemetry.decode_max_us = elapsed;
+    }
     started = monotonic_us();
     state->telemetry.last_present_source = (uintptr_t)output->buffer;
     state->telemetry.zero_copy_pointer_match =
@@ -2656,6 +2703,24 @@ int main(void)
     assert(pending_pts_drop_second_field(&pending));
     assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 40000);
     assert(pending_pts_drop_second_field(&pending) && pending.count == 0);
+
+    {
+        /* A comb: lines of 0 and 200 alternate. Blended, every line but the
+         * last is their mean; bytes past the width are left alone. */
+        uint8_t picture[4 * 6 + 2 * 6];
+        videodec2_output_t comb = {0};
+        for (index = 0; index < sizeof(picture); ++index)
+            picture[index] = (index / 6u) % 2u ? 200u : 0u;
+        comb.buffer = picture;
+        comb.pitch = 6;
+        comb.width = 4;
+        comb.height = 4;
+        blend_fields(&comb);
+        assert(picture[0] == 100 && picture[3] == 100 && picture[6] == 100 && picture[12] == 100);
+        assert(picture[18] == 200);                    /* the last line has none under it */
+        assert(picture[4] == 0 && picture[10] == 200); /* padding untouched */
+        assert(picture[24] == 100 && picture[27] == 100 && picture[30] == 200);
+    }
 
     for (index = 0; index < PENDING_PTS_CAPACITY; ++index)
         assert(pending_pts_push(&pending, index, 1));

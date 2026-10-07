@@ -181,6 +181,10 @@ extern "C"
     uint64_t iptv_native_backend_presented_frames(const iptv_native_backend_t *backend);
     int32_t iptv_native_backend_close(iptv_native_backend_t *backend);
 
+/* Development: blend the lines of every 8-bit picture as if it were
+ * interlaced, to time that work on a console with an ordinary channel. */
+void iptv_native_backend_force_field_blend(int enabled);
+
 #ifdef __cplusplus
 }
 #endif

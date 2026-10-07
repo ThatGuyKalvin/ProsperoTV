@@ -17,6 +17,7 @@
 #include "gfx/canvas.hpp"
 #include "gfx/renderer.hpp"
 #include "iptv_ime.h"
+#include "iptv_native_backend.h"
 #include "iptv_player.h"
 #include "iptv_store.h"
 #include "platform/ps5/audio_out.hpp"
@@ -848,6 +849,13 @@ int main()
         script.load(tv::storage::app_file("dev/request.txt"), dev_dir))
     {
         sys::log("[TV] scripted run: the controller is not read");
+        // dev/force-field-blend.txt: time the interlaced blend with any channel.
+        std::string unused;
+        if (save::read_file(tv::storage::app_file("dev/force-field-blend.txt"), &unused, 64))
+        {
+            iptv_native_backend_force_field_blend(1);
+            sys::log("[TV] every picture is blended as if it were interlaced");
+        }
         // Pictures of the tuning screen as the television showed it.
         tv_tuning_set_dump_dir(dev_dir.c_str());
     }
