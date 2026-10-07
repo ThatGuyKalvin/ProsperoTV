@@ -566,6 +566,30 @@ static int pending_pts_take_first(pending_pts_t *pending, uint64_t *pts_us, int 
     return 1;
 }
 
+/* An interlaced picture is submitted as two access units, one per field, and
+ * comes out as one frame. After the frame took its timestamp (the smallest),
+ * the other field's entry goes too: one without a timestamp when there is one
+ * (a second field often carries none), otherwise the next smallest. */
+static int pending_pts_drop_second_field(pending_pts_t *pending)
+{
+    uint32_t index;
+    uint64_t pts_us;
+    int displayable;
+
+    if (!pending || pending->count == 0)
+        return 0;
+    for (index = 0; index < pending->count; ++index)
+    {
+        if (pending->values[index].pts_us == UINT64_MAX)
+        {
+            --pending->count;
+            pending->values[index] = pending->values[pending->count];
+            return 1;
+        }
+    }
+    return pending_pts_take_smallest(pending, &pts_us, &displayable);
+}
+
 static int state_pending_push(backend_state_t *state, uint64_t pts_us, int displayable)
 {
     if (!pending_pts_push(&state->pending_pts, pts_us, displayable))
@@ -1422,6 +1446,12 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         state->state = IPTV_NATIVE_STATE_ERROR;
         state->telemetry.state = state->state;
         return IPTV_NATIVE_E_DECODER_OUTPUT;
+    }
+
+    if (output->picture_count == 2)
+    {
+        (void)pending_pts_drop_second_field(&state->pending_pts);
+        state->telemetry.pending_video_timestamps = state->pending_pts.count;
     }
 
     ++state->telemetry.decoded_frames;
@@ -2606,6 +2636,26 @@ int main(void)
     assert(pending_pts_push(&pending, UINT64_MAX, 1));
     assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == UINT64_MAX);
     assert(!pending_pts_take_smallest(&pending, &pts_us, &displayable));
+
+    /* Interlaced: two fields in, one frame out. The second field's entry
+     * leaves with the frame, whether it carried a timestamp or not. */
+    assert(pending_pts_push(&pending, 0, 1));
+    assert(pending_pts_push(&pending, UINT64_MAX, 1));
+    assert(pending_pts_push(&pending, 40000, 1));
+    assert(pending_pts_push(&pending, UINT64_MAX, 1));
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 0);
+    assert(pending_pts_drop_second_field(&pending) && pending.count == 2);
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 40000);
+    assert(pending_pts_drop_second_field(&pending) && pending.count == 0);
+    assert(!pending_pts_drop_second_field(&pending));
+    assert(pending_pts_push(&pending, 0, 1));
+    assert(pending_pts_push(&pending, 20000, 1));
+    assert(pending_pts_push(&pending, 40000, 1));
+    assert(pending_pts_push(&pending, 60000, 1));
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 0);
+    assert(pending_pts_drop_second_field(&pending));
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 40000);
+    assert(pending_pts_drop_second_field(&pending) && pending.count == 0);
 
     for (index = 0; index < PENDING_PTS_CAPACITY; ++index)
         assert(pending_pts_push(&pending, index, 1));
