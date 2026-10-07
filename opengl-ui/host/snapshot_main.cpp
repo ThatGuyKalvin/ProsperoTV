@@ -66,7 +66,7 @@ bool load_font(hui::gfx::Renderer &renderer, const std::string &path, hui::gfx::
                hui::ui::FontRef *ref)
 {
     std::string data;
-    if (!hui::save::read_file(path, &data) || !font->load(data))
+    if (!hui::save::read_file(path, &data, 64u << 20) || !font->load(data))
     {
         std::fprintf(stderr, "cannot load font %s\n", path.c_str());
         return false;
@@ -252,6 +252,8 @@ int main(int argc, char **argv)
     hui::gfx::Font semibold;
     hui::gfx::Font display;
     hui::gfx::Font mono;
+    hui::gfx::Font east_asian;
+    hui::gfx::Font korean;
     hui::ui::Fonts fonts;
     if (!renderer.init() ||
         !load_font(renderer, fonts_dir + "/inter-regular.huifont", &regular, &fonts.regular) ||
@@ -263,6 +265,8 @@ int main(int argc, char **argv)
     // names need.
     fonts.pixel = fonts.mono;
     fonts.hand = fonts.regular;
+    (void)load_font(renderer, fonts_dir + "/noto-sans-east-asian.huifont", &east_asian, &fonts.hand);
+    (void)load_font(renderer, fonts_dir + "/noto-sans-korean.huifont", &korean, &fonts.pixel);
 
     GLuint framebuffer = 0;
     GLuint color = 0;

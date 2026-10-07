@@ -172,6 +172,16 @@ class Model
         return catalog_index < ranks_.size() ? ranks_[catalog_index] + 1u : 0u;
     }
     // Changes whenever the visible list may have changed.
+    // The scripts the list's names and groups are written in beyond the
+    // European ones: the faces for them are large, and loaded only when asked for.
+    bool uses_east_asian() const
+    {
+        return uses_east_asian_;
+    }
+    bool uses_korean() const
+    {
+        return uses_korean_;
+    }
     unsigned revision() const
     {
         return revision_;
@@ -347,6 +357,9 @@ class Model
     std::uint64_t source_id(iptv::SourceKind source) const;
     void load_cache();
     void index_names();
+    void note_scripts();
+    bool uses_east_asian_ = false;
+    bool uses_korean_ = false;
     void recount_groups();
     void rebuild_facets();
     void rebuild_visible();

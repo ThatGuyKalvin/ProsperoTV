@@ -117,6 +117,38 @@ class ModelTest : public ::testing::Test
     std::uint64_t now_ = 0;
 };
 
+TEST_F(ModelTest, SaysWhichScriptsAListIsWrittenIn)
+{
+    {
+        ptv::Model model(dir_);
+        load(model);
+        EXPECT_FALSE(model.uses_east_asian());
+        EXPECT_FALSE(model.uses_korean());
+    }
+    // The same list with one Chinese name and one Korean group.
+    std::ofstream(playlist_, std::ios::app)
+        << "#EXTINF:-1 tvg-id=\"z.cn\" group-title=\"News\",CCTV-5 \xE9\xAB\x98\xE6\xB8\x85\n"
+        << "https://streams.example.invalid/cctv5/index.m3u8\n";
+    {
+        fs::remove_all(dir_ + "/cache");
+        ptv::Model model(dir_ + "/second");
+        fs::create_directories(dir_ + "/second");
+        load(model);
+        EXPECT_TRUE(model.uses_east_asian());
+        EXPECT_FALSE(model.uses_korean());
+    }
+    std::ofstream(playlist_, std::ios::app)
+        << "#EXTINF:-1 tvg-id=\"y.kr\" group-title=\"\xEB\x89\xB4\xEC\x8A\xA4\",YTN\n"
+        << "https://streams.example.invalid/ytn/index.m3u8\n";
+    {
+        ptv::Model model(dir_ + "/third");
+        fs::create_directories(dir_ + "/third");
+        load(model);
+        EXPECT_TRUE(model.uses_east_asian());
+        EXPECT_TRUE(model.uses_korean());
+    }
+}
+
 TEST_F(ModelTest, FirstOpenDownloadsSavesAndSaysSo)
 {
     ptv::Model model(dir_);
@@ -583,7 +615,7 @@ TEST(ChannelText, MonogramsPlacesAndNumbers)
 {
     EXPECT_EQ(ptv::monogram(named("Alder News")), "AN");
     EXPECT_EQ(ptv::monogram(named("Kestrel")), "KE");
-    EXPECT_EQ(ptv::monogram(named("\xE4\xB8\xAD\xE6\x96\x87")), "TV");
+    EXPECT_EQ(ptv::monogram(named("\xE4\xB8\xAD\xE6\x96\x87")), "\xE4\xB8\xAD");
     iptv::Channel channel = named("Alder");
     EXPECT_EQ(ptv::place_line(channel), "World");
     EXPECT_EQ(ptv::category_of(channel), "Uncategorized");

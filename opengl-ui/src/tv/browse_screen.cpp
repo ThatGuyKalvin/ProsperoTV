@@ -595,8 +595,10 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &chann
     const std::string kicker =
         (favorites_ ? std::string("FAVORITE")
                     : "CHANNEL " + group_digits(shared_.model.number_of(index))) +
-        "  \xC2\xB7  " + ui::upper(readable(fonts.semibold, category_of(channel)));
-    ui::text(list, fonts.semibold, fonts.semibold.font->fit(kicker, 18.0f, kHeroText * 0.8f), x,
+        "  \xC2\xB7  " +
+        ui::upper(readable(face_for(fonts, fonts.semibold, category_of(channel)), category_of(channel)));
+    const ui::FontRef &kicker_face = face_for(fonts, fonts.semibold, kicker);
+    ui::text(list, kicker_face, kicker_face.font->fit(kicker, 18.0f, kHeroText * 0.8f), x,
              156.0f + rise(0), 18.0f, tone::accent, gfx::Align::left, 4.0f);
     list.pop_opacity();
 
@@ -612,10 +614,10 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &chann
     list.pop_opacity();
 
     list.push_opacity(appear(2));
-    ui::text(
-        list, fonts.regular,
-        fonts.regular.font->fit(readable(fonts.regular, place_line(channel)), 26.0f, kHeroText), x,
-        282.0f + rise(2), 26.0f, theme.text_muted);
+    const std::string place = place_line(channel);
+    const ui::FontRef &place_face = face_for(fonts, fonts.regular, place);
+    ui::text(list, place_face, place_face.font->fit(readable(place_face, place), 26.0f, kHeroText),
+             x, 282.0f + rise(2), 26.0f, theme.text_muted);
     list.pop_opacity();
 
     // ---- what the record says about the picture, and how the last try went ----

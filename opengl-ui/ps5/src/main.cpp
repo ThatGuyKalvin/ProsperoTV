@@ -151,7 +151,7 @@ bool load_font(gfx::Renderer &renderer, const char *name, gfx::Font *font, ui::F
 {
     std::string data;
     const std::string path = tv::storage::app_file(std::string("assets/fonts/") + name);
-    if (!save::read_file(path, &data) || !font->load(data))
+    if (!save::read_file(path, &data, 64u << 20) || !font->load(data))
     {
         sys::log("[TV] font %s failed: %s", name, font->error().c_str());
         return false;
@@ -282,6 +282,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
     gfx::Font semibold;
     gfx::Font display_font;
     gfx::Font mono;
+    gfx::Font east_asian;
+    gfx::Font korean;
     ui::Fonts fonts;
     if (!renderer.init() ||
         !load_font(renderer, "inter-regular.huifont", &regular, &fonts.regular) ||
@@ -296,9 +298,33 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         return false;
     }
     // Dusk uses four faces; the other two slots are for the scripts channel
-    // names need.
+    // names need: Chinese and Japanese in one, Korean in the other. Without
+    // their files the names fall back to what the four can write.
+    // Those two are tens of megabytes: each is loaded when the list first
+    // shows a name that needs it (see the frame loop), not at every menu.
     fonts.pixel = fonts.mono;
     fonts.hand = fonts.regular;
+    bool east_asian_loaded = false;
+    bool korean_loaded = false;
+    const auto load_wide_faces = [&]()
+    {
+        if (!east_asian_loaded && model.uses_east_asian())
+        {
+            east_asian_loaded = true;
+            const std::int64_t began = sys::monotonic_us();
+            const bool ok = load_font(renderer, "noto-sans-east-asian.huifont", &east_asian, &fonts.hand);
+            sys::log("[TV] Chinese and Japanese face loaded=%d in %lld ms", ok ? 1 : 0,
+                     static_cast<long long>((sys::monotonic_us() - began) / 1000));
+        }
+        if (!korean_loaded && model.uses_korean())
+        {
+            korean_loaded = true;
+            const std::int64_t began = sys::monotonic_us();
+            const bool ok = load_font(renderer, "noto-sans-korean.huifont", &korean, &fonts.pixel);
+            sys::log("[TV] Korean face loaded=%d in %lld ms", ok ? 1 : 0,
+                     static_cast<long long>((sys::monotonic_us() - began) / 1000));
+        }
+    };
 
     // The controller opens the user service, which the keyboard needs too.
     ps5::Pad pad;
@@ -343,6 +369,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         std::int64_t last_frame_start = previous;
         while (!chosen)
         {
+            load_wide_faces(); // two flags a frame; a list in another script arrives at any time
             const std::int64_t now = sys::monotonic_us();
             // Animation time is start-to-start (one full frame), and a hitch
             // must not teleport the animations.

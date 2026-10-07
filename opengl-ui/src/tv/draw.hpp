@@ -22,7 +22,12 @@ std::string readable(const ui::FontRef &font, std::string_view text);
 // channel, then the word "Channel". `notes` as display_name() fills them.
 std::string shown_name(const ui::Fonts &fonts, const iptv::Channel &channel,
                        std::vector<std::string> *notes = nullptr);
-// The display face when it holds every letter of the text, else the semibold one.
+// The face a text is written with: `usual` when it holds every letter of it;
+// otherwise the one of the usual face, the Chinese and Japanese face
+// (fonts.hand) and the Korean face (fonts.pixel) that holds the most of it.
+const ui::FontRef &face_for(const ui::Fonts &fonts, const ui::FontRef &usual,
+                            std::string_view text);
+// The display face when it holds every letter of the text, else face_for() the semibold one.
 const ui::FontRef &title_face(const ui::Fonts &fonts, std::string_view text);
 
 // A channel without a picture gets a ground of its own and its initials.

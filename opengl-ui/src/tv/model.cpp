@@ -525,6 +525,41 @@ void Model::index_names()
     ranks_.resize(count);
     for (unsigned rank = 0; rank < count; ++rank)
         ranks_[order_[rank]] = rank;
+    note_scripts();
+}
+
+void Model::note_scripts()
+{
+    uses_east_asian_ = false;
+    uses_korean_ = false;
+    const auto scan = [this](const std::string &text)
+    {
+        // Every character of these scripts is three bytes of UTF-8.
+        for (std::size_t index = 0; index + 2 < text.size(); ++index)
+        {
+            const unsigned char lead = static_cast<unsigned char>(text[index]);
+            if (lead < 0xe3 || lead > 0xef)
+                continue;
+            const std::uint32_t codepoint =
+                (static_cast<std::uint32_t>(lead & 0x0f) << 12) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(text[index + 1]) & 0x3f) << 6) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(text[index + 2])) & 0x3f);
+            if ((codepoint >= 0xac00 && codepoint <= 0xd7a3) || (codepoint >= 0x3130 && codepoint <= 0x318f))
+                uses_korean_ = true;
+            else if ((codepoint >= 0x3040 && codepoint <= 0x30ff) ||
+                     (codepoint >= 0x3400 && codepoint <= 0x9fff) ||
+                     (codepoint >= 0xf900 && codepoint <= 0xfaff))
+                uses_east_asian_ = true;
+            index += 2;
+        }
+    };
+    for (const iptv::Channel &channel : catalog_.channels)
+    {
+        if (uses_east_asian_ && uses_korean_)
+            break;
+        scan(channel.name);
+        scan(channel.group_title);
+    }
 }
 
 void Model::rebuild_visible()

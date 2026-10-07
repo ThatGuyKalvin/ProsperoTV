@@ -147,3 +147,13 @@ The BlackBear icon, selection artwork, and default selection track
 is titled `Night Drive`.
 
 No proprietary runtime module, encryption key, or game file is included.
+
+## Noto Sans CJK (new interface, `opengl-ui/`)
+
+Channel names in Chinese, Japanese and Korean are drawn with glyphs baked from
+Noto Sans SC and Noto Sans KR, Copyright 2014-2021 Adobe (http://www.adobe.com/),
+with Reserved Font Name 'Source'. They are licensed under the SIL Open Font
+License, Version 1.1; the license text ships with the app as
+`assets/fonts/NotoSansCJK-LICENSE.txt`. The font files come from
+https://github.com/notofonts/noto-cjk at a pinned commit when the app is built
+and are not stored in this repository.

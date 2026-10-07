@@ -31,7 +31,7 @@ constexpr float kDt = 1.0f / 60.0f;
 // out what the console lays out. KIT_FONTS is set by tools/run-tests.sh.
 struct FontSet
 {
-    hui::gfx::Font regular, semibold, display, mono;
+    hui::gfx::Font regular, semibold, display, mono, east_asian, korean;
     hui::ui::Fonts fonts;
 
     FontSet()
@@ -41,8 +41,8 @@ struct FontSet
         load(dir, "inter-semibold.huifont", &semibold, &fonts.semibold, 0xf0000002u);
         load(dir, "montserrat-medium.huifont", &display, &fonts.display, 0xf0000003u);
         load(dir, "dejavu-sans-mono.huifont", &mono, &fonts.mono, 0xf0000004u);
-        fonts.pixel = fonts.mono;
-        fonts.hand = fonts.regular;
+        load(dir, "noto-sans-east-asian.huifont", &east_asian, &fonts.hand, 0xf0000005u);
+        load(dir, "noto-sans-korean.huifont", &korean, &fonts.pixel, 0xf0000006u);
     }
 
     static void load(const char *dir, const char *name, hui::gfx::Font *font, hui::ui::FontRef *ref,
@@ -50,7 +50,7 @@ struct FontSet
     {
         std::string data;
         const std::string path = std::string(dir != nullptr ? dir : ".") + "/" + name;
-        if (!hui::save::read_file(path, &data) || !font->load(data))
+        if (!hui::save::read_file(path, &data, 64u << 20) || !font->load(data))
         {
             ADD_FAILURE() << "cannot load " << path;
             return;
@@ -905,24 +905,54 @@ TEST(ShownNames, AreWrittenInTheScriptsTheFontsHold)
     }
 }
 
-TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
+TEST(ShownNames, ChineseJapaneseAndKoreanAreWrittenAsTheyAre)
 {
     const hui::ui::Fonts &fonts = font_set().fonts;
-    const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93";
-    // Most of a mixed name survives: it is kept without the letters that cannot be drawn.
-    EXPECT_EQ(ptv::shown_name(fonts, written("CCTV-1 \xE7\xBB\xBC\xE5\x90\x88", "CCTV1.cn")),
-              "CCTV-1");
-    // Nothing survives: the playlist's own id for the channel stands in.
-    EXPECT_EQ(ptv::shown_name(fonts, written(chinese, "CCTV4.cn@SD")), "CCTV4");
-    // And without an id the tile still says something.
-    EXPECT_EQ(ptv::shown_name(fonts, written(chinese)), "Channel");
-    // Notes are filtered the same way; one that cannot be written is dropped.
+    const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93";     // 中文频道
+    const char *mixed = "CCTV-5 \xE9\xAB\x98\xE6\xB8\x85";                              // CCTV-5 高清
+    const char *japanese = "\xE3\x83\x86\xE3\x83\xAC\xE3\x83\x93\xE6\x9C\x9D\xE6\x97\xA5"; // テレビ朝日
+    const char *korean = "\xEC\x97\xB0\xED\x95\xA9\xEB\x89\xB4\xEC\x8A\xA4TV";         // 연합뉴스TV
+    EXPECT_EQ(ptv::shown_name(fonts, written(chinese, "CCTV4.cn@SD")), chinese);
+    EXPECT_EQ(ptv::shown_name(fonts, written(mixed, "CCTV5.cn")), mixed);
+    EXPECT_EQ(ptv::shown_name(fonts, written(japanese)), japanese);
+    EXPECT_EQ(ptv::shown_name(fonts, written(korean)), korean);
+    // Each is written with the face that holds all of it; Latin names keep theirs.
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, chinese), &fonts.hand);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, mixed), &fonts.hand);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, japanese), &fonts.hand);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, korean), &fonts.pixel);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, "France 24"), &fonts.semibold);
+    EXPECT_EQ(&ptv::title_face(fonts, "France 24"), &fonts.display);
+    EXPECT_EQ(&ptv::title_face(fonts, mixed), &fonts.hand);
+    // A name of one script only gets its first character on its screen.
+    EXPECT_EQ(ptv::monogram(written(chinese)), "\xE4\xB8\xAD");
+    EXPECT_EQ(ptv::monogram(written(mixed)), "C5");
+    // A note in Chinese is kept too.
     std::vector<std::string> notes;
     const std::string noted = std::string("Alder [") + chinese + "] [Not 24/7]";
     EXPECT_EQ(ptv::shown_name(fonts, written(noted.c_str()), &notes), "Alder");
+    ASSERT_EQ(notes.size(), 2u);
+    EXPECT_EQ(notes[0], chinese);
+}
+
+TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
+{
+    const hui::ui::Fonts &fonts = font_set().fonts;
+    const char *thai = "\xE0\xB9\x84\xE0\xB8\x97\xE0\xB8\xA2\xE0\xB8\x97\xE0\xB8\xB5\xE0\xB8\xA7\xE0\xB8\xB5"; // ไทยทีวี
+    // Most of a mixed name survives: it is kept without the letters that cannot be drawn.
+    EXPECT_EQ(ptv::shown_name(fonts, written((std::string("Thai PBS ") + thai).c_str(), "ThaiPBS.th")),
+              "Thai PBS");
+    // Nothing survives: the playlist's own id for the channel stands in.
+    EXPECT_EQ(ptv::shown_name(fonts, written(thai, "Channel3.th@SD")), "Channel3");
+    // And without an id the tile still says something.
+    EXPECT_EQ(ptv::shown_name(fonts, written(thai)), "Channel");
+    // Notes are filtered the same way; one that cannot be written is dropped.
+    std::vector<std::string> notes;
+    const std::string noted = std::string("Alder [") + thai + "] [Not 24/7]";
+    EXPECT_EQ(ptv::shown_name(fonts, written(noted.c_str()), &notes), "Alder");
     ASSERT_EQ(notes.size(), 1u);
     EXPECT_EQ(notes[0], "Not 24/7");
-    EXPECT_EQ(ptv::readable(fonts.regular, std::string("News | ") + chinese), "News");
+    EXPECT_EQ(ptv::readable(fonts.regular, std::string("News | ") + thai), "News");
 }
 
 // Whatever a player presses, in whatever order: nothing may fault, the tab

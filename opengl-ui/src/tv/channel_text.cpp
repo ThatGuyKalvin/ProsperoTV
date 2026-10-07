@@ -230,7 +230,19 @@ std::string monogram(const iptv::Channel &channel)
                 break;
         }
     }
-    return letters.empty() ? "TV" : letters;
+    if (!letters.empty())
+        return letters;
+    // No Latin letter at all (a Chinese, Japanese or Korean name): its first
+    // character says more than "TV".
+    for (std::size_t index = 0; index < source.size();)
+    {
+        const unsigned char lead = static_cast<unsigned char>(source[index]);
+        const std::size_t length = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+        if (lead >= 0xe0 && index + length <= source.size())
+            return source.substr(index, length);
+        index += length;
+    }
+    return "TV";
 }
 
 std::string category_of(const iptv::Channel &channel)

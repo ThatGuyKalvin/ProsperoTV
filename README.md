@@ -115,8 +115,8 @@
   synchronization, and native decoder errors.
 - Render the interface with OpenGL through the
   [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit,
-  with fonts covering Latin, Greek, and Cyrillic channel names, interface
-  sounds, and a Reduce motion setting.
+  with fonts covering Latin, Greek, Cyrillic, Chinese, Japanese, and Korean
+  channel names, interface sounds, and a Reduce motion setting.
 
 ## Video support
 
@@ -321,6 +321,8 @@ The workflow rejects a mismatched tag. See
 - VP9 currently supports direct, video-only WebM Profile 0 streams. DASH,
   fragmented MP4, WebM audio, VP9 Profile 2, and general Matroska features are
   outside the supported path.
+- Interlaced H.264 (broadcast 1080i) plays with its two fields blended into
+  each frame: motion is smooth but slightly softer than a progressive channel.
 - MPEG-TS playback supports H.264 and 8-bit/10-bit HEVC video. Main10 uses hardware
   decoding and GPU presentation to the SDR output; HDR output and HDR-to-SDR tone
   mapping are not implemented. The Main10 presentation path currently requires

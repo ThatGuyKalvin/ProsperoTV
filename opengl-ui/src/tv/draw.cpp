@@ -94,6 +94,38 @@ std::string readable(const ui::FontRef &font, std::string_view text)
     return kept.substr(first);
 }
 
+const ui::FontRef &face_for(const ui::Fonts &fonts, const ui::FontRef &usual, std::string_view text)
+{
+    const ui::FontRef *faces[] = {&usual, &fonts.hand, &fonts.pixel};
+    const ui::FontRef *best = &usual;
+    int most = -1;
+    for (const ui::FontRef *face : faces)
+    {
+        if (face->font == nullptr)
+            continue;
+        int held = 0;
+        int missing = 0;
+        for (std::size_t index = 0; index < text.size();)
+        {
+            const std::uint32_t codepoint = gfx::next_codepoint(text, &index);
+            if (codepoint <= 0x20)
+                continue;
+            if (face->font->has_glyph(codepoint))
+                ++held;
+            else
+                ++missing;
+        }
+        if (missing == 0)
+            return face == &usual || most < held ? *face : *best;
+        if (held > most)
+        {
+            most = held;
+            best = face;
+        }
+    }
+    return *best;
+}
+
 std::string shown_name(const ui::Fonts &fonts, const iptv::Channel &channel,
                        std::vector<std::string> *notes)
 {
@@ -101,10 +133,10 @@ std::string shown_name(const ui::Fonts &fonts, const iptv::Channel &channel,
     if (notes != nullptr)
     {
         for (std::string &note : *notes)
-            note = readable(fonts.semibold, note);
+            note = readable(face_for(fonts, fonts.semibold, note), note);
         std::erase_if(*notes, [](const std::string &note) { return note.empty(); });
     }
-    const std::string kept = readable(fonts.semibold, name);
+    const std::string kept = readable(face_for(fonts, fonts.semibold, name), name);
     if (kept.size() == name.size())
         return name;
     // Most of the name survived: a letter or two the fonts lack is no reason
@@ -127,7 +159,7 @@ const ui::FontRef &title_face(const ui::Fonts &fonts, std::string_view text)
     {
         const std::uint32_t codepoint = gfx::next_codepoint(text, &index);
         if (codepoint > 0x20 && !fonts.display.font->has_glyph(codepoint))
-            return fonts.semibold;
+            return face_for(fonts, fonts.semibold, text);
     }
     return fonts.display;
 }
@@ -224,8 +256,8 @@ void draw_channel_screen(gfx::DrawList &list, const ui::Fonts &fonts, const Rect
     list.circle(r.cx(), r.cy(), disc, kWhite.with_alpha(0.07f));
     const std::string letters = monogram(channel);
     const float size = std::min(r.h * 0.44f, r.w * 0.3f);
-    ui::text(list, fonts.display, letters, r.cx(), r.cy() + size * 0.36f, size,
-             kWhite.with_alpha(0.94f), gfx::Align::center);
+    ui::text(list, face_for(fonts, fonts.display, letters), letters, r.cx(), r.cy() + size * 0.36f,
+             size, kWhite.with_alpha(0.94f), gfx::Align::center);
     // The glass: light from above, fading before the middle.
     list.gradient_rect({r.x, r.y, r.w, r.h * 0.46f}, radius, kWhite.with_alpha(0.11f),
                        kWhite.with_alpha(0.0f));
@@ -316,9 +348,10 @@ void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cel
 
     const float x = cell.x + 20.0f;
     const float room = cell.w - 40.0f;
-    ui::text(list, fonts.semibold,
-             fonts.semibold.font->fit(shown_name(fonts, channel), 23.0f, room), x, cell.y + 150.0f,
-             23.0f, theme.text);
+    const std::string name = shown_name(fonts, channel);
+    const ui::FontRef &name_face = face_for(fonts, fonts.semibold, name);
+    ui::text(list, name_face, name_face.font->fit(name, 23.0f, room), x, cell.y + 150.0f, 23.0f,
+             theme.text);
 
     const std::string size = resolution_label(channel);
     const float size_width = size.empty() ? 0.0f : fonts.mono.measure(size, 17.0f) + 14.0f;
@@ -329,8 +362,10 @@ void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cel
         list.circle(at + 5.0f, cell.y + 173.0f, 5.0f, tone::bad);
         at += 18.0f;
     }
-    ui::text(list, fonts.regular,
-             fonts.regular.font->fit(readable(fonts.regular, category_of(channel)), 19.0f,
+    const std::string category = category_of(channel);
+    const ui::FontRef &category_face = face_for(fonts, fonts.regular, category);
+    ui::text(list, category_face,
+             category_face.font->fit(readable(category_face, category), 19.0f,
                                      room - size_width - (at - x)),
              at, cell.y + 180.0f, 19.0f, theme.text_muted);
     if (!size.empty())

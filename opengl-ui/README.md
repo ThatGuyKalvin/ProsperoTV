@@ -139,10 +139,22 @@ in `/data/prosperotv`, so an update never touches them.
 The kit bakes printable ASCII. A channel list needs more, so
 `tools/bake-fonts.sh` runs the kit's baker over the kit's own font files (Inter,
 Montserrat, DejaVu Sans Mono) with its European alphabet: Latin-1, Latin
-Extended-A, Greek and Cyrillic. Names in
-other scripts fall back to what the fonts can write, then to the playlist's
-id for the channel (`shown_name` in `draw.cpp`). Faces for other scripts would
-have to be added to the kit's `third_party/fonts`.
+Extended-A, Greek and Cyrillic.
+
+Chinese, Japanese and Korean names have two faces of their own, baked from
+Noto Sans SC and Noto Sans KR (SIL Open Font License; fetched at a pinned
+commit by `tools/fetch-cjk-fonts.sh`, never kept in this repository): about
+16,900 characters of GB 2312, Big5 and JIS X 0208 with kana, and every Hangul
+syllable (`tools/cjk-ranges.py`). This folder's `tools/font-baker/bake_list.cpp`
+bakes them, because the kit's baker measures distances to straight and
+quadratic edges only and these fonts are drawn with cubic curves. The two
+files are 26 and 16 megabytes, so the console loads each one only when the
+list on screen has a name or a group that needs it (`Model::uses_east_asian`,
+`uses_korean`); `face_for` in `draw.cpp` picks the face a text is written with.
+
+Names in other scripts (Arabic, Hebrew, Devanagari, Thai: they need shaping,
+which the kit's text does not do) fall back to what the fonts can write, then
+to the playlist's id for the channel (`shown_name` in `draw.cpp`).
 
 ## What has run on a console
 
