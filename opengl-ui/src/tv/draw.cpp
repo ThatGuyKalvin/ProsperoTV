@@ -126,7 +126,7 @@ const ui::FontRef &face_for(const ui::Fonts &fonts, const ui::FontRef &usual, st
     return *best;
 }
 
-std::string shown_name(const ui::Fonts &fonts, const iptv::Channel &channel,
+std::string shown_name(const ui::Fonts &fonts, const iptv::ChannelView &channel,
                        std::vector<std::string> *notes)
 {
     const std::string name = display_name(channel, notes);
@@ -196,7 +196,7 @@ void draw_antenna(gfx::DrawList &list, float cx, float base_y, float height, Col
 }
 
 void draw_channel_art(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
-                      const iptv::Channel &channel)
+                      const iptv::ChannelView &channel)
 {
     const Rect screen = draw_tv_shell(list, r, radius, art_colors(channel.id));
     draw_channel_screen(list, fonts, screen, screen.h * 0.13f, channel);
@@ -247,7 +247,7 @@ Rect draw_tv_shell(gfx::DrawList &list, const Rect &r, float radius, const ArtCo
 }
 
 void draw_channel_screen(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
-                         const iptv::Channel &channel)
+                         const iptv::ChannelView &channel)
 {
     const ArtColors colors = art_colors(channel.id);
     list.gradient_rect(r, radius, colors.top, colors.bottom);
@@ -323,7 +323,7 @@ float draw_status_chip(ui::Canvas &canvas, const ui::Theme &theme, float x, floa
 }
 
 void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cell,
-                       const iptv::Channel &channel, float focus)
+                       const iptv::ChannelView &channel, float focus)
 {
     gfx::DrawList &list = canvas.list;
     const ui::Fonts &fonts = canvas.fonts;

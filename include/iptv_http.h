@@ -16,6 +16,10 @@ namespace iptv::http
 inline constexpr std::size_t kDefaultMaxPlaylistBytes = 8u * 1024u * 1024u;
 // A provider with tens of thousands of channels answers with tens of megabytes.
 inline constexpr std::size_t kHardMaxPlaylistBytes = 64u * 1024u * 1024u;
+// A list read as it arrives (GetList) is held nowhere, so it may be far larger:
+// a quarter of a million channels are 70 to 150 MiB of playlist or account answer.
+inline constexpr std::size_t kMaxListBytes = 512u * 1024u * 1024u;
+inline constexpr std::size_t kListPieceBytes = 64u * 1024u;
 inline constexpr std::size_t kMaxUrlBytes = 4096u;
 inline constexpr std::size_t kMaxRedirects = 5u;
 inline constexpr std::size_t kMaxErrorResponseBytes = 511u;
@@ -28,8 +32,9 @@ inline constexpr std::uint32_t kResolveTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kConnectTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kSendTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kReceiveTimeoutUsec = 5000000u;
-// The whole download; a stalled one ends sooner, at the receive timeout.
-inline constexpr std::uint64_t kPlaylistDeadlineUsec = 180000000u;
+// The whole download; a stalled one ends sooner, at the receive timeout. Ten
+// minutes: the largest lists are over a hundred megabytes from a slow panel.
+inline constexpr std::uint64_t kPlaylistDeadlineUsec = 600000000u;
 inline constexpr bool kAutoRedirect = false;
 
 enum class Status : std::uint8_t
@@ -47,6 +52,7 @@ enum class Status : std::uint8_t
     deadline_exceeded,
     redirect_error,
     cancelled,
+    stopped, // the receiver of a list had enough (GetList)
 };
 
 struct FetchResult
@@ -149,6 +155,21 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
                            std::size_t max_bytes = kDefaultMaxPlaylistBytes,
                            const RequestHeaders *headers = nullptr,
                            const RequestControl *control = nullptr);
+
+// Takes a list as it arrives: every piece, in order, as soon as it is read.
+// Returning false ends the download there with Status::stopped.
+struct ListSink
+{
+    bool (*write)(void *context, const char *data, std::size_t bytes) = nullptr;
+    void *context = nullptr;
+};
+
+// As GetM3u, but the answer is handed to `sink` piece by piece and kept
+// nowhere, so its size is bounded by max_bytes alone (kMaxListBytes at most).
+// The result's bytes are how many the sink was given.
+FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes = kMaxListBytes,
+                    const RequestHeaders *headers = nullptr,
+                    const RequestControl *control = nullptr);
 
 // Opens a bounded-time streaming response. NetworkInit must have succeeded.
 Status OpenStream(const char *url, const char *accept, StreamRequest *stream,

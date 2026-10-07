@@ -38,8 +38,10 @@ struct Network
     bool reachable = false;
     std::string playlist_path;
     unsigned delay_ms = 0;
+    std::size_t piece_bytes = iptv::http::kListPieceBytes;
     std::atomic<bool> cancelled{false};
     std::atomic<int> fetches{0};
+    std::atomic<std::size_t> delivered{0};
 };
 
 struct Update
@@ -111,9 +113,20 @@ void set_network(bool reachable, const std::string &playlist_path, unsigned dela
     g_network.delay_ms = delay_ms;
 }
 
+void set_network_piece(std::size_t bytes)
+{
+    const std::lock_guard<std::mutex> lock(g_network.mutex);
+    g_network.piece_bytes = bytes != 0 ? bytes : iptv::http::kListPieceBytes;
+}
+
 int fetch_count()
 {
     return g_network.fetches.load();
+}
+
+std::size_t delivered_bytes()
+{
+    return g_network.delivered.load();
 }
 
 void set_unix_time(std::uint64_t seconds)
@@ -148,7 +161,9 @@ void reset()
     g_keyboard = {};
     g_update = {};
     set_network(false, "", 0);
+    set_network_piece(0);
     g_network.fetches.store(0);
+    g_network.delivered.store(0);
     g_network.cancelled.store(false);
     g_unix_time.store(0);
 }
@@ -303,6 +318,69 @@ iptv::http::FetchResult fetch(const char *, char *buffer, std::size_t capacity,
     if (more)
         return {iptv::http::Status::response_too_large, bytes, 200, 0};
     return {iptv::http::Status::ok, bytes, 200, 0};
+}
+
+iptv::http::FetchResult fetch_list(const char *, const iptv::http::ListSink &sink,
+                                   std::size_t max_bytes,
+                                   const iptv::http::RequestControl *control)
+{
+    g_network.fetches.fetch_add(1);
+    bool reachable = false;
+    std::string playlist_path;
+    unsigned delay_ms = 0;
+    std::size_t piece_bytes = 0;
+    {
+        const std::lock_guard<std::mutex> lock(g_network.mutex);
+        reachable = g_network.reachable;
+        playlist_path = g_network.playlist_path;
+        delay_ms = g_network.delay_ms;
+        piece_bytes = g_network.piece_bytes;
+    }
+    const auto cancelled = [control]()
+    {
+        return g_network.cancelled.load() || (control != nullptr && control->cancelled != nullptr &&
+                                              control->cancelled(control->context));
+    };
+    for (unsigned waited = 0; waited < delay_ms; waited += 5)
+    {
+        if (cancelled())
+            return {iptv::http::Status::cancelled, 0, 0, 0};
+        sleep_ms(5);
+    }
+    if (!reachable)
+        return {iptv::http::Status::request_failed, 0, 0, -1};
+    std::FILE *file = std::fopen(playlist_path.c_str(), "rb");
+    if (file == nullptr)
+        return {iptv::http::Status::http_status_error, 0, 404, 0};
+    // The file comes in pieces, as a download does.
+    std::string piece(piece_bytes, '\0');
+    std::size_t bytes = 0;
+    iptv::http::Status status = iptv::http::Status::ok;
+    for (;;)
+    {
+        if (cancelled())
+        {
+            status = iptv::http::Status::cancelled;
+            break;
+        }
+        const std::size_t read = std::fread(piece.data(), 1, piece.size(), file);
+        if (read == 0)
+            break;
+        if (read > max_bytes - bytes)
+        {
+            status = iptv::http::Status::response_too_large;
+            break;
+        }
+        bytes += read;
+        g_network.delivered.fetch_add(read);
+        if (!sink.write(sink.context, piece.data(), read))
+        {
+            status = iptv::http::Status::stopped;
+            break;
+        }
+    }
+    std::fclose(file);
+    return {status, bytes, 200, 0};
 }
 
 } // namespace ptv::platform

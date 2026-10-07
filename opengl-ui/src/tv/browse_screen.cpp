@@ -156,13 +156,13 @@ unsigned BrowseScreen::focused_index() const
     return shared_.model.visible(static_cast<unsigned>(grid_.focus()));
 }
 
-const iptv::Channel *BrowseScreen::focused() const
+std::optional<iptv::ChannelView> BrowseScreen::focused() const
 {
     const Model &model = shared_.model;
     if (!model.has_catalog() || grid_.count() == 0 ||
         static_cast<unsigned>(grid_.focus()) >= model.visible_count())
-        return nullptr;
-    return &model.channel(focused_index());
+        return std::nullopt;
+    return model.channel(focused_index());
 }
 
 int BrowseScreen::current_letter() const
@@ -222,7 +222,9 @@ void BrowseScreen::begin_swap(int from)
     if (has_previous_)
     {
         previous_index_ = model.visible(static_cast<unsigned>(from));
-        previous_ = model.channel(previous_index_);
+        // Kept across frames, so with texts of its own: a download may
+        // replace the catalog while the hero changes hands.
+        previous_ = model.channel(previous_index_).Copy();
         previous_favorite_ = model.is_favorite(previous_);
     }
     travel_ = grid_.focus() >= from ? 1.0f : -1.0f;
@@ -371,7 +373,7 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
 
     if (input.is_pressed(Action::west))
     {
-        const iptv::Channel &channel = model.channel(focused_index());
+        const iptv::ChannelView &channel = model.channel(focused_index());
         const std::string name = shown_name(shared_.fonts, channel);
         keep_place_ = favorites_;
         switch (model.toggle_favorite(focused_index()))
@@ -487,7 +489,7 @@ void BrowseScreen::update(float dt)
         grid_.set_count(static_cast<int>(model.visible_count()));
     }
     keep_place_ = false;
-    if (const iptv::Channel *channel = focused())
+    if (const std::optional<iptv::ChannelView> channel = focused())
     {
         focused_id_ = channel->id;
         model.view.focused_channel = focused_id_;
@@ -575,7 +577,7 @@ void BrowseScreen::update(float dt)
     }
 }
 
-void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &channel, unsigned index,
+void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &channel, unsigned index,
                                   bool favorite, float alpha, float dx) const
 {
     if (alpha <= 0.01f)
@@ -659,7 +661,7 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &chann
     list.pop_opacity();
 }
 
-void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::Channel &channel,
+void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::ChannelView &channel,
                                  float alpha) const
 {
     if (alpha <= 0.01f)
@@ -754,8 +756,13 @@ void BrowseScreen::draw_waiting(ui::Canvas &canvas) const
         const ui::Theme &theme = shared_.theme;
         ui::text(list, canvas.fonts.semibold, "Downloading the channel list", kMargin, 352.0f,
                  28.0f, theme.text);
+        const unsigned so_far = shared_.model.refresh_progress() / 1000u * 1000u;
         ui::text(list, canvas.fonts.regular,
-                 "This happens once. Later launches open from the copy saved on this console.",
+                 so_far != 0
+                     ? group_digits(so_far) + " channels so far. Later launches open from the " +
+                           "copy saved on this console."
+                     : std::string("This happens once. Later launches open from the copy saved "
+                                   "on this console."),
                  kMargin, 392.0f, 23.0f, theme.text_muted);
     }
     const float w = (kGridWidth - (kColumns - 1) * kGapX) / kColumns;
@@ -779,8 +786,8 @@ void BrowseScreen::draw(ui::Canvas &canvas) const
         return;
     }
 
-    const iptv::Channel *channel = focused();
-    if (channel != nullptr)
+    const std::optional<iptv::ChannelView> channel = focused();
+    if (channel)
     {
         const unsigned index = focused_index();
         const bool favorite = model.is_favorite(*channel);
@@ -891,7 +898,7 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
         add({ui::Button::dpad, "Jump to a letter"});
         add({ui::Button::cross, "Channels"});
     }
-    else if (focused() != nullptr)
+    else if (focused())
     {
         add({ui::Button::cross, "Watch"});
         add({ui::Button::square, model.is_favorite(*focused()) ? "Unfavorite" : "Favorite"});

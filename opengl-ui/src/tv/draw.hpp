@@ -20,7 +20,7 @@ std::string readable(const ui::FontRef &font, std::string_view text);
 // A channel's name for the screen. display_name() when the fonts can write
 // it; otherwise what is left of it, then the playlist's own id for the
 // channel, then the word "Channel". `notes` as display_name() fills them.
-std::string shown_name(const ui::Fonts &fonts, const iptv::Channel &channel,
+std::string shown_name(const ui::Fonts &fonts, const iptv::ChannelView &channel,
                        std::vector<std::string> *notes = nullptr);
 // The face a text is written with: `usual` when it holds every letter of it;
 // otherwise the one of the usual face, the Chinese and Japanese face
@@ -43,13 +43,13 @@ ArtColors art_colors(std::string_view channel_id);
 // place in r, for whoever puts a shadow or a light behind it.
 Rect tv_body(const Rect &r);
 void draw_channel_art(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
-                      const iptv::Channel &channel);
+                      const iptv::ChannelView &channel);
 // The set without a picture: rods, shell, knobs. Returns where its screen is
 // (the corner radius of a screen is 0.13 of its height).
 Rect draw_tv_shell(gfx::DrawList &list, const Rect &r, float radius, const ArtColors &colors);
 // Only the screen: the channel's ground and initials behind curved glass.
 void draw_channel_screen(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
-                         const iptv::Channel &channel);
+                         const iptv::ChannelView &channel);
 // The pair of rods of a set whose top edge is at base_y.
 void draw_antenna(gfx::DrawList &list, float cx, float base_y, float height, Color color);
 
@@ -71,7 +71,7 @@ float draw_status_chip(ui::Canvas &canvas, const ui::Theme &theme, float x, floa
 
 // One channel of a grid. focus is 0..1.
 void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cell,
-                       const iptv::Channel &channel, float focus);
+                       const iptv::ChannelView &channel, float focus);
 // The shape of a tile that has nothing to show yet.
 void draw_tile_placeholder(ui::Canvas &canvas, const Shared &shared, const Rect &cell);
 

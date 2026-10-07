@@ -35,6 +35,11 @@ void network_shutdown();
 void network_cancel();
 iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacity,
                               std::size_t max_bytes, const iptv::http::RequestControl *control);
+// The same download handed to `sink` piece by piece as it arrives and kept
+// nowhere: how a channel list of any size is read.
+iptv::http::FetchResult fetch_list(const char *url, const iptv::http::ListSink &sink,
+                                   std::size_t max_bytes,
+                                   const iptv::http::RequestControl *control);
 
 // ---- updates ----
 // Once per launch the machine asks homebrew.page whether a newer ProsperoTV is

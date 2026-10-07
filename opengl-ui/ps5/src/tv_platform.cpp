@@ -73,4 +73,11 @@ iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacit
     return iptv::http::GetM3u(url, buffer, capacity, max_bytes, nullptr, control);
 }
 
+iptv::http::FetchResult fetch_list(const char *url, const iptv::http::ListSink &sink,
+                                   std::size_t max_bytes,
+                                   const iptv::http::RequestControl *control)
+{
+    return iptv::http::GetList(url, sink, max_bytes, nullptr, control);
+}
+
 } // namespace ptv::platform

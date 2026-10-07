@@ -323,7 +323,7 @@ http_names = {
     "sceHttpSendRequest": ("tv_http_send", 3),
     "sceHttpGetStatusCode": ("tv_http_status", 3),
     "sceHttpGetAllResponseHeaders": ("tv_http_headers", 2),
-    "sceHttpReadData": ("tv_http_read", 5),
+    "sceHttpReadData": ("tv_http_read", 6),
 }
 http_file = tree / "src/iptv_http.cpp"
 http_text = http_file.read_text(encoding="utf-8")

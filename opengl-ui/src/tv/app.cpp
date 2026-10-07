@@ -304,14 +304,15 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
 
 void App::follow_channel(float dt)
 {
-    const iptv::Channel *channel = browsing() ? browse_.focused() : nullptr;
-    if (channel != nullptr)
+    const std::optional<iptv::ChannelView> channel =
+        browsing() ? browse_.focused() : std::nullopt;
+    if (channel)
     {
         const ArtColors colors = art_colors(channel->id);
         lean_.target(colors.accent);
         lean_dark_.target(colors.top);
     }
-    lean_amount_.target = channel == nullptr ? 0.0f : 0.15f;
+    lean_amount_.target = channel ? 0.15f : 0.0f;
     lean_.update(dt, 3.5f);
     lean_dark_.update(dt, 3.5f);
     lean_amount_.update(dt, 3.5f);
@@ -450,6 +451,9 @@ void App::draw_status(ui::Canvas &canvas) const
     {
     case Level::busy:
         text = model.has_catalog() ? "Updating" : "Downloading";
+        // A large list takes a while: say how far it is, in thousands.
+        if (const unsigned so_far = model.refresh_progress() / 1000u * 1000u; so_far != 0)
+            text += "  " + group_digits(so_far);
         dot = tone::wait;
         break;
     case Level::warning:
@@ -673,7 +677,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     draw(frame);
     const ui::Theme &theme = shared_.theme;
     const ui::Fonts &fonts = shared_.fonts;
-    const iptv::Channel *channel = shared_.model.find(channel_id);
+    const std::optional<iptv::ChannelView> channel = shared_.model.find(channel_id);
     ui::Canvas over{frame.overlay, fonts, glass_texture_, shared_.clock};
     gfx::DrawList &list = frame.overlay;
     const float in = tween::clamp01(t);
@@ -687,7 +691,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     list.rounded_rect({0.0f, 0.0f, kWidth, kHeight}, 0.0f, tone::night.with_alpha(0.64f));
 
     // The channel's picture, lit in its own colour, settling into place.
-    const Color accent = channel != nullptr ? art_colors(channel->id).accent : tone::ember;
+    const Color accent = channel ? art_colors(channel->id).accent : tone::ember;
     const float lift = reduced ? 0.0f : 18.0f * (1.0f - eased);
     const float scale = reduced ? 1.0f : 0.94f + 0.06f * eased;
     const Rect set = tv_body(kTuningArt);
@@ -695,7 +699,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     list.push_transform(scale, kTuningArt.cx(), kTuningArt.cy(), 0.0f, lift);
     list.shadow({set.x, set.y + 28.0f, set.w, set.h}, theme.radius_card, 60.0f,
                 Color::rgb(0x000000, 0.55f));
-    if (channel != nullptr)
+    if (channel)
         draw_channel_art(list, fonts, kTuningArt, theme.radius_card, *channel);
     list.pop_transform();
 
@@ -703,7 +707,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     const float cx = kWidth * 0.5f;
     ui::text(list, fonts.semibold, "TUNING IN", cx, 662.0f + lift * 0.5f, 18.0f, tone::accent,
              gfx::Align::center, 5.0f);
-    if (channel != nullptr)
+    if (channel)
     {
         const std::string name = shown_name(fonts, *channel);
         const ui::FontRef &face = title_face(fonts, name);

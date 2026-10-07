@@ -54,6 +54,7 @@ drives; the scripts are in `ps5/scripts/`.
 ```
 src/tv/               the interface and its logic (namespace ptv), as the console builds it
   model.*             sources, catalog, groups, search, favorites, playback requests: no drawing
+  catalog_index.*     what a list is browsed by, worked out once per catalog on the download thread
   channel_text.*      what a record says: display name, picture size, monogram
   platform.hpp        what the logic asks of the machine (threads, clock, network)
   settings.*          reduce motion, sounds, menu sharpness

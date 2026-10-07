@@ -90,7 +90,8 @@
   category, and advertised quality using the native PS5 keyboard.
 - Keep favorites, recent channels, source selection, and catalog data under
   `/data/prosperotv`; failed refreshes leave the last good database untouched.
-- Load large providers: channel lists up to 64 MiB and 32,768 channels.
+- Load large providers: up to 250,000 channels from one source. The list is
+  read as it downloads, however large its file is.
 - Add a custom HTTP(S) M3U or M3U8 playlist alongside the built-in iptv-org
   source.
 - Add a user-supplied Xtream server, username, and password through masked
@@ -329,8 +330,9 @@ The workflow rejects a mismatched tag. See
   decoder pitch to match visible width (standard 720p/1080p/1440p/2160p widths).
   Unsupported audio may
   continue as silent video when the video path remains valid.
-- A source may hold up to 32,768 channels in an answer of up to 64 MiB; a
-  larger provider loads its first 32,768 channels.
+- A source may hold up to 250,000 channels; a larger one loads its first
+  250,000 and says so. A list of that size takes about 75 MiB of memory and
+  a minute or more to download from a slow provider.
 - Catalog metadata describes a channel but cannot guarantee that its current
   stream is online, correctly labeled, or compatible with the PS5 decoder.
 

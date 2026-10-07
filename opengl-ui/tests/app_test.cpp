@@ -4,6 +4,7 @@
 
 #include "core/save_file.hpp"
 #include "host_platform.hpp"
+#include "large_list.hpp"
 #include "tv/app.hpp"
 #include "tv/draw.hpp"
 
@@ -176,7 +177,8 @@ class AppTest : public ::testing::Test
         app_.reset();
         std::ofstream(playlist_) << text;
         model_->refresh();
-        for (int i = 0; i < 400 && model_->refreshing(); ++i)
+        // A large list takes its time: three minutes at most.
+        for (int i = 0; i < 36000 && model_->refreshing(); ++i)
         {
             model_->poll();
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -371,7 +373,7 @@ TEST_F(AppTest, SquareInTheDrawerResetsAndCircleClosesIt)
 
 TEST_F(AppTest, AChannelThatFailedIsAskedAboutFirst)
 {
-    const std::string id = model_->channel(4).id;
+    const std::string id(model_->channel(4).id);
     app_.reset();
     model_->close();
     ASSERT_TRUE(model_->open());
@@ -606,6 +608,54 @@ TEST_F(AppTest, AListOpenedDeepShowsItsTilesAtOnce)
     make_app();
     EXPECT_EQ(position(), 2990);
     EXPECT_GT(frame_.scene.instances().size() * 10, at_the_top * 6);
+}
+
+// A hundred and twenty thousand channels: the grid still draws one screen of
+// them, the letters and a held trigger cross the whole list, and a frame
+// costs what it costs with sixty.
+TEST_F(AppTest, AListOfMoreThanAHundredThousandChannelsIsOneScreenAtATime)
+{
+    idle(60);
+    const std::size_t with_sixty = frame_.scene.instances().size();
+    constexpr unsigned kChannels = 120000;
+    use_playlist(large_list::playlist(kChannels));
+    ASSERT_EQ(model_->visible_count(), kChannels);
+    idle(60);
+    EXPECT_EQ(position(), 0);
+    EXPECT_LT(frame_.scene.instances().size(), with_sixty * 2);
+
+    // Deep in the list at once.
+    app_.reset();
+    model_->view.focused_channel = model_->channel(model_->visible(100000)).id;
+    make_app();
+    EXPECT_EQ(position(), 100000);
+    EXPECT_LT(frame_.scene.instances().size(), with_sixty * 2);
+
+    // A held R2 turns pages for as long as it is held.
+    hold(Action::jump_next, 180);
+    idle(20);
+    const int after_pages = position();
+    EXPECT_GT(after_pages, 100000);
+
+    // The letters: from the last column onto the rail, then to another letter.
+    for (int i = 0; i < 6 && !app_->on_letters(); ++i)
+        move(Direction::right);
+    ASSERT_TRUE(app_->on_letters());
+    const int letter = model_->letter_at(static_cast<unsigned>(position()));
+    move(Direction::up);
+    idle(30);
+    EXPECT_EQ(model_->letter_at(static_cast<unsigned>(position())), letter - 1);
+    EXPECT_EQ(position(), model_->letter_start(letter - 1));
+    press(Action::back);
+
+    // A search narrows it and the grid follows.
+    model_->set_query("net 077777");
+    idle(30);
+    ASSERT_EQ(model_->visible_count(), 1u);
+    EXPECT_EQ(position(), 0);
+    model_->set_query("");
+    idle(30);
+    EXPECT_EQ(model_->visible_count(), kChannels);
 }
 
 iptv::Channel written(const char *name, const char *id = "")

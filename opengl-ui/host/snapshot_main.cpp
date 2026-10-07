@@ -211,8 +211,8 @@ const Step kWalk[] = {
     change(
         []()
         {
-            const iptv::Channel &channel = g_model->channel(g_model->visible(3));
-            g_model->report_playback_failure(channel.id.c_str(), channel.name.c_str(), -5, 2,
+            const iptv::ChannelView channel = g_model->channel(g_model->visible(3));
+            g_model->report_playback_failure(channel.id.data(), channel.name.data(), -5, 2,
                                              "The stream did not answer.");
         },
         0.9f, "26-channel-failed"),
@@ -376,7 +376,7 @@ int main(int argc, char **argv)
     // The tuning screen a channel opens on: halfway through the hand-over,
     // and as the player shows it with its bar part filled.
     {
-        const std::string id = g_model->channel(g_model->visible(2)).id;
+        const std::string id(g_model->channel(g_model->visible(2)).id);
         app.draw_tuning(frame, id, 0.5f);
         render_drawn("33-tuning-handover");
         app.draw_tuning(frame, id, 1.0f, 0.62f);

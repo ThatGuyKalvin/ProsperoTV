@@ -75,11 +75,12 @@ void SaveXtreamReceipt(const char *stage, iptv::http::Status network,
         std::remove(temporary);
 }
 
-bool ContainsCi(const std::string &text, const char *needle)
+// `text` ends in a NUL, as a std::string's and a catalog's do.
+bool ContainsCi(std::string_view text, const char *needle)
 {
     if (!needle || !*needle)
         return true;
-    for (const char *start = text.c_str(); *start; ++start)
+    for (const char *start = text.data(); *start; ++start)
     {
         const char *left = start;
         const char *right = needle;
@@ -96,7 +97,7 @@ bool ContainsCi(const std::string &text, const char *needle)
     return false;
 }
 
-void FirstValue(const std::string &source, char *output, std::size_t output_bytes)
+void FirstValue(std::string_view source, char *output, std::size_t output_bytes)
 {
     if (!output || !output_bytes)
         return;
@@ -140,7 +141,7 @@ bool ValidCredentialInput(const char *value)
     return true;
 }
 
-bool FieldHasValue(const std::string &field, const char *value)
+bool FieldHasValue(std::string_view field, const char *value)
 {
     if (!value || !*value)
         return true;
@@ -157,18 +158,18 @@ bool FieldHasValue(const std::string &field, const char *value)
         std::size_t trimmed = end;
         while (trimmed > start && std::isspace(static_cast<unsigned char>(field[trimmed - 1])))
             --trimmed;
-        if (EqualsCi(std::string_view(field).substr(start, trimmed - start), value))
+        if (EqualsCi(field.substr(start, trimmed - start), value))
             return true;
         start = end + 1u;
     }
     return false;
 }
 
-void BuildChannelMonogram(const iptv::Channel &channel, char output[3])
+void BuildChannelMonogram(const iptv::ChannelView &channel, char output[3])
 {
-    const std::string &source = !channel.tvg_name.empty() ? channel.tvg_name
-                                : !channel.tvg_id.empty() ? channel.tvg_id
-                                                          : channel.name;
+    const std::string_view source = !channel.tvg_name.empty() ? channel.tvg_name
+                                    : !channel.tvg_id.empty() ? channel.tvg_id
+                                                              : channel.name;
     unsigned count = 0;
     bool word_start = true;
     for (unsigned char value : source)
@@ -204,13 +205,13 @@ void BuildChannelMonogram(const iptv::Channel &channel, char output[3])
     output[count] = '\0';
 }
 
-bool ChannelContainsCi(const iptv::Channel &channel, const char *needle)
+bool ChannelContainsCi(const iptv::ChannelView &channel, const char *needle)
 {
     return ContainsCi(channel.name, needle) || ContainsCi(channel.tvg_name, needle) ||
            ContainsCi(channel.url, needle);
 }
 
-unsigned ChannelQuality(const iptv::Channel &channel)
+unsigned ChannelQuality(const iptv::ChannelView &channel)
 {
     if (ChannelContainsCi(channel, "2160p") || ChannelContainsCi(channel, "3840x2160") ||
         ChannelContainsCi(channel, " 4k") || ChannelContainsCi(channel, "uhd"))
@@ -235,7 +236,8 @@ const char *QualityName(unsigned quality)
     return quality < 5 ? names[quality] : names[0];
 }
 
-void BuildChannelTechnicalMeta(const iptv::Channel &channel, char *output, std::size_t output_bytes)
+void BuildChannelTechnicalMeta(const iptv::ChannelView &channel, char *output,
+                               std::size_t output_bytes)
 {
     const char *codec = "AUTO";
     const char *resolution = "AUTO";
@@ -282,17 +284,17 @@ void BuildChannelTechnicalMeta(const iptv::Channel &channel, char *output, std::
     std::snprintf(output, output_bytes, "%s | %s | FPS %s", codec, resolution, frame_rate);
 }
 
-void BuildChannelContext(const iptv::Channel &channel, char *output, std::size_t output_bytes)
+void BuildChannelContext(const iptv::ChannelView &channel, char *output, std::size_t output_bytes)
 {
-    const char *country = channel.tvg_country.empty() ? "World" : channel.tvg_country.c_str();
+    const char *country = channel.tvg_country.empty() ? "World" : channel.tvg_country.data();
     const char *language =
-        channel.tvg_language.empty() ? "Unknown language" : channel.tvg_language.c_str();
+        channel.tvg_language.empty() ? "Unknown language" : channel.tvg_language.data();
     const char *category =
-        channel.group_title.empty() ? "Uncategorized" : channel.group_title.c_str();
+        channel.group_title.empty() ? "Uncategorized" : channel.group_title.data();
     std::snprintf(output, output_bytes, "%.28s  |  %.40s  |  %.52s", country, language, category);
 }
 
-bool MatchesQuery(const iptv::Channel &channel, const char *query)
+bool MatchesQuery(const iptv::ChannelView &channel, const char *query)
 {
     if (!query || !*query)
         return true;
@@ -300,7 +302,7 @@ bool MatchesQuery(const iptv::Channel &channel, const char *query)
         ContainsCi(channel.tvg_id, query) || ContainsCi(channel.group_title, query) ||
         ContainsCi(channel.tvg_country, query) || ContainsCi(channel.tvg_language, query))
         return true;
-    for (const std::string &group : channel.alternate_group_titles)
+    for (const std::string_view group : channel.alternate_group_titles)
         if (ContainsCi(group, query))
             return true;
     const unsigned quality = ChannelQuality(channel);
@@ -310,7 +312,8 @@ bool MatchesQuery(const iptv::Channel &channel, const char *query)
            (quality == 4 && ContainsCi("4K UHD 2160P", query));
 }
 
-bool MatchesGroup(const iptv::Channel &channel, unsigned group, const iptv::UserState &user_state)
+bool MatchesGroup(const iptv::ChannelView &channel, unsigned group,
+                  const iptv::UserState &user_state)
 {
     if (group == 0)
         return true;
@@ -321,13 +324,13 @@ bool MatchesGroup(const iptv::Channel &channel, unsigned group, const iptv::User
     const char *term = group == 3 ? "news" : group == 4 ? "sport" : "kid";
     if (ContainsCi(channel.group_title, term))
         return true;
-    for (const std::string &alternate : channel.alternate_group_titles)
+    for (const std::string_view alternate : channel.alternate_group_titles)
         if (ContainsCi(alternate, term))
             return true;
     return false;
 }
 
-bool MatchesFilters(const iptv::Channel &channel, const char *country, const char *category,
+bool MatchesFilters(const iptv::ChannelView &channel, const char *country, const char *category,
                     const char *language, unsigned quality)
 {
     if (country && *country && !FieldHasValue(channel.tvg_country, country))
@@ -337,7 +340,7 @@ bool MatchesFilters(const iptv::Channel &channel, const char *country, const cha
     if (category && *category)
     {
         bool found = FieldHasValue(channel.group_title, category);
-        for (const std::string &alternate : channel.alternate_group_titles)
+        for (const std::string_view alternate : channel.alternate_group_titles)
             found = found || FieldHasValue(alternate, category);
         if (!found)
             return false;
@@ -502,7 +505,7 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
         iptv::LoadCatalog(active_cache_path, &catalog_, {}, &cache_report);
     (void)iptv::LoadUserState(&user_state_);
     catalog_loaded_ = cache_status == iptv::StoreStatus::ok &&
-                      catalog_.source_id == active_source_id && !catalog_.channels.empty();
+                      catalog_.source_id == active_source_id && !catalog_.empty();
     if (!catalog_loaded_)
         catalog_ = {};
     else
@@ -620,7 +623,7 @@ void IptvApp::ReportPlaybackFailure(const char *channel_id, const char *channel_
                  channel_id ? channel_id : "", result, attempts,
                  detail && *detail ? detail : "unspecified");
     playback_retry_channel_id_ = channel_id ? channel_id : "";
-    error_retries_playback_ = FindChannelById(playback_retry_channel_id_) != nullptr;
+    error_retries_playback_ = FindChannelById(playback_retry_channel_id_) != iptv::Catalog::npos;
     SetStatusState("Playback failed", false, true);
     ShowCatalogError(true, "Channel playback failed", message);
     SetText(document_, "error-action-label",
@@ -673,9 +676,9 @@ void IptvApp::SetScreen(Screen screen, bool reset_focus)
         switch (screen_)
         {
         case Screen::LiveTv:
-            focus_target_ = catalog_.channels.empty() ? FocusTarget::Error
-                            : filtered_count_         ? FocusTarget::Channel
-                                                      : FocusTarget::Group;
+            focus_target_ = catalog_.empty()  ? FocusTarget::Error
+                            : filtered_count_ ? FocusTarget::Channel
+                                              : FocusTarget::Group;
             break;
         case Screen::Favorites:
             focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Play;
@@ -815,10 +818,10 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             unsigned channel_index = selected_slot_;
             if (focus_target_ == FocusTarget::Channel && focus_slot_ < available)
                 channel_index = CatalogIndexAt(page_offset_ + focus_slot_);
-            if (available && channel_index < catalog_.channels.size())
+            if (available && channel_index < catalog_.size())
             {
                 selected_slot_ = channel_index;
-                const iptv::Channel &channel = catalog_.channels[channel_index];
+                const iptv::ChannelView &channel = catalog_[channel_index];
                 const std::vector<std::string> previous = user_state_.favorite_ids;
                 const bool favorite = iptv::ToggleFavorite(&user_state_, channel.id);
                 if (iptv::SaveUserState(user_state_) != iptv::UserStateStatus::ok)
@@ -838,7 +841,7 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                                    false, false);
                     SetText(document_, "preview-status-title",
                             favorite ? "Favorite saved" : "Favorite removed");
-                    SetText(document_, "preview-status-message", channel.name);
+                    SetText(document_, "preview-status-message", channel.name.data());
                 }
             }
         }
@@ -848,11 +851,11 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             {
                 if (error_retries_playback_)
                 {
-                    const iptv::Channel *channel = FindChannelById(playback_retry_channel_id_);
-                    if (channel)
+                    const std::size_t channel = FindChannelById(playback_retry_channel_id_);
+                    if (channel != iptv::Catalog::npos)
                     {
                         DismissPlaybackError();
-                        QueuePlay(*channel);
+                        QueuePlay(catalog_[channel]);
                     }
                 }
                 else
@@ -874,13 +877,12 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             {
                 selected_slot_ = CatalogIndexAt(page_offset_ + focus_slot_);
                 RefreshCatalogUi();
-                const iptv::Channel &channel = catalog_.channels[selected_slot_];
+                const iptv::ChannelView &channel = catalog_[selected_slot_];
                 QueuePlay(channel);
             }
-            else if (focus_target_ == FocusTarget::Play &&
-                     selected_slot_ < catalog_.channels.size())
+            else if (focus_target_ == FocusTarget::Play && selected_slot_ < catalog_.size())
             {
-                const iptv::Channel &channel = catalog_.channels[selected_slot_];
+                const iptv::ChannelView &channel = catalog_[selected_slot_];
                 QueuePlay(channel);
             }
         }
@@ -1216,11 +1218,11 @@ void IptvApp::LoadActiveSourceCache()
     const std::uint64_t source_id = custom   ? iptv::CustomSourceId(custom_source_url_)
                                     : xtream ? iptv::XtreamSourceId(xtream_credentials_)
                                              : kCatalogSourceId;
-    iptv::CatalogState cached;
+    iptv::Catalog cached;
     const iptv::StoreStatus status = iptv::LoadCatalog(path, &cached);
-    catalog_loaded_ = status == iptv::StoreStatus::ok && cached.source_id == source_id &&
-                      !cached.channels.empty();
-    catalog_ = catalog_loaded_ ? std::move(cached) : iptv::CatalogState{};
+    catalog_loaded_ =
+        status == iptv::StoreStatus::ok && cached.source_id == source_id && !cached.empty();
+    catalog_ = catalog_loaded_ ? std::move(cached) : iptv::Catalog{};
     if (catalog_loaded_)
         (void)iptv::LoadPlaybackResults(iptv::kDefaultPlaybackHistoryPath, source_id, &catalog_);
     source_health_[static_cast<unsigned>(active_source_)] = catalog_loaded_ ? SourceHealth::Cached
@@ -1552,8 +1554,7 @@ void *IptvApp::RefreshThreadEntry(void *argument)
             app};
         if (app->refresh_source_ == SourceSelection::Xtream)
         {
-            iptv::http::ListBuffer response =
-                iptv::http::AllocateListBuffer(iptv::kMaxXtreamResponseBytes);
+            iptv::http::ListBuffer response = iptv::http::AllocateListBuffer();
             std::string endpoint;
             std::vector<iptv::XtreamCategory> categories;
             iptv::XtreamAuth auth;
@@ -1616,7 +1617,7 @@ void *IptvApp::RefreshThreadEntry(void *argument)
                                                                &app->pending_report_);
             }
         }
-        if (!app->pending_catalog_.channels.empty() &&
+        if (!app->pending_catalog_.empty() &&
             !app->shutdown_requested_.load(std::memory_order_acquire))
             app->pending_cache_saved_ =
                 iptv::SaveCatalog(app->refresh_cache_path_, app->pending_catalog_) ==
@@ -1641,12 +1642,11 @@ void IptvApp::ConsumeRefresh()
     const bool xtream = refresh_source_ == SourceSelection::Xtream;
     if (xtream)
         SaveXtreamReceipt(pending_xtream_stage_.c_str(), pending_network_status_, pending_fetch_,
-                          pending_xtream_status_, pending_report_,
-                          pending_catalog_.channels.size());
+                          pending_xtream_status_, pending_report_, pending_catalog_.size());
     const bool success = pending_network_status_ == iptv::http::Status::ok &&
                          pending_fetch_.status == iptv::http::Status::ok &&
                          (!xtream || pending_xtream_status_ == iptv::XtreamStatus::ok) &&
-                         !pending_catalog_.channels.empty();
+                         !pending_catalog_.empty();
     const bool custom = refresh_source_ == SourceSelection::Custom;
     const unsigned source_index = static_cast<unsigned>(refresh_source_);
     if (success)
@@ -1657,7 +1657,8 @@ void IptvApp::ConsumeRefresh()
                                         &catalog_);
         RebuildFacets();
         RebuildFilteredChannels();
-        if (error_retries_playback_ && !FindChannelById(playback_retry_channel_id_))
+        if (error_retries_playback_ &&
+            FindChannelById(playback_retry_channel_id_) == iptv::Catalog::npos)
         {
             DismissPlaybackError();
             focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
@@ -1679,11 +1680,10 @@ void IptvApp::ConsumeRefresh()
                          : (pending_cache_saved_ ? "Public catalog ready"
                                                  : "Public catalog loaded in memory"));
         char detail[160];
-        std::snprintf(detail, sizeof(detail), "%u channels accepted; %u records skipped.%s",
-                      static_cast<unsigned>(catalog_.channels.size()),
-                      static_cast<unsigned>(pending_report_.skipped),
-                      pending_cache_saved_ ? ""
-                                           : " Cache write failed; this catalog lasts until exit.");
+        std::snprintf(
+            detail, sizeof(detail), "%u channels accepted; %u records skipped.%s",
+            static_cast<unsigned>(catalog_.size()), static_cast<unsigned>(pending_report_.skipped),
+            pending_cache_saved_ ? "" : " Cache write failed; this catalog lasts until exit.");
         SetText(document_, "source-status-detail", detail);
         if (!error_retries_playback_)
         {
@@ -1707,21 +1707,19 @@ void IptvApp::ConsumeRefresh()
         {
             std::snprintf(detail, sizeof(detail), "%s. Showing %u cached channels.",
                           FetchStatusName(pending_network_status_),
-                          static_cast<unsigned>(catalog_.channels.size()));
+                          static_cast<unsigned>(catalog_.size()));
         }
         else if (xtream && pending_xtream_status_ != iptv::XtreamStatus::ok)
         {
             std::snprintf(detail, sizeof(detail), "%s%s%.96s. Showing %u cached channels.",
                           iptv::XtreamStatusDescription(pending_xtream_status_),
                           pending_xtream_message_.empty() ? "" : ": ",
-                          pending_xtream_message_.c_str(),
-                          static_cast<unsigned>(catalog_.channels.size()));
+                          pending_xtream_message_.c_str(), static_cast<unsigned>(catalog_.size()));
         }
         else if (pending_fetch_.status == iptv::http::Status::http_status_error)
         {
             std::snprintf(detail, sizeof(detail), "HTTP returned %d. Showing %u cached channels.",
-                          pending_fetch_.http_status,
-                          static_cast<unsigned>(catalog_.channels.size()));
+                          pending_fetch_.http_status, static_cast<unsigned>(catalog_.size()));
         }
         else if (pending_fetch_.status == iptv::http::Status::ok)
         {
@@ -1729,13 +1727,13 @@ void IptvApp::ConsumeRefresh()
                           "Playlist contained no playable channels; %u records skipped. Showing %u "
                           "cached channels.",
                           static_cast<unsigned>(pending_report_.skipped),
-                          static_cast<unsigned>(catalog_.channels.size()));
+                          static_cast<unsigned>(catalog_.size()));
         }
         else
         {
             std::snprintf(detail, sizeof(detail), "%s (native %d). Showing %u cached channels.",
                           FetchStatusName(pending_fetch_.status), pending_fetch_.native_error,
-                          static_cast<unsigned>(catalog_.channels.size()));
+                          static_cast<unsigned>(catalog_.size()));
         }
         RefreshCatalogUi();
         source_health_[source_index] = SourceHealth::Stale;
@@ -1804,7 +1802,7 @@ void IptvApp::RebuildFacets()
     std::vector<Entry> countries;
     std::vector<Entry> categories;
     std::vector<Entry> languages;
-    auto add = [](std::vector<Entry> *entries, const std::string &field)
+    auto add = [](std::vector<Entry> *entries, std::string_view field)
     {
         char value[48];
         FirstValue(field, value, sizeof(value));
@@ -1818,12 +1816,12 @@ void IptvApp::RebuildFacets()
             }
         entries->emplace_back(value, 1u);
     };
-    for (const iptv::Channel &channel : catalog_.channels)
+    for (const iptv::ChannelView &channel : catalog_)
     {
         add(&countries, channel.tvg_country);
         add(&categories, channel.group_title);
         add(&languages, channel.tvg_language);
-        for (const std::string &category : channel.alternate_group_titles)
+        for (const std::string_view category : channel.alternate_group_titles)
             add(&categories, category);
     }
     auto store = [](std::vector<Entry> *entries, auto *facets, unsigned *count)
@@ -1866,13 +1864,14 @@ void IptvApp::RebuildFacets()
 void IptvApp::RebuildFilteredChannels()
 {
     filtered_count_ = 0;
-    const unsigned count = static_cast<unsigned>(catalog_.channels.size());
-    for (unsigned index = 0; index < count && filtered_count_ < filtered_indices_.size(); ++index)
+    const unsigned count = static_cast<unsigned>(catalog_.size());
+    filtered_indices_.resize(count);
+    for (unsigned index = 0; index < count; ++index)
     {
-        if (MatchesGroup(catalog_.channels[index], selected_group_, user_state_) &&
-            MatchesFilters(catalog_.channels[index], filter_country_, filter_category_,
-                           filter_language_, filter_quality_) &&
-            MatchesQuery(catalog_.channels[index], search_query_))
+        if (MatchesGroup(catalog_[index], selected_group_, user_state_) &&
+            MatchesFilters(catalog_[index], filter_country_, filter_category_, filter_language_,
+                           filter_quality_) &&
+            MatchesQuery(catalog_[index], search_query_))
             filtered_indices_[filtered_count_++] = index;
     }
     RefreshGroupUi();
@@ -1900,24 +1899,21 @@ void IptvApp::RebuildFilteredChannels()
         selected_slot_ = filtered_indices_[page_offset_];
 }
 
-const iptv::Channel *IptvApp::FindChannelById(const std::string &channel_id) const
+std::size_t IptvApp::FindChannelById(const std::string &channel_id) const
 {
-    for (const iptv::Channel &channel : catalog_.channels)
-        if (channel.id == channel_id)
-            return &channel;
-    return nullptr;
+    return catalog_.Find(channel_id);
 }
 
-void IptvApp::QueuePlay(const iptv::Channel &channel)
+void IptvApp::QueuePlay(const iptv::ChannelView &channel)
 {
     play_request_.channel_id = channel.id;
     play_request_.channel_name = channel.name;
     play_request_.urls.clear();
     if (!channel.url.empty())
-        play_request_.urls.push_back(channel.url);
-    for (const std::string &alternate : channel.alternate_urls)
+        play_request_.urls.emplace_back(channel.url);
+    for (const std::string_view alternate : channel.alternate_urls)
         if (!alternate.empty())
-            play_request_.urls.push_back(alternate);
+            play_request_.urls.emplace_back(alternate);
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
     play_request_.source_id = channel.source_id;
@@ -1934,7 +1930,7 @@ void IptvApp::QueuePlay(const iptv::Channel &channel)
 void IptvApp::RefreshGroupUi()
 {
     unsigned counts[GroupCount] = {};
-    for (const iptv::Channel &channel : catalog_.channels)
+    for (const iptv::ChannelView &channel : catalog_)
     {
         ++counts[0];
         for (unsigned group = 1; group < GroupCount; ++group)
@@ -1960,7 +1956,7 @@ void IptvApp::ApplySearch(const char *query)
     RebuildFilteredChannels();
     if (screen_ != Screen::Sources)
     {
-        focus_target_ = catalog_.channels.empty()      ? FocusTarget::Error
+        focus_target_ = catalog_.empty()               ? FocusTarget::Error
                         : filtered_count_              ? FocusTarget::Channel
                         : screen_ == Screen::Favorites ? FocusTarget::Play
                                                        : FocusTarget::Group;
@@ -2086,7 +2082,7 @@ void IptvApp::RefreshSearchUi()
 unsigned IptvApp::CatalogIndexAt(unsigned filtered_index) const
 {
     return filtered_index < filtered_count_ ? filtered_indices_[filtered_index]
-                                            : static_cast<unsigned>(catalog_.channels.size());
+                                            : static_cast<unsigned>(catalog_.size());
 }
 
 void IptvApp::SearchResult(const char *text, void *user_data)
@@ -2127,7 +2123,7 @@ void IptvApp::XtreamPasswordResult(const char *text, void *user_data)
 void IptvApp::RefreshCatalogUi()
 {
     char text[160];
-    const unsigned channel_count = static_cast<unsigned>(catalog_.channels.size());
+    const unsigned channel_count = static_cast<unsigned>(catalog_.size());
     const unsigned page_count =
         filtered_count_ ? (filtered_count_ + kChannelCardCount - 1u) / kChannelCardCount : 0;
     const unsigned page = filtered_count_ ? page_offset_ / kChannelCardCount + 1u : 0;
@@ -2175,7 +2171,7 @@ void IptvApp::RefreshCatalogUi()
         if (!visible)
             continue;
 
-        const iptv::Channel &channel = catalog_.channels[channel_index];
+        const iptv::ChannelView &channel = catalog_[channel_index];
         const bool favorite = iptv::IsFavorite(user_state_, channel.id);
         const bool recent = iptv::IsRecentChannel(user_state_, channel.id);
         SetClass(document_, id, "is-favorite", favorite);
@@ -2194,7 +2190,7 @@ void IptvApp::RefreshCatalogUi()
         std::snprintf(text, sizeof(text), "%u", channel_index + 1u);
         SetText(document_, id, text);
         std::snprintf(id, sizeof(id), "channel-name-%u", index);
-        SetText(document_, id, channel.name.empty() ? "Unnamed channel" : channel.name);
+        SetText(document_, id, channel.name.empty() ? "Unnamed channel" : channel.name.data());
         std::snprintf(id, sizeof(id), "channel-meta-%u", index);
         char context[160];
         BuildChannelContext(channel, context, sizeof(context));
@@ -2223,7 +2219,7 @@ void IptvApp::RefreshCatalogUi()
     }
     else
     {
-        const iptv::Channel &channel = catalog_.channels[selected_slot_];
+        const iptv::ChannelView &channel = catalog_[selected_slot_];
         SetClass(document_, "selected-channel-favorite", "active",
                  iptv::IsFavorite(user_state_, channel.id));
         SetClass(document_, "selected-channel-recent", "active",
@@ -2233,7 +2229,7 @@ void IptvApp::RefreshCatalogUi()
         std::snprintf(number, sizeof(number), "%02u", selected_slot_ + 1u);
         SetText(document_, "selected-channel-number", number);
         SetText(document_, "selected-channel-name",
-                channel.name.empty() ? "Unnamed channel" : channel.name);
+                channel.name.empty() ? "Unnamed channel" : channel.name.data());
         char context[160];
         BuildChannelContext(channel, context, sizeof(context));
         SetText(document_, "selected-channel-meta", context);

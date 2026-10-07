@@ -13,12 +13,14 @@
 #include "iptv_source_state.h"
 #include "iptv_user_state.h"
 #include "iptv_xtream.h"
+#include "tv/catalog_index.hpp"
 #include "tv/channel_text.hpp"
 
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -70,12 +72,6 @@ enum class SourceHealth : std::uint8_t
     error,      // nothing to show
 };
 
-struct Facet
-{
-    std::string value;
-    unsigned count = 0;
-};
-
 // Something that happened and is worth a line on screen once.
 struct Notice
 {
@@ -108,7 +104,7 @@ struct ViewState
 class Model
 {
   public:
-    static constexpr unsigned kFacetMax = 24;
+    static constexpr unsigned kFacetMax = CatalogIndex::kFacetMax;
     static constexpr unsigned kSourceCount = 3;
 
     // data_dir is where the app keeps its files: the title's own storage or
@@ -136,11 +132,13 @@ class Model
     }
     unsigned channel_count() const
     {
-        return static_cast<unsigned>(catalog_.channels.size());
+        return static_cast<unsigned>(catalog_.size());
     }
-    const iptv::Channel &channel(unsigned index) const
+    // A channel as the catalog holds it: read it and let it go (the texts are
+    // the catalog's own, and a download replaces the catalog).
+    iptv::ChannelView channel(unsigned index) const
     {
-        return catalog_.channels[index];
+        return catalog_[index];
     }
     // The channels the group, the search and the filters leave, in the order
     // of the alphabet (see sort_key).
@@ -155,7 +153,7 @@ class Model
     }
     // Where a channel is in that list, or -1.
     int position_of(std::string_view channel_id) const;
-    const iptv::Channel *find(std::string_view channel_id) const;
+    std::optional<iptv::ChannelView> find(std::string_view channel_id) const;
     // The letter (0 for '#', 1 to 26) the channel at a position is filed under.
     int letter_at(unsigned position) const;
     // The position of the first channel of that list under a letter, or -1.
@@ -169,19 +167,19 @@ class Model
     // alphabet, from 1: the number it is known by whatever narrows the list.
     unsigned number_of(unsigned catalog_index) const
     {
-        return catalog_index < ranks_.size() ? ranks_[catalog_index] + 1u : 0u;
+        return catalog_index < index_.ranks.size() ? index_.ranks[catalog_index] + 1u : 0u;
     }
-    // Changes whenever the visible list may have changed.
     // The scripts the list's names and groups are written in beyond the
     // European ones: the faces for them are large, and loaded only when asked for.
     bool uses_east_asian() const
     {
-        return uses_east_asian_;
+        return index_.east_asian;
     }
     bool uses_korean() const
     {
-        return uses_korean_;
+        return index_.korean;
     }
+    // Changes whenever the visible list may have changed.
     unsigned revision() const
     {
         return revision_;
@@ -207,15 +205,15 @@ class Model
     void set_query(std::string_view query);
     std::span<const Facet> countries() const
     {
-        return {countries_.data(), country_count_};
+        return {index_.countries.data(), index_.country_count};
     }
     std::span<const Facet> categories() const
     {
-        return {categories_.data(), category_count_};
+        return {index_.categories.data(), index_.category_count};
     }
     std::span<const Facet> languages() const
     {
-        return {languages_.data(), language_count_};
+        return {index_.languages.data(), index_.language_count};
     }
     const std::string &country() const
     {
@@ -244,8 +242,8 @@ class Model
     bool ask_query();
 
     // ---- one channel ----
-    bool is_favorite(const iptv::Channel &channel) const;
-    bool is_recent(const iptv::Channel &channel) const;
+    bool is_favorite(const iptv::ChannelView &channel) const;
+    bool is_recent(const iptv::ChannelView &channel) const;
     enum class Starred : std::uint8_t
     {
         added,
@@ -292,6 +290,11 @@ class Model
     bool refreshing() const
     {
         return refresh_thread_ != nullptr;
+    }
+    // How many channels the download in progress has read so far.
+    unsigned refresh_progress() const
+    {
+        return refresh_count_.load(std::memory_order_relaxed);
     }
     bool keyboard_ready() const
     {
@@ -356,12 +359,9 @@ class Model
     std::string cache_path(iptv::SourceKind source) const;
     std::uint64_t source_id(iptv::SourceKind source) const;
     void load_cache();
-    void index_names();
-    void note_scripts();
-    bool uses_east_asian_ = false;
-    bool uses_korean_ = false;
+    void adopt_catalog();
+    void mark_lists();
     void recount_groups();
-    void rebuild_facets();
     void rebuild_visible();
     void set_status(std::string label, Level level);
     void set_source_text(std::string title, std::string detail);
@@ -390,15 +390,14 @@ class Model
     bool keyboard_ready_ = false;
 
     // ---- catalog and lists ----
-    iptv::CatalogState catalog_;
+    iptv::Catalog catalog_;
+    CatalogIndex index_; // of catalog_
     bool catalog_loaded_ = false;
     std::uint64_t saved_unix_ = 0;
     iptv::UserState user_;
-    std::array<unsigned, iptv::kDefaultMaxChannels> visible_{};
+    std::vector<std::uint8_t> marks_; // by catalog index: a favorite, a recent channel
+    std::vector<std::uint32_t> visible_;
     unsigned visible_count_ = 0;
-    std::vector<unsigned> order_;        // catalog indices in the order of the alphabet
-    std::vector<std::uint8_t> letters_;  // by catalog index
-    std::vector<unsigned> ranks_;        // by catalog index: where it is in order_
     std::array<int, kLetterCount> letter_starts_{};
     unsigned revision_ = 0;
     Group group_ = Group::all;
@@ -410,12 +409,6 @@ class Model
     std::string category_;
     std::string language_;
     unsigned quality_ = kQualityAny;
-    std::array<Facet, kFacetMax> countries_;
-    std::array<Facet, kFacetMax> categories_;
-    std::array<Facet, kFacetMax> languages_;
-    unsigned country_count_ = 0;
-    unsigned category_count_ = 0;
-    unsigned language_count_ = 0;
 
     // ---- sources ----
     iptv::SourceKind active_source_ = iptv::SourceKind::BuiltIn;
@@ -431,6 +424,7 @@ class Model
     bool refresh_queued_ = false;
     std::atomic<bool> refresh_done_{false};
     std::atomic<bool> stop_requested_{false};
+    std::atomic<unsigned> refresh_count_{0};
     iptv::SourceKind refresh_source_ = iptv::SourceKind::BuiltIn;
     std::string refresh_url_;
     std::string refresh_cache_path_;
@@ -439,7 +433,8 @@ class Model
     iptv::http::Status pending_network_ = iptv::http::Status::not_initialized;
     iptv::http::FetchResult pending_fetch_{};
     iptv::ParseReport pending_report_{};
-    iptv::CatalogState pending_catalog_{};
+    iptv::Catalog pending_catalog_{};
+    CatalogIndex pending_index_; // of pending_catalog_
     iptv::XtreamStatus pending_account_ = iptv::XtreamStatus::ok;
     std::string pending_account_stage_;
     std::string pending_account_message_;
