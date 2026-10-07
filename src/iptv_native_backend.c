@@ -198,6 +198,11 @@ static const native_video_mode_t video_modes[] = {
     {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1920, 1088},
     {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 150, 2560, 1440},
     {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 153, 3840, 2176},
+    /* Broadcast 4K (Chinese satellite channels: Main10, 50 frames a second)
+     * is often signalled as level 6 or above though the picture is within
+     * what 5.1 allows. initialize_video() asks the decoder for this level and
+     * falls back to 5.1 when it refuses the number. */
+    {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 186, 3840, 2176},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
      IPTV_NATIVE_VP9_PROFILE_0, 41, 1920, 1080},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
@@ -1158,6 +1163,16 @@ static int32_t initialize_video(backend_state_t *state)
 
     state->decoder_memory.size = sizeof(state->decoder_memory);
     result = sceVideodec2QueryDecoderMemoryInfo(&decoder_config, &state->decoder_memory);
+    if (result != 0 && state->config.codec == IPTV_NATIVE_CODEC_HEVC &&
+        decoder_config.max_level > 153)
+    {
+        /* The decoder does not take a level above 5.1 as its limit: open it
+         * at 5.1 and let it judge the pictures themselves. */
+        decoder_config.max_level = 153;
+        memset(&state->decoder_memory, 0, sizeof(state->decoder_memory));
+        state->decoder_memory.size = sizeof(state->decoder_memory);
+        result = sceVideodec2QueryDecoderMemoryInfo(&decoder_config, &state->decoder_memory);
+    }
     if (result != 0)
         return result;
 
