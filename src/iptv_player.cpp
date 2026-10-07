@@ -402,6 +402,19 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
                  "curl_probe_stage=%d\ncurl_probe_errno=%d\ncurl_probe_dns_thread_failed=%d\n",
                  gDirectDiagnostics.curl_probe_stage, gDirectDiagnostics.curl_probe_errno,
                  gDirectDiagnostics.curl_probe_dns_thread_failed);
+    // How whole the transport stream arrived: a gap in a packet counter means
+    // packets were lost on the way (a relay or a network that cannot keep up).
+    std::fprintf(file,
+                 "transport_packets=%llu\ntransport_continuity_errors=%llu\n"
+                 "transport_dropped_payloads=%llu\ntransport_discontinuities=%llu\n"
+                 "transport_duplicate_packets=%llu\nvideo_bytes=%llu\naudio_bytes=%llu\n",
+                 static_cast<unsigned long long>(stream.packets),
+                 static_cast<unsigned long long>(stream.continuity_errors),
+                 static_cast<unsigned long long>(stream.dropped_payloads),
+                 static_cast<unsigned long long>(stream.discontinuities),
+                 static_cast<unsigned long long>(stream.duplicate_packets),
+                 static_cast<unsigned long long>(stream.video_bytes),
+                 static_cast<unsigned long long>(stream.audio_bytes));
     const int write_result = std::ferror(file) ? -1 : std::fflush(file);
     const int close_result = std::fclose(file);
     if (write_result != 0 || close_result != 0)
