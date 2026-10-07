@@ -1379,7 +1379,11 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         reject_flags |= 1u << 1;
     if (require_accepted && !frame->accepted)
         reject_flags |= 1u << 2;
-    if (output->picture_count != 1)
+    /* An interlaced H.264 picture (broadcast 1080i) comes out as its two
+     * fields woven into one frame of the full height: picture_count is 2 and
+     * the buffer is laid out like a progressive frame's. */
+    if (output->picture_count != 1 &&
+        !(state->config.codec == IPTV_NATIVE_CODEC_H264 && output->picture_count == 2))
         reject_flags |= 1u << 3;
     if (output->codec != state->mode->decoder_codec)
         reject_flags |= 1u << 4;
