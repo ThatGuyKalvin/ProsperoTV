@@ -43,6 +43,31 @@ increase a coverage percentage. Test observable contracts and regressions.
 
 ## Host integration tests
 
+`tests/test_remote.py` compiles the production HTTP server with a small host
+input consumer. It checks explicit pairing, expiry, saved browser credentials,
+restart/revocation, volume bounds and save failures, all button mappings, Unicode search,
+empty and oversized queries, invalid UTF-8, fragmented requests, and concurrent
+slow clients. Run it alone with
+`python3 -m unittest discover -s tests -p test_remote.py -v`.
+For hardware acceptance, open Settings → Pair a phone on the TV, scan the QR,
+pair using its code, verify each direction/OK/Back against visible TV changes,
+search using the browser keyboard, clear the query, and stop playback with Back.
+Confirm reconnection after an app restart and rejection after forgetting phones.
+Adjust volume in both UIs, verify they agree, and listen for mute and restored
+audio during playback. The host audio regression also checks both native channel
+gains, clamping and unchanged-volume suppression with a mocked AudioOut call.
+Capture both the phone page and corresponding TV states.
+Run `opengl-ui/tools/run-tests.sh` as well: it drives the released interface
+with phone input and checks search, keyboard cancellation, filters, and tabs.
+Build the released interface with `opengl-ui/ps5/assemble.sh`, then run `make`
+in the assembled tree. The repository root builds the legacy interface.
+When Remote Play is unavailable, `make IPTV_REMOTE_CAPTURE=1` in the assembled
+tree enables an opt-in screenshot hook. Creating
+`/download0/remote-capture.request` captures the next frame to
+`/download0/remote-capture.bmp` and removes the request (checked twice a second).
+For a build with filesystem access, these two files are in its config directory.
+Retrieve only completed captures. Normal builds omit this hook entirely.
+
 `tests/test_tools.py` invokes complete repository scripts with temporary input
 and controlled environment variables. Use this level for metadata updates,
 build orchestration, package validation, and deployment resolution. Network
@@ -72,6 +97,14 @@ For a hardware milestone:
 Follow [Deployment](DEPLOYMENT.md) and the separate
 [PS5 Homebrew Development Protocol](https://github.com/blackbearreloaded/ps5-homebrew-dev-protocol)
 for console coordination, evidence collection, and milestone policy.
+
+2026-10-07 | FW 12.70 / ShadowMount | 770fbb3 / 01.000.020 | PPSA88022: phone navigation, search, keyboard dismissal and playback Back passed; clean exit | evidence: results/phone-remote/
+
+2026-10-07 | FW 12.70 / ShadowMount | 6e32fbf | 8888 unavailable; fallback 58145: user confirmed arrows, search, Clear, playback OK/Back; clean exit | evidence: results/phone-remote/port8888-*
+
+2026-10-07 | FW 12.70 / ShadowMount | fb56c0a | phone icon and playback Favorite add/remove/persistence passed; clean exit | evidence: results/phone-remote/favorite-*
+
+2026-10-07 | FW12.70 | 77f7237 | pass: QR, remembered/new pairing auto-close, volume sync, user-confirmed mute/audio; clean exit | results/phone-remote/autoclose-*
 
 ## Adding tests
 

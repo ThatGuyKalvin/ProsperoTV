@@ -5,7 +5,9 @@
 #include "tv/app.hpp"
 
 #include "tv/draw.hpp"
+#include "iptv_ime.h"
 #include "ui/components/overlay.hpp"
+#include "qrcodegen.h"
 
 #include <algorithm>
 #include <cmath>
@@ -41,6 +43,10 @@ enum FormRow : int
     kRowResolution,
     kRowChannels,
     kRowUpdate,
+    kRowVolume,
+    kRowPair,
+    kRowForgetPhones,
+    kRowPhones,
 };
 
 ui::StatusKind toast_kind(Level level)
@@ -125,10 +131,15 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_toggle(kRowMotion, "Reduce motion", settings.reduced_motion).description =
         "Screens fade instead of sliding, and the sky stands still.";
     form_.add_toggle(kRowSounds, "Interface sounds", settings.sounds);
+    form_.add_slider(kRowVolume, "Volume", settings.volume, 0, 100, 5).unit = "%";
     form_
         .add_choice(kRowResolution, "Menu sharpness", {"Best for this TV", "1080p"},
                     settings.resolution)
         .description = "Takes effect the next time the menu opens. Video keeps its own size.";
+    form_.add_header("Phone remote");
+    form_.add_action(kRowPair, "Pair a phone").chevron = true;
+    form_.add_value(kRowPhones, "Remembered phones", "0");
+    form_.add_action(kRowForgetPhones, "Forget paired phones");
     form_.add_header("Channel list");
     form_.add_value(kRowChannels, "Channels", "");
     form_.add_action(kRowUpdate, "Download it again now");
@@ -148,6 +159,88 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
 bool App::take_settings_changed()
 {
     return std::exchange(settings_changed_, false);
+}
+
+void App::set_volume(int volume)
+{
+    shared_.settings.volume = std::clamp(volume, 0, 100);
+    form_.set_slider(kRowVolume, static_cast<float>(shared_.settings.volume));
+}
+
+void App::remote_notice(const char *message)
+{
+    shared_.toasts.push(ui::StatusKind::info, message);
+}
+
+void App::phone_connected()
+{
+    if (std::exchange(pairing_open_, false))
+        remote_notice("Phone connected");
+}
+
+void App::set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones)
+{
+    if (pair_url_ != url)
+    {
+        pair_url_ = std::move(url);
+        pair_qr_.clear();
+        pair_qr_size_ = 0;
+        uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(5)];
+        uint8_t temporary[sizeof(qr)];
+        if (!pair_url_.empty() && qrcodegen_encodeText(pair_url_.c_str(), temporary, qr,
+                qrcodegen_Ecc_MEDIUM, 1, 5, qrcodegen_Mask_AUTO, true))
+        {
+            pair_qr_size_ = qrcodegen_getSize(qr);
+            for (int y = 0; y < pair_qr_size_; ++y)
+                for (int x = 0; x < pair_qr_size_; ++x)
+                    pair_qr_.push_back(qrcodegen_getModule(qr, x, y));
+        }
+    }
+    pair_code_ = std::move(code);
+    pair_seconds_ = seconds;
+    form_.set_value_text(kRowPhones, std::to_string(phones));
+    form_.set_disabled(kRowForgetPhones, phones == 0);
+}
+
+void App::draw_pairing(ui::Canvas &canvas) const
+{
+    auto &list = canvas.list;
+    const auto &fonts = canvas.fonts;
+    const auto &theme = shared_.theme;
+    list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.88f));
+    draw_glass(canvas, theme, {300, 170, 1320, 730}, 28);
+    ui::text(list, fonts.display, "Pair a phone", 380, 255, 54, theme.text);
+    ui::text(list, fonts.regular, "Use the same Wi-Fi as your PS5.", 380, 305, 26, theme.text_muted);
+    if (pair_qr_size_ > 0)
+    {
+        const float cell = std::floor(380.0f / (pair_qr_size_ + 8));
+        const float size = cell * (pair_qr_size_ + 8);
+        const float left = 380.0f, top = 350.0f;
+        list.rounded_rect({left, top, size, size}, 0, Color::rgb(0xffffff));
+        for (int y = 0; y < pair_qr_size_; ++y)
+            for (int x = 0; x < pair_qr_size_; ++x)
+                if (pair_qr_[static_cast<size_t>(y * pair_qr_size_ + x)])
+                    list.rounded_rect({left + (x + 4) * cell, top + (y + 4) * cell, cell, cell},
+                                      0, Color::rgb(0x000000));
+    }
+    ui::text(list, fonts.semibold, "1. Scan to open the remote", 825, 390, 30, theme.text);
+    ui::text(list, fonts.regular, pair_url_.empty() ? "Remote unavailable" : pair_url_,
+             825, 442, 28, theme.text_muted);
+    ui::text(list, fonts.semibold, "2. Enter this code on your phone", 825, 515, 30, theme.text);
+    if (!pair_code_.empty())
+    {
+        ui::text(list, fonts.mono, pair_code_, 825, 620, 78, tone::accent);
+        ui::text(list, fonts.regular, "Expires in " + std::to_string(pair_seconds_) + " seconds",
+                 825, 680, 26, theme.text_muted);
+    }
+    else
+    {
+        ui::text(list, fonts.semibold, "Code expired or unavailable", 825, 602, 28, tone::accent);
+        ui::text(list, fonts.regular, "Press X for a new code", 825, 652, 26, theme.text_muted);
+    }
+    ui::text(list, fonts.regular, "Your browser reconnects automatically on future visits.",
+             380, 800, 26, theme.text_muted);
+    ui::text(list, fonts.semibold, "Circle: Close", 1380, 850, 24, theme.text_muted);
 }
 
 void App::show_tab(int index, bool glide)
@@ -223,6 +316,7 @@ void App::apply_settings()
     Settings next = shared_.settings;
     next.reduced_motion = form_.toggle_value(kRowMotion);
     next.sounds = form_.toggle_value(kRowSounds);
+    next.volume = static_cast<int>(form_.slider_value(kRowVolume));
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
     if (next == shared_.settings)
@@ -295,6 +389,12 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             apply_settings();
         else if (event == ui::Event::activated && form_.changed_id() == kRowUpdate)
             refresh(feedback);
+        else if (event == ui::Event::activated && form_.changed_id() == kRowPair)
+        {
+            pairing_open_ = pair_requested_ = true;
+        }
+        else if (event == ui::Event::activated && form_.changed_id() == kRowForgetPhones)
+            forget_requested_ = true;
         break;
     }
     default:
@@ -325,6 +425,22 @@ void App::play_intro()
     intro_ = shared_.settings.reduced_motion ? -1.0f : 0.0f;
 }
 
+bool App::accepts_remote_search() const
+{
+    return browsing() && !update_.is_open() && !failure_.is_open();
+}
+
+bool App::remote_search(const char *query)
+{
+    if (!accepts_remote_search() || query == nullptr)
+        return false;
+    iptv_ime_cancel();
+    shared_.model.set_query(query);
+    search_.dismiss();
+    intro_ = -1.0f;
+    return true;
+}
+
 void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
     if (intro_ < 0.0f)
@@ -350,6 +466,9 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     shared_.clock += dt;
     page_age_ += dt;
 
+    if (search_.is_open() &&
+        (input.is_pressed(Action::back) || input.is_pressed(Action::north)))
+        iptv_ime_cancel();
     model.poll();
     for (Notice &notice : model.take_notices())
     {
@@ -371,7 +490,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         }
         else
         {
-            announcements_.push(ui::StatusKind::info, "ProsperoTV " + offer.version + " is available",
+            announcements_.push(ui::StatusKind::info,
+                                "ProsperoTV " + offer.version + " is available",
                                 "Get it from homebrew.page.", 10.0f);
         }
     }
@@ -386,7 +506,16 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     }
 
     // ---- input goes to whatever is on top ----
-    if (update_.is_open())
+    if (pairing_open_)
+    {
+        if (input.is_pressed(Action::back))
+            pairing_open_ = false;
+        else if (input.is_pressed(Action::confirm) && pair_seconds_ == 0)
+        {
+            pair_requested_ = true;
+        }
+    }
+    else if (update_.is_open())
     {
         update_.handle(input, feedback);
     }
@@ -537,7 +666,8 @@ void App::draw_settings(ui::Canvas &canvas) const
     const float x = kGlancePanel.x + 40.0f;
     const float right = kGlancePanel.x + kGlancePanel.w - 40.0f;
     float y = kGlancePanel.y + 56.0f;
-    ui::text(list, fonts.semibold, "AT A GLANCE", x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
+    ui::text(list, fonts.semibold, "AT A GLANCE", x, y, 16.0f, tone::accent, gfx::Align::left,
+             3.0f);
     y += 22.0f;
     const auto fact = [&](const char *label, const std::string &value)
     {
@@ -582,8 +712,7 @@ void App::draw_about(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, words, x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
         y += 36.0f;
     };
-    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f)
-    {
+    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
     const auto rule = [&]()
@@ -641,9 +770,8 @@ void App::draw_about(ui::Canvas &canvas) const
     {
         ui::text(list, fonts.semibold, label, x, y, 16.0f, theme.text_muted, gfx::Align::left,
                  2.0f);
-        ui::text(list, fonts.regular,
-                 fonts.regular.font->fit(value, 22.0f, x + width - column), column, y, 22.0f,
-                 theme.text);
+        ui::text(list, fonts.regular, fonts.regular.font->fit(value, 22.0f, x + width - column),
+                 column, y, 22.0f, theme.text);
         y += 46.0f;
     };
     way("BUILT IN", "The iptv-org list, ready at the first launch");
@@ -768,6 +896,9 @@ void App::draw_hints(ui::Canvas &canvas) const
     layout.item_gap = 34.0f;
     ui::draw_hints(canvas.list, canvas.fonts, ui::GlyphStyle::dark(), hints, count,
                    kWidth - kMargin, true, layout);
+    if (!remote_hint_.empty())
+        ui::text(canvas.list, canvas.fonts.regular, remote_hint_, kMargin, 1062.0f, 20.0f,
+                 shared_.theme.text_muted);
 }
 
 void App::draw(Frame &frame) const
@@ -804,6 +935,8 @@ void App::draw(Frame &frame) const
     search_.draw(over);
     failure_.draw(over);
     update_.draw(over);
+    if (pairing_open_)
+        draw_pairing(over);
     frame.glass = !frame.overlay.empty();
     if (intro_ >= 0.0f)
         draw_intro(over);
@@ -816,7 +949,8 @@ void App::draw_intro(ui::Canvas &canvas) const
     const float arrive = tween::cubic_out(tween::inverse_lerp(0.0f, kIntroArrive, t));
     const float line = tween::cubic_out(tween::inverse_lerp(kIntroArrive, kIntroLine, t));
     const float open = tween::cubic_out(tween::inverse_lerp(kIntroLine, kIntroOpen, t));
-    const float mark = tween::smoothstep(tween::inverse_lerp(kIntroOpen - 0.05f, kIntroOpen + 0.4f, t));
+    const float mark =
+        tween::smoothstep(tween::inverse_lerp(kIntroOpen - 0.05f, kIntroOpen + 0.4f, t));
     const float dive = tween::cubic_in_out(tween::inverse_lerp(kIntroHold, kIntroEnd, t));
 
     // The room is dark until the view is through the glass.

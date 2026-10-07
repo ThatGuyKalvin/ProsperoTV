@@ -14,6 +14,7 @@
 #include "ui/components/tabs.hpp"
 
 #include <string>
+#include <utility>
 
 namespace ptv
 {
@@ -32,6 +33,19 @@ class App
         std::string version);
 
     void update(const InputFrame &input, float dt, ui::Feedback &feedback);
+    bool accepts_remote_search() const;
+    bool remote_search(const char *query);
+    void set_volume(int volume);
+    void set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones);
+    bool pairing_open() const { return pairing_open_; }
+    void phone_connected();
+    bool take_pair_phone_requested() { return std::exchange(pair_requested_, false); }
+    bool take_forget_phones_requested() { return std::exchange(forget_requested_, false); }
+    void remote_notice(const char *message);
+    void set_remote_hint(std::string hint)
+    {
+        remote_hint_ = std::move(hint);
+    }
     // The opening, once per launch: an old television switches on, the view
     // goes into its screen and the app is there. Any button ends it; with
     // Reduce motion it is not played. Until it ends the controller is not read.
@@ -123,6 +137,7 @@ class App
     void draw_header(ui::Canvas &canvas) const;
     void draw_status(ui::Canvas &canvas) const;
     void draw_settings(ui::Canvas &canvas) const;
+    void draw_pairing(ui::Canvas &canvas) const;
     void draw_about(ui::Canvas &canvas) const;
     void draw_hints(ui::Canvas &canvas) const;
     void draw_intro(ui::Canvas &canvas) const;
@@ -141,6 +156,12 @@ class App
 
     std::uint32_t glass_texture_ = 0;
     std::string version_;
+    std::string remote_hint_;
+    std::string pair_url_, pair_code_;
+    std::vector<bool> pair_qr_;
+    int pair_qr_size_ = 0;
+    unsigned pair_seconds_ = 0;
+    bool pairing_open_ = false, pair_requested_ = false, forget_requested_ = false;
     bool settings_changed_ = false;
     bool failure_seen_ = false;
     float page_age_ = 10.0f; // seconds since the tab changed
