@@ -784,8 +784,13 @@ int main()
         // A scripted run plays each channel for a set time; the player stops it.
         const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
         const long long seconds = (sys::monotonic_us() - started) / 1000000;
-        sys::log("[TV] playback result=%d attempts=%u selected=%u seconds=%lld", outcome.result,
-                 outcome.attempts, outcome.selected, seconds);
+        // 1: the viewer stopped it; 0: it ended; below 0: it did not play, and why.
+        const char *reason = outcome.result < 0 ? iptv_player_last_error() : nullptr;
+        sys::log("[TV] playback result=%d attempts=%u selected=%u seconds=%lld%s%s%s",
+                 outcome.result, outcome.attempts, outcome.selected, seconds,
+                 reason != nullptr && reason[0] != '\0' ? " reason=\"" : "",
+                 reason != nullptr && reason[0] != '\0' ? reason : "",
+                 reason != nullptr && reason[0] != '\0' ? "\"" : "");
         if (script.active())
         {
             script.note("played \"%s\" result=%d attempts=%u selected=%u seconds=%lld",
