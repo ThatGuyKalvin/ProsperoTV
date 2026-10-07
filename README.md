@@ -343,6 +343,11 @@ console is unavailable.
 Ideas asked for by the community. None of them is scheduled or promised yet;
 they are listed so they are not lost.
 
+- **The provider's own categories.** Browsing a source by the groups it
+  defines ("US / Movies", "US / Sports", ...), beside the app's own lists.
+- **Showing and hiding categories.** Choosing which of a provider's categories
+  appear at all, so an account with tens of thousands of channels shows only
+  the ones wanted.
 - **Local TV sources.** Tuners and servers on the home network, such as
   HDHomeRun and Tvheadend, as channel sources beside the playlists.
 - **MAC-code portals.** Signing in to a provider with a portal address and a
