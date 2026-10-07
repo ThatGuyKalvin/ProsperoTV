@@ -414,8 +414,11 @@ if test_title:
         param["contentVersion"] = test_version
 param_path.write_text(json.dumps(param, indent=2, sort_keys=True) + "\n", encoding="utf-8",
                       newline="\n")
-# The test title also writes down what the video decoder asks of the system.
-if test_title:
+# TV_DEBUG_TRACE=1 builds the app someone is sent to find out why their
+# streams do not play: it writes logs/debug-trace.txt (see main.cpp).
+debug_trace = os.environ.get("TV_DEBUG_TRACE", "") not in ("", "0")
+# The test title and the debug build also write down what the video decoder asks of the system.
+if test_title or debug_trace:
     import shutil
 
     shutil.copy(Path(__file__).resolve().parent / "diag/decoder_trace.c",
@@ -438,6 +441,7 @@ if test_title:
 (tree / "src/tv_build_options.h").write_text(
     "// ProsperoTV - What this build includes (written by ps5/patch_tree.py).\n#pragma once\n\n"
     f"#define TV_DEV_SCRIPTS {1 if test_title else 0}\n"
+    f"#define TV_DEBUG_TRACE {1 if debug_trace else 0}\n"
     "// The title this build installs as: its folder and its Lapy helper carry it.\n"
     f"#define TV_TITLE_ID \"{param['titleId']}\"\n", encoding="utf-8", newline="\n")
 print("tree patched, category", category, "title", param["titleId"])

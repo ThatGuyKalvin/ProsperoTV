@@ -32,7 +32,18 @@ HOST_SANITIZE=1 tools/host-snapshots.sh build/snapshots-sanitize
 ps5/assemble.sh                    # make the console build tree beside the repository
 make -C ../../prosperotv-ui-build  # dist/PPSA99003 (folder and zip)
 TV_TEST_TITLE=PPSA88021 ps5/assemble.sh   # the same as a disposable title beside the released app
+TV_DEBUG_TRACE=1 ps5/assemble.sh          # the app with a debug trace, for someone whose streams fail
 ```
+
+The debug trace build is the released app plus a record of every channel
+opened, appended to `/data/prosperotv/logs/debug-trace.txt` (the title's
+`/download0/prosperotv/` without filesystem access): the channel's name, where
+its addresses point with the user name, password, path and query taken out,
+how it went and why, the player's whole receipt (container, codec, profile,
+picture size, decoder results), and, when it did not play, what the first
+bytes of each address look like. `app.log` beside it also gets every call the
+decoders make to the system. Its About page says "debug trace" after the
+version.
 
 The test title also reads scripted runs (`ps5/src/tv_dev.hpp`), which
 `tools/console-run.py <console address> <app folder> <results> <script>`

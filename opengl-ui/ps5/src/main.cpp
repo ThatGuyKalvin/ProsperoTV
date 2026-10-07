@@ -31,6 +31,7 @@
 #include "tv_tuning.h"
 #include "tv_update.hpp"
 #include "tv/platform.hpp"
+#include "tv/stream_sniff.hpp"
 
 #include <GL/glcorearb.h>
 
@@ -39,6 +40,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <span>
 #include <string>
@@ -324,7 +326,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         // On the heap: the interface holds every screen and is no small object.
         const std::unique_ptr<ptv::App> owned =
             std::make_unique<ptv::App>(model, fonts, renderer.glass_texture(), *settings,
-                                       version.empty() ? "unknown" : version);
+                                       (version.empty() ? std::string("unknown") : version) +
+                                           (TV_DEBUG_TRACE != 0 ? " debug trace" : ""));
         ptv::App &app = *owned;
         if (g_menu_sessions == 1)
             app.play_intro();
@@ -593,6 +596,85 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
     return outcome;
 }
 
+#if TV_DEBUG_TRACE
+// The debug build's record of one channel, appended to logs/debug-trace.txt:
+// which channel, where its addresses point (without what identifies their
+// owner), how it went, and everything the player wrote down about it. When it
+// did not play, each address is asked once more for its first bytes, which say
+// what kind of stream it really is.
+void debug_trace_playback(const ptv::PlayRequest &request, const PlaybackOutcome &outcome,
+                          long long seconds)
+{
+    static unsigned count = 0;
+    const std::string path = tv::storage::logs_dir() + "/debug-trace.txt";
+    std::FILE *out = std::fopen(path.c_str(), "a");
+    if (out == nullptr)
+    {
+        sys::log("[TV] debug trace: cannot open %s", path.c_str());
+        return;
+    }
+    if (count == 0)
+        std::fprintf(out, "\n######## ProsperoTV debug trace: app started (built %s %s) ########\n",
+                     __DATE__, __TIME__);
+    std::fprintf(out, "\n==== channel %u of this launch, unix time %lld ====\n", ++count,
+                 static_cast<long long>(std::time(nullptr)));
+    std::fprintf(out, "name=%s\n", request.channel_name.c_str());
+    std::fprintf(out, "result=%d  (1: stopped by the viewer, 0: ended, below 0: did not play)\n",
+                 outcome.result);
+    std::fprintf(out, "addresses=%zu tried=%u played=%u seconds=%lld\n", request.urls.size(),
+                 outcome.attempts, outcome.selected, seconds);
+    const char *reason = iptv_player_last_error();
+    std::fprintf(out, "reason=%s\n", reason != nullptr ? reason : "");
+    std::fprintf(out, "own user agent=%s own referrer=%s\n", request.user_agent.empty() ? "no" : "yes",
+                 request.referrer.empty() ? "no" : "yes");
+    for (std::size_t i = 0; i < request.urls.size(); ++i)
+        std::fprintf(out, "address %zu: %s\n", i + 1, ptv::redact_address(request.urls[i]).c_str());
+    if (outcome.result < 0)
+    {
+        // The player has closed the network behind it.
+        const iptv::http::Status network = ptv::platform::network_init();
+        if (network != iptv::http::Status::ok)
+            std::fprintf(out, "first bytes: the network did not start (%d)\n",
+                         static_cast<int>(network));
+        std::vector<char> head(4097);
+        for (std::size_t i = 0;
+             network == iptv::http::Status::ok && i < request.urls.size() && i < 3; ++i)
+        {
+            const iptv::http::FetchResult fetched =
+                ptv::platform::fetch(request.urls[i].c_str(), head.data(), head.size(), 4096, nullptr);
+            std::fprintf(out,
+                         "first bytes of address %zu: fetch status=%d http=%d native=0x%08x bytes=%zu "
+                         "-> %s\n",
+                         i + 1, static_cast<int>(fetched.status), fetched.http_status,
+                         static_cast<unsigned>(fetched.native_error), fetched.bytes,
+                         ptv::describe_bytes(reinterpret_cast<const unsigned char *>(head.data()),
+                                             fetched.bytes)
+                             .c_str());
+        }
+        if (network == iptv::http::Status::ok)
+            ptv::platform::network_shutdown();
+        std::fputs("(fetch status: 0 ok, 2 not an http/https address, 6 no connection, 7 the server "
+                   "answered with an error, 8 more than the 4096 bytes asked for, which is normal "
+                   "for a stream, 9 read failed, 10 too slow)\n",
+                   out);
+    }
+    std::string receipt;
+    if (save::read_file(kLatestReceiptPath, &receipt, 65536))
+    {
+        std::fputs("---- the player's receipt ----\n", out);
+        std::fwrite(receipt.data(), 1, receipt.size(), out);
+        if (!receipt.empty() && receipt.back() != '\n')
+            std::fputc('\n', out);
+    }
+    else
+    {
+        std::fputs("---- the player left no receipt ----\n", out);
+    }
+    std::fclose(out);
+    sys::log("[TV] debug trace: channel %u written to %s", count, path.c_str());
+}
+#endif
+
 char *trim_field(char *field)
 {
     while (field != nullptr && (*field == ' ' || *field == '\t'))
@@ -791,6 +873,9 @@ int main()
                  reason != nullptr && reason[0] != '\0' ? " reason=\"" : "",
                  reason != nullptr && reason[0] != '\0' ? reason : "",
                  reason != nullptr && reason[0] != '\0' ? "\"" : "");
+#if TV_DEBUG_TRACE
+        debug_trace_playback(request, outcome, seconds);
+#endif
         if (script.active())
         {
             script.note("played \"%s\" result=%d attempts=%u selected=%u seconds=%lld",
