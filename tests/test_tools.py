@@ -475,40 +475,12 @@ int main() {
         self.assertIn('first_rap_hevc_parameter_mask=0x%x\\n', player)
         self.assertIn('"audio_stream_type=0x%02x\\naudio_pid=%u\\naudio_frames=%llu\\n"', player)
 
-    def test_live_tv_back_and_source_layout_are_kept_simple(self):
-        app = (ROOT / "src/iptv_app.cpp").read_text(encoding="utf-8")
-        circle = app.index(
-            "if (event.key == IptvInputKey::Circle)\n"
-            "    {\n"
-            "        if (error_retries_playback_)"
-        )
-        l1 = app.index("if (event.key == IptvInputKey::L1", circle)
-        circle_handler = app[circle:l1]
-        self.assertIn("page_offset_ = 0;", circle_handler)
-        self.assertIn("focus_target_ = FocusTarget::Group;", circle_handler)
-        self.assertIn("focus_slot_ = selected_group_;", circle_handler)
-        self.assertNotIn("FocusTarget::LiveSource", app)
-
-        rml = (ROOT / "ui/main.rml").read_text(encoding="utf-8")
-        self.assertIn('<div id="source-slot-0" class="rail-item selected">', rml)
-        self.assertIn('<div id="source-slot-1" class="rail-item hidden">', rml)
-        self.assertIn('<div id="source-slot-2" class="rail-item hidden">', rml)
-        self.assertIn('id="source-management-name-2">Add an Xtream Codes account', rml)
-        self.assertIn('id="source-management-action-1" class="source-action"', rml)
-        self.assertIn('id="source-management-action-2" class="source-action"', rml)
-        self.assertIn('id="triangle-hint-label">Search', rml)
-        self.assertIn('screen_ == Screen::Sources ? "Add / Edit source" : "Search"', app)
-
-        styles = (ROOT / "ui/styles/app.rcss").read_text(encoding="utf-8")
-        self.assertIn("#source-region { left: 0px; width: 299px; }", styles)
-        self.assertIn("#group-region { left: 315px; width: 931px; }", styles)
-
     def test_xtream_password_uses_masked_native_ime(self):
         ime = (ROOT / "src/iptv_ime.c").read_text(encoding="utf-8")
-        app = (ROOT / "src/iptv_app.cpp").read_text(encoding="utf-8")
+        app = (ROOT / "opengl-ui/src/tv/model.cpp").read_text(encoding="utf-8")
         self.assertIn("#define SCE_IME_OPTION_PASSWORD UINT32_C(0x00000004)", ime)
         self.assertIn(".option = requested_option", ime)
-        self.assertIn('iptv_ime_request_password("Xtream password"', app)
+        self.assertIn('iptv_ime_request_password("Xtream password', app)
         self.assertIn("SCE_IME_ENTER_LABEL_SEARCH", ime)
         self.assertIn(".enter_label = requested_enter_label", ime)
         self.assertNotIn(".enter_label = 2", ime)

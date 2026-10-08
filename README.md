@@ -30,7 +30,7 @@
 
 - Browse thousands of community-maintained IPTV channels from the iptv-org
   catalog, add a custom HTTP(S) M3U playlist, or connect an Xtream Codes
-  account.
+  account and browse its movies and series.
 - Search by name and filter by country, language, category, and advertised
   quality with continuous controller paging.
 - Decode H.264, HEVC, and VP9 through native PS5 video paths at resolutions up
@@ -96,7 +96,10 @@
   source.
 - Add a user-supplied Xtream server, username, and password through masked
   native password entry; authenticate with the Player API and cache its live
-  categories and channels locally.
+  channels, movies and series locally.
+- Browse an Xtream account's movies and series in tabs of their own, with each
+  title's plot, genre, rating, runtime and the provider's picture size, and a
+  series' seasons and episodes in a drawer that starts at the next one to watch.
 - Return to the same screen, group, page, and channel after playback closes.
 - Show a tuning screen from Cross until the channel's first picture.
 - Keep a diagnostic log on request: a switch in Settings, off by default,
@@ -242,9 +245,10 @@ GitHub Releases provide `PPSA99003.zip`, which contains the complete
 [`opengl-ui/README.md`](opengl-ui/README.md) for how that build is put
 together.
 
-The repository root still builds the interface of 01.000.015 and earlier
-(`make check`, `make app`); it shares the catalog, stores, and player with
-the released app and is kept for their tests. It is no longer released.
+The repository root's `make app` and `make deploy` build and publish this
+interface too: its build tree is assembled beside the repository
+(`APP_BUILD_TREE`). The RmlUi interface of 01.000.015 and earlier is retired;
+the root keeps the tests of the shared sources (`make check`).
 
 ## Install and development deployment
 
@@ -327,9 +331,9 @@ in `docs/releases/<version>.md`. No release is built anywhere else. A push to
 
 ```text
 opengl-ui/                    The released interface, its logic, tests, and console build
-src/main.cpp                  Earlier interface: SDL/RmlUi lifetime and renderer bridge
-src/iptv_app.cpp              Earlier interface: screens, focus, search, and paging
-src/iptv_xtream.cpp           Xtream credentials, Player API parsing, and live URLs
+src/main.cpp                  Earlier interface (retired, not built)
+src/iptv_xtream.cpp           Xtream credentials, Player API parsing, live, movie and series URLs
+src/iptv_panel.cpp            Provider panels' named server lists
 src/iptv_player.cpp           Stream selection, buffering, playback, and errors
 src/iptv_stream.cpp           MPEG-TS demux and H.264/HEVC access-unit assembly
 src/iptv_native_backend.c     Native video/audio decode and presentation backend
@@ -337,7 +341,7 @@ src/iptv_catalog.cpp          Extended M3U catalog parser
 src/iptv_store.cpp            SQLite last-good catalog persistence
 src/iptv_webm.cpp             Bounded WebM/VP9 parser
 include/                      Public application and media interfaces
-ui/                           Earlier interface: RML, RCSS, fonts, and icons
+ui/                           Earlier interface (retired): RML, RCSS, fonts, and icons
 sce_sys/                      PS5 metadata and launcher assets
 runtime/                      Reproducible clean-room libc.prx output
 tooling/native/               ELF, FSELF, and runtime-generation tooling

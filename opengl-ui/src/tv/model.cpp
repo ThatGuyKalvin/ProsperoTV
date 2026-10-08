@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <string_view>
 #include <utility>
 
@@ -225,6 +226,7 @@ bool Model::is_set_up(iptv::SourceKind source) const
         return !custom_url_.empty();
     case iptv::SourceKind::Xtream:
         return xtream_ready();
+        return false;
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -282,6 +284,9 @@ bool Model::open()
     catalog_failed_ = false;
     catalog_error_.clear();
 
+    // What follows is about the live channels, whatever shelf is on screen.
+    const Shelf shown = shelf_;
+    swap_shelf(Shelf::live);
     if (first)
     {
         health_.fill(SourceHealth::empty);
@@ -344,11 +349,31 @@ bool Model::open()
     }
     if (!fresh)
         refresh();
+    swap_shelf(shown);
+
+    // The films and series of this source.
+    library_check_source();
+    if (shelf_ != Shelf::live)
+    {
+        const unsigned at = static_cast<unsigned>(shelf_);
+        if (has_library() && shelf_state_[at] == LibraryState::none)
+        {
+            shelf_state_[at] = LibraryState::loading;
+            LibraryJob job;
+            job.kind = LibraryJob::Kind::load;
+            job.shelf = shelf_;
+            library_queue(std::move(job));
+        }
+        mark_lists();
+        recount_groups();
+        rebuild_visible();
+    }
     return true;
 }
 
 void Model::close()
 {
+    library_stop();
     stop_requested_.store(true, std::memory_order_release);
     if (keyboard_ready_)
     {
@@ -362,9 +387,10 @@ void Model::close()
     }
     while (refresh_thread_ != nullptr && !join_refresh())
         platform::sleep_ms(10);
+    const bool live_loaded = shelf_ == Shelf::live ? catalog_loaded_ : shelves_[0].loaded;
     if (health_[static_cast<unsigned>(active_source_)] == SourceHealth::refreshing)
         health_[static_cast<unsigned>(active_source_)] =
-            catalog_loaded_ ? SourceHealth::cached : SourceHealth::saved;
+            live_loaded ? SourceHealth::cached : SourceHealth::saved;
     refresh_queued_ = false;
     refresh_done_.store(false, std::memory_order_relaxed);
     stop_requested_.store(false, std::memory_order_relaxed);
@@ -381,11 +407,20 @@ void Model::poll()
         iptv_ime_poll();
     continue_account_form();
     consume_refresh();
+    library_poll();
 }
 
 // ---- the catalog ------------------------------------------------------------
 
 void Model::load_cache()
+{
+    const Shelf shown = shelf_;
+    swap_shelf(Shelf::live);
+    load_live_cache();
+    swap_shelf(shown);
+}
+
+void Model::load_live_cache()
 {
     const std::uint64_t wanted = source_id(active_source_);
     iptv::Catalog cached;
@@ -700,6 +735,9 @@ bool Model::play(unsigned catalog_index)
     if (catalog_index >= channel_count())
         return false;
     const iptv::ChannelView channel = catalog_[catalog_index];
+    // A series is not played: its episodes are (open_series()).
+    if (channel.kind == iptv::MediaKind::series)
+        return false;
     play_request_ = {};
     play_request_.channel_id = channel.id;
     play_request_.channel_name = channel.name;
@@ -711,7 +749,9 @@ bool Model::play(unsigned catalog_index)
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
     play_request_.source_id = channel.source_id;
-    play_request_.reconnect_live = active_source_ == iptv::SourceKind::Xtream;
+    // Only live streams are re-opened when they drop; a finished movie must simply end.
+    play_request_.reconnect_live =
+        channel.kind == iptv::MediaKind::live && active_source_ == iptv::SourceKind::Xtream;
     play_requested_ = !play_request_.urls.empty();
     diag::event("play asked: \"%s\" id=%s addresses=%zu source=%d own user agent=%s referrer=%s",
                 play_request_.channel_name.c_str(), play_request_.channel_id.c_str(),
@@ -754,7 +794,8 @@ void Model::report_playback_failure(const char *channel_id, const char *channel_
     failure_.reason =
         detail != nullptr && *detail != '\0' ? detail : "The channel may be offline right now.";
     failure_.attempts = attempts;
-    failure_.can_retry = catalog_.Find(failure_.channel_id) != iptv::Catalog::npos;
+    failure_.can_retry = catalog_.Find(failure_.channel_id) != iptv::Catalog::npos ||
+                         episodes_.Find(failure_.channel_id) != iptv::Catalog::npos;
     has_failure_ = true;
     std::fprintf(stderr, "[ProsperoTV][player] channel=%s result=%d attempts=%u reason=%s\n",
                  failure_.channel_id.c_str(), result, attempts, failure_.reason.c_str());
@@ -773,7 +814,10 @@ bool Model::retry_failure()
     const std::string channel_id = failure_.channel_id;
     dismiss_failure();
     const std::size_t index = catalog_.Find(channel_id);
-    return index != iptv::Catalog::npos && play(static_cast<unsigned>(index));
+    if (index != iptv::Catalog::npos)
+        return play(static_cast<unsigned>(index));
+    const std::size_t episode = episodes_.Find(channel_id);
+    return episode != iptv::Catalog::npos && play_episode(static_cast<unsigned>(episode));
 }
 
 // ---- sources -------------------------------------------------------------------------
@@ -1273,6 +1317,8 @@ void Model::consume_refresh()
     if (!join_refresh())
         return;
     refresh_done_.store(false, std::memory_order_relaxed);
+    const Shelf shown = shelf_;
+    swap_shelf(Shelf::live);
 
     const bool account = refresh_source_ == iptv::SourceKind::Xtream;
     if (account)
@@ -1344,6 +1390,7 @@ void Model::consume_refresh()
     pending_catalog_ = {};
     pending_index_.clear();
     refresh_count_.store(0, std::memory_order_relaxed);
+    swap_shelf(shown);
     if (refresh_queued_)
     {
         refresh_queued_ = false;

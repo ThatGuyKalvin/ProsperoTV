@@ -45,19 +45,92 @@ constexpr float kHeroRadius = 28.0f;
 constexpr float kHeroText = 1120.0f; // the width the hero's words may take
 
 // The lists of Live TV, in the order of their chips. Favorites has a tab of
-// its own.
-constexpr Group kChips[] = {Group::all, Group::recent, Group::news, Group::sports, Group::kids};
-constexpr int kChipCount = static_cast<int>(std::size(kChips));
+// its own. The films and the series have theirs among their lists.
+constexpr Group kLiveChips[] = {Group::all, Group::recent, Group::news, Group::sports, Group::kids};
+constexpr Group kLibraryChips[] = {Group::all, Group::recent, Group::favorites, Group::kids};
+// How long the focus rests on a title before its details are asked for.
+constexpr float kDetailsDwell = 0.45f;
 
-int chip_of(Group group)
+bool is_title(const iptv::ChannelView &channel)
 {
-    for (int i = 0; i < kChipCount; ++i)
-        if (kChips[i] == group)
-            return i;
-    return 0;
+    return channel.kind == iptv::MediaKind::movie || channel.kind == iptv::MediaKind::series;
+}
+
+// 6300 seconds as "1 h 45 min".
+std::string runtime_words(std::uint32_t seconds)
+{
+    const std::uint32_t minutes = (seconds + 30u) / 60u;
+    if (minutes == 0)
+        return {};
+    if (minutes < 60u)
+        return std::to_string(minutes) + " min";
+    return std::to_string(minutes / 60u) + " h " + (minutes % 60u < 10u ? "0" : "") +
+           std::to_string(minutes % 60u) + " min";
+}
+
+// What a picture of that height is called.
+std::string picture_words(std::uint32_t height)
+{
+    return height >= 2000u   ? "4K"
+           : height >= 1000u ? "1080p"
+           : height >= 700u  ? "720p"
+           : height > 0u     ? "SD"
+                             : "";
 }
 
 } // namespace
+
+const char *BrowseScreen::shelf_title() const
+{
+    switch (shared_.model.shelf())
+    {
+    case Shelf::movies:
+        return "Movies";
+    case Shelf::series:
+        return "Series";
+    default:
+        return favorites_ ? "Your favorite channels" : "Live TV";
+    }
+}
+
+int BrowseScreen::chip_of(Group group) const
+{
+    for (std::size_t i = 0; i < chips_.size(); ++i)
+        if (chips_[i] == group)
+            return static_cast<int>(i);
+    return 0;
+}
+
+void BrowseScreen::set_chips()
+{
+    const bool library = shared_.model.shelf() != Shelf::live;
+    std::vector<Group> chips =
+        library ? std::vector<Group>(std::begin(kLibraryChips), std::end(kLibraryChips))
+                : std::vector<Group>(std::begin(kLiveChips), std::end(kLiveChips));
+    if (chips == chips_)
+        return;
+    chips_ = std::move(chips);
+    std::vector<ui::TabItem> items;
+    for (const Group group : chips_)
+        items.push_back({Model::group_name(group)});
+    groups_.set_tabs(std::move(items));
+}
+
+bool BrowseScreen::list_failed() const
+{
+    const Model &model = shared_.model;
+    if (model.shelf() == Shelf::live)
+        return model.catalog_failed();
+    const LibraryState state = model.shelf_state(model.shelf());
+    return state == LibraryState::failed || state == LibraryState::none;
+}
+
+bool BrowseScreen::list_busy() const
+{
+    const Model &model = shared_.model;
+    return model.shelf() == Shelf::live ? model.refreshing()
+                                        : model.shelf_state(model.shelf()) == LibraryState::loading;
+}
 
 BrowseScreen::BrowseScreen(Shared &shared) : shared_(shared)
 {
@@ -106,10 +179,7 @@ BrowseScreen::BrowseScreen(Shared &shared) : shared_(shared)
     groups_.style.gap = 10.0f;
     groups_.style.track = false;
     groups_.style.on_page = true;
-    std::vector<ui::TabItem> chips;
-    for (const Group group : kChips)
-        chips.push_back({Model::group_name(group)});
-    groups_.set_tabs(std::move(chips));
+    set_chips();
     groups_.set_bounds({kMargin, kListY - 24.0f, 1000.0f, 48.0f});
     groups_.set_focused(false);
 
@@ -128,6 +198,7 @@ void BrowseScreen::show(bool favorites)
     Model &model = shared_.model;
     favorites_ = favorites;
     zone_ = Zone::grid;
+    set_chips();
     model.set_group(favorites ? Group::favorites : model.view.live_group);
     groups_.set_active(chip_of(model.view.live_group), true);
     grid_.style.exits.up = !favorites;
@@ -249,7 +320,8 @@ void BrowseScreen::restart_list()
 void BrowseScreen::apply_group(int chip)
 {
     Model &model = shared_.model;
-    const Group group = kChips[std::clamp(chip, 0, kChipCount - 1)];
+    const Group group =
+        chips_[static_cast<std::size_t>(std::clamp(chip, 0, static_cast<int>(chips_.size()) - 1))];
     model.view.live_group = group;
     model.set_group(group);
     restart_list();
@@ -262,10 +334,11 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
     const int turn = page_turn(input, &repeat);
     if (!model.has_catalog())
     {
-        if (model.catalog_failed() && !model.refreshing() && input.is_pressed(Action::confirm))
+        const bool offered = model.shelf() == Shelf::live || model.has_library();
+        if (offered && list_failed() && !list_busy() && input.is_pressed(Action::confirm))
         {
             feedback.play(audio::Cue::select);
-            model.refresh();
+            model.refresh_shelf(model.shelf());
         }
         return Result::none;
     }
@@ -368,8 +441,22 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
     }
     if (event == ui::Event::moved)
         begin_swap(before);
-    if (event == ui::Event::activated && model.play(focused_index()))
-        return Result::play;
+    if (event == ui::Event::activated)
+    {
+        const iptv::ChannelView chosen = model.channel(focused_index());
+        if (chosen.kind == iptv::MediaKind::series)
+        {
+            if (model.open_series(focused_index()))
+            {
+                feedback.play(audio::Cue::open);
+                return Result::series;
+            }
+            feedback.play(audio::Cue::error);
+            return Result::none;
+        }
+        if (model.play(focused_index()))
+            return Result::play;
+    }
 
     if (input.is_pressed(Action::west))
     {
@@ -521,9 +608,30 @@ void BrowseScreen::update(float dt)
         page_hold_ += dt;
 
     // ---- the chips say how many each list holds ----
-    for (int i = 0; i < kChipCount; ++i)
-        groups_.tab(i).label = std::string(Model::group_name(kChips[i])) + "  " +
-                               group_digits(model.group_size(kChips[i]));
+    for (std::size_t i = 0; i < chips_.size(); ++i)
+        groups_.tab(static_cast<int>(i)).label = std::string(Model::group_name(chips_[i])) + "  " +
+                                                 group_digits(model.group_size(chips_[i]));
+
+    // ---- a film's or a series' details, once the focus rests on it ----
+    if (const std::optional<iptv::ChannelView> title = focused(); title && is_title(*title))
+    {
+        if (dwell_id_ != title->id)
+        {
+            dwell_id_ = title->id;
+            dwell_ = 0.0f;
+            dwell_asked_ = false;
+        }
+        dwell_ += dt;
+        if (!dwell_asked_ && dwell_ >= kDetailsDwell)
+        {
+            dwell_asked_ = true;
+            model.want_details(focused_index());
+        }
+    }
+    else
+    {
+        dwell_id_.clear();
+    }
 
     // One focus on screen: the part that is not in use shows no ring at all.
     groups_.set_focused(zone_ == Zone::groups);
@@ -543,7 +651,27 @@ void BrowseScreen::update(float dt)
 
     // ---- what an empty screen says ----
     empty_.action_button = ui::Button::cross;
-    if (!model.has_catalog())
+    if (!model.has_catalog() && model.shelf() != Shelf::live)
+    {
+        const bool series = model.shelf() == Shelf::series;
+        empty_.set_bounds({420.0f, 300.0f, 1080.0f, 480.0f});
+        if (!model.has_library())
+        {
+            empty_.title = series ? "Series come with an Xtream account"
+                                  : "Movies come with an Xtream account";
+            empty_.body = "Add your account in Sources and use it: its movies and series are "
+                          "listed here.";
+            empty_.action.clear();
+        }
+        else
+        {
+            empty_.title =
+                series ? "The series could not be loaded" : "The movies could not be loaded";
+            empty_.body = model.shelf_error(model.shelf());
+            empty_.action = list_busy() ? "" : "Try again";
+        }
+    }
+    else if (!model.has_catalog())
     {
         empty_.title = "The channel list could not be loaded";
         empty_.body = model.catalog_error();
@@ -555,7 +683,7 @@ void BrowseScreen::update(float dt)
         empty_.set_bounds({420.0f, 560.0f, 1080.0f, 380.0f});
         if (model.filtering())
         {
-            empty_.title = "No channels match";
+            empty_.title = model.shelf() == Shelf::live ? "No channels match" : "Nothing matches";
             empty_.body = "Try fewer filters, or check the spelling.";
             empty_.action = "Clear the search";
             empty_.action_button = ui::Button::circle;
@@ -569,9 +697,14 @@ void BrowseScreen::update(float dt)
         else
         {
             empty_.title = "Nothing here yet";
+            const bool library = model.shelf() != Shelf::live;
             empty_.body = model.group() == Group::recent
-                              ? "Channels you watch are listed here."
-                              : "This source has no channels of this kind.";
+                              ? (library ? "What you watch is listed here."
+                                         : "Channels you watch are listed here.")
+                          : model.group() == Group::favorites
+                              ? "Press Square on any title to keep it here."
+                              : (library ? "This source has nothing of this kind."
+                                         : "This source has no channels of this kind.");
             empty_.action.clear();
         }
     }
@@ -582,6 +715,11 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
 {
     if (alpha <= 0.01f)
         return;
+    if (is_title(channel))
+    {
+        draw_title_text(canvas, channel, favorite, alpha, dx);
+        return;
+    }
     gfx::DrawList &list = canvas.list;
     const ui::Fonts &fonts = canvas.fonts;
     const ui::Theme &theme = shared_.theme;
@@ -661,6 +799,111 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     list.pop_opacity();
 }
 
+// A film or a series: what it is, what it is about, and where it was left off.
+void BrowseScreen::draw_title_text(ui::Canvas &canvas, const iptv::ChannelView &title,
+                                   bool favorite, float alpha, float dx) const
+{
+    gfx::DrawList &list = canvas.list;
+    const ui::Fonts &fonts = canvas.fonts;
+    const ui::Theme &theme = shared_.theme;
+    const Model &model = shared_.model;
+    const bool reduced = shared_.settings.reduced_motion;
+    const bool series = title.kind == iptv::MediaKind::series;
+    ui::Painter paint(list, fonts, theme, canvas.glass);
+    const float x = kMargin + dx;
+    const auto rise = [&](int order) { return reduced ? 0.0f : 16.0f * (1.0f - appear(order)); };
+    const iptv::MediaDetails *details = model.details(title.id);
+
+    list.push_opacity(alpha);
+
+    list.push_opacity(appear(0));
+    const std::string category = category_of(title);
+    const std::string kicker =
+        std::string(series ? "SERIES" : "MOVIE") + "  \xC2\xB7  " +
+        ui::upper(readable(face_for(fonts, fonts.semibold, category), category));
+    const ui::FontRef &kicker_face = face_for(fonts, fonts.semibold, kicker);
+    ui::text(list, kicker_face, kicker_face.font->fit(kicker, 18.0f, kHeroText * 0.8f), x,
+             156.0f + rise(0), 18.0f, tone::accent, gfx::Align::left, 4.0f);
+    list.pop_opacity();
+
+    const std::string name = shown_name(fonts, title);
+    const ui::FontRef &face = title_face(fonts, name);
+    list.push_opacity(appear(1));
+    const float size = face.measure(name, 76.0f) <= kHeroText ? 76.0f : 58.0f;
+    ui::text(list, face, face.font->fit(name, size, kHeroText), x - 3.0f, 234.0f + rise(1), size,
+             theme.text);
+    list.pop_opacity();
+
+    // ---- what it is about: two lines of the plot, once the details are in ----
+    list.push_opacity(appear(2));
+    if (details != nullptr && !details->plot.empty())
+    {
+        const ui::FontRef &plot_face = face_for(fonts, fonts.regular, details->plot);
+        ui::paragraph(list, plot_face, readable(plot_face, details->plot), x, 278.0f + rise(2),
+                      23.0f, kHeroText, 29.0f, theme.text_muted, 2);
+    }
+    else if (!model.details_failed(title.id) && model.has_library())
+    {
+        ui::text(list, fonts.regular, "Reading the details\xE2\x80\xA6", x, 278.0f + rise(2), 23.0f,
+                 theme.text_muted.with_alpha(0.6f));
+    }
+    list.pop_opacity();
+
+    // ---- the year, the rating, the runtime, the picture ----
+    list.push_opacity(appear(3));
+    const float chips_y = 352.0f + rise(3);
+    float at = x;
+    const auto chip = [&](const std::string &label)
+    {
+        if (!label.empty())
+            at += draw_chip(paint, at, chips_y, label) + 12.0f;
+    };
+    if (title.year != 0)
+        chip(std::to_string(title.year));
+    const unsigned rating = details != nullptr && details->rating_tenths != 0
+                                ? details->rating_tenths
+                                : title.rating_tenths;
+    if (rating != 0)
+    {
+        char text[16]{};
+        std::snprintf(text, sizeof(text), "%u.%u / 10", rating / 10u, rating % 10u);
+        chip(text);
+    }
+    const std::uint32_t runtime = details != nullptr && details->duration_secs != 0
+                                      ? details->duration_secs
+                                      : title.duration_secs;
+    if (!series)
+        chip(runtime_words(runtime));
+    if (details != nullptr && details->video_height != 0)
+        chip(picture_words(details->video_height));
+    else
+        chip(resolution_label(title));
+    if (details != nullptr && !details->genre.empty())
+        chip(fonts.semibold.font->fit(details->genre, 19.0f, 300.0f));
+    list.pop_opacity();
+
+    // ---- what Cross and Square will do ----
+    list.push_opacity(appear(4));
+    const char *action = series ? "Episodes" : "Watch";
+    const float cy = 418.0f + rise(4);
+    const float width = 16.0f + 40.0f + 14.0f + fonts.semibold.measure(action, 27.0f) + 34.0f;
+    const Rect pill{x, cy - 34.0f, width, 68.0f};
+    list.shadow({pill.x, pill.y + 10.0f, pill.w, pill.h}, 34.0f, 24.0f, Color::rgb(0x000000, 0.4f));
+    list.rounded_rect(pill, 34.0f, tone::cream);
+    ui::draw_button(list, fonts, ui::GlyphStyle::dark(), ui::Button::cross, pill.x + 14.0f, cy,
+                    40.0f);
+    ui::text(list, fonts.semibold, action, pill.x + 70.0f, baseline_for(cy, 27.0f), 27.0f,
+             tone::ink);
+    const float star_x = pill.x + pill.w + 18.0f + 34.0f;
+    list.circle(star_x, cy, 34.0f, kWhite.with_alpha(0.1f));
+    list.ring(star_x, cy, 34.0f, 1.5f, kWhite.with_alpha(0.22f));
+    list.star(star_x, cy - 1.0f, 15.0f + 8.0f * star_.value, favorite ? tone::accent : tone::cream,
+              favorite ? 0.0f : 2.5f);
+    list.pop_opacity();
+
+    list.pop_opacity();
+}
+
 void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::ChannelView &channel,
                                  float alpha) const
 {
@@ -693,7 +936,7 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
     else
     {
         // Every list wears a hairline; the cream plate of the bar marks the one in use.
-        for (int i = 0; i < kChipCount; ++i)
+        for (int i = 0; i < static_cast<int>(chips_.size()); ++i)
         {
             const Rect chip = groups_.tab_rect(fonts, i);
             list.bordered_rect(chip, chip.h * 0.5f, kWhite.with_alpha(0.05f), 1.5f,
@@ -751,7 +994,18 @@ void BrowseScreen::draw_waiting(ui::Canvas &canvas) const
     list.rounded_rect({kMargin, 262.0f, 480.0f, 26.0f}, 10.0f, bone);
     list.rounded_rect(kHeroArt, kHeroRadius, bone);
     // Say what the wait is for: the first launch has nothing saved to show.
-    if (shared_.model.refreshing())
+    if (shared_.model.shelf() != Shelf::live)
+    {
+        const ui::Theme &theme = shared_.theme;
+        const bool series = shared_.model.shelf() == Shelf::series;
+        ui::text(list, canvas.fonts.semibold, series ? "Reading the series" : "Reading the movies",
+                 kMargin, 352.0f, 28.0f, theme.text);
+        ui::text(list, canvas.fonts.regular,
+                 "The first time, the whole list is downloaded from your account. Later it opens "
+                 "from the copy saved on this console.",
+                 kMargin, 392.0f, 23.0f, theme.text_muted);
+    }
+    else if (shared_.model.refreshing())
     {
         const ui::Theme &theme = shared_.theme;
         ui::text(list, canvas.fonts.semibold, "Downloading the channel list", kMargin, 352.0f,
@@ -779,7 +1033,7 @@ void BrowseScreen::draw(ui::Canvas &canvas) const
     const Model &model = shared_.model;
     if (!model.has_catalog())
     {
-        if (model.catalog_failed())
+        if (list_failed() && !list_busy())
             empty_.draw(canvas);
         else
             draw_waiting(canvas);
@@ -817,10 +1071,13 @@ void BrowseScreen::draw(ui::Canvas &canvas) const
         // No channel to speak of: the screen's own name holds the hero's place.
         ui::Painter paint(canvas.list, canvas.fonts, shared_.theme, canvas.glass);
         canvas.list.push_opacity(appear(0));
-        ui::text(canvas.list, canvas.fonts.semibold, favorites_ ? "FAVORITES" : "LIVE TV", kMargin,
-                 156.0f, 18.0f, tone::accent, gfx::Align::left, 4.0f);
-        paint.heading(favorites_ ? "Your favorite channels" : "Live TV", kMargin - 3.0f, 234.0f,
-                      76.0f);
+        const char *kicker = model.shelf() == Shelf::movies   ? "MOVIES"
+                             : model.shelf() == Shelf::series ? "SERIES"
+                             : favorites_                     ? "FAVORITES"
+                                                              : "LIVE TV";
+        ui::text(canvas.list, canvas.fonts.semibold, kicker, kMargin, 156.0f, 18.0f, tone::accent,
+                 gfx::Align::left, 4.0f);
+        paint.heading(shelf_title(), kMargin - 3.0f, 234.0f, 76.0f);
         canvas.list.pop_opacity();
     }
 
@@ -885,7 +1142,7 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
     };
     if (!model.has_catalog())
     {
-        if (model.catalog_failed() && !model.refreshing())
+        if (list_failed() && !list_busy() && (model.shelf() == Shelf::live || model.has_library()))
             add({ui::Button::cross, "Try again"});
         return count;
     }
@@ -897,6 +1154,14 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
     {
         add({ui::Button::dpad, "Jump to a letter"});
         add({ui::Button::cross, "Channels"});
+    }
+    else if (focused() && is_title(*focused()))
+    {
+        const iptv::ChannelView title = *focused();
+        add({ui::Button::cross,
+             title.kind == iptv::MediaKind::series ? "Episodes" : "Watch"});
+        add({ui::Button::square, model.is_favorite(title) ? "Unfavorite" : "Favorite"});
+        add({ui::Button::l2, "Page", ui::Button::r2});
     }
     else if (focused())
     {

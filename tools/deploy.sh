@@ -5,7 +5,9 @@
 #
 # Builds the selected output and publishes it below /data/homebrew, or removes
 # only the current title's staged files. Folder files are uploaded under
-# ignored temporary names and promoted individually.
+# ignored temporary names and promoted individually. DEPLOY_DIST names a dist
+# folder that is already built (the app from opengl-ui's build tree): nothing
+# is built, and that folder's output is published.
 
 set -euo pipefail
 
@@ -127,13 +129,16 @@ PY
     exit 0
 fi
 
-build_target=$format
-[[ $format == folder ]] && build_target=app
-echo "==> [deploy] Building $format"
-make -C "$root" --no-print-directory "$build_target"
+dist=${DEPLOY_DIST:-$root/dist}
+if [[ -z ${DEPLOY_DIST:-} ]]; then
+    build_target=$format
+    [[ $format == folder ]] && build_target=app
+    echo "==> [deploy] Building $format"
+    make -C "$root" --no-print-directory "$build_target"
+fi
 
 if [[ $format == folder ]]; then
-    artifact="$root/dist/$title_id"
+    artifact="$dist/$title_id"
     [[ -d $artifact ]] || {
         echo "missing deployment folder: $artifact" >&2
         exit 2
@@ -152,7 +157,7 @@ if [[ $format == folder ]]; then
     total=${#files[@]}
     printf '==> [deploy] Target: %s/%s/\n' "$base_url" "$title_id"
 else
-    artifact="$root/dist/$title_id.$format"
+    artifact="$dist/$title_id.$format"
     [[ -s $artifact ]] || {
         echo "missing deployment artifact: $artifact" >&2
         exit 2

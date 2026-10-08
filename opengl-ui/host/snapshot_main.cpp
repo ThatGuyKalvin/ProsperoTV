@@ -14,6 +14,8 @@
 #include "gfx/gl_program.hpp"
 #include "gfx/renderer.hpp"
 #include "host_platform.hpp"
+#include "iptv_source_state.h"
+#include "iptv_xtream.h"
 #include "tv/app.hpp"
 
 #include <EGL/egl.h>
@@ -27,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -184,6 +187,9 @@ const Step kWalk[] = {
     press(Action::back, 0.9f, "15-no-match"),
     press(Action::back, 1.0f, "16-search-cleared"),
     // ---- Favorites ----
+    // Films and series need an account: the iptv-org list has none.
+    press(Action::page_next, 1.1f, "16b-movies-without-an-account"),
+    press(Action::page_next, 1.1f),
     press(Action::page_next, 1.1f, "17-favorites"),
     press(Action::west, 0.4f),
     press(Action::west, 1.0f, "18-favorites-empty"),
@@ -242,6 +248,19 @@ const Step kWalk[] = {
     change([]() { host::set_network(false, "", 400); }, 0.1f),
     press(Action::menu, 1.6f, "27-update-failed"),
     look(4.0f, nullptr),
+};
+
+// With PTV_SNAPSHOT_LIBRARY naming a folder of an Xtream account's answers
+// (one file per action: get_vod_streams.json, ...; player_api.php.json for
+// the sign-in), the walk is the films and series instead.
+const Step kLibraryWalk[] = {
+    look(2.0f, nullptr),
+    press(Action::page_next, 2.0f, "40-movies"),
+    move(Direction::right, 1.6f, "41-movies-details"),
+    press(Action::page_next, 2.0f, "42-series"),
+    press(Action::confirm, 1.6f, "43-series-episodes"),
+    move(Direction::down, 0.6f, "44-series-episode-focus"),
+    press(Action::back, 0.8f),
 };
 
 } // namespace
@@ -314,6 +333,23 @@ int main(int argc, char **argv)
 
     host::reset();
     host::set_network(true, g_playlist, 600);
+    const char *library = std::getenv("PTV_SNAPSHOT_LIBRARY");
+    if (library != nullptr)
+    {
+        for (const char *action :
+             {"get_live_categories", "get_live_streams", "get_vod_categories", "get_vod_streams",
+              "get_vod_info", "get_series_categories", "get_series_info", "get_series"})
+            host::set_network_route(std::string("action=") + action,
+                                    std::string(library) + "/" + action + ".json");
+        host::set_network_route("player_api.php", std::string(library) + "/player_api.php.json");
+        iptv::XtreamCredentials account;
+        account.server_url = "http://provider.example.invalid:8080";
+        account.username = "viewer";
+        account.password = "secret";
+        (void)iptv::SaveXtreamCredentials(data_dir + "/prosperotv-xtream-v1.txt", account);
+        (void)iptv::SaveActiveSource(data_dir + "/iptv-active-source-v1.txt",
+                                     iptv::SourceKind::Xtream);
+    }
     ptv::Model model(data_dir);
     g_model = &model;
     model.open();
@@ -355,7 +391,9 @@ int main(int argc, char **argv)
     constexpr float kDt = 1.0f / 60.0f;
     hui::ui::Feedback feedback;
     long frames = 0;
-    for (const Step &step : kWalk)
+    const std::span<const Step> walk =
+        library != nullptr ? std::span<const Step>(kLibraryWalk) : std::span<const Step>(kWalk);
+    for (const Step &step : walk)
     {
         if (step.before != nullptr)
             step.before();
@@ -382,6 +420,11 @@ int main(int argc, char **argv)
         }
         if (step.capture != nullptr)
             render(step.capture);
+    }
+    if (library != nullptr)
+    {
+        model.close();
+        return ok ? 0 : 1;
     }
     {
         // The opening, at six of its moments.

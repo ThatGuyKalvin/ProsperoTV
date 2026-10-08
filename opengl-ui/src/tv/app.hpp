@@ -6,6 +6,7 @@
 
 #include "tv/browse_screen.hpp"
 #include "tv/search_sheet.hpp"
+#include "tv/series_sheet.hpp"
 #include "tv/shared.hpp"
 #include "tv/sources_screen.hpp"
 #include "tv/update_sheet.hpp"
@@ -115,6 +116,8 @@ class App
     enum Tab : int
     {
         kLive,
+        kMovies,
+        kSeries,
         kFavorites,
         kSources,
         kSettings,
@@ -147,6 +150,7 @@ class App
     BrowseScreen browse_;
     SourcesScreen sources_;
     SearchSheet search_;
+    SeriesSheet series_;
     ui::TabBar tabs_;
     ui::Form form_;
     ui::Dialog failure_;

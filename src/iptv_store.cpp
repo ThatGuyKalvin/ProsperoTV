@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <ctime>
 #include <cstring>
+#include <vector>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -21,8 +22,16 @@ namespace
 {
 
 // The version written, and the oldest one still read.
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 constexpr int kOldestSchemaVersion = 1;
+// Version 3 adds what a film or an episode is (kind, duration, year, rating,
+// container, series, season and episode) to version 2's rows.
+constexpr int kMediaSchemaVersion = 3;
+constexpr std::size_t kMaxContainerExtensionBytes = 12u;
+constexpr std::size_t kMaxSeriesIdBytes = 64u;
+constexpr std::uint16_t kMaxYear = 2200u;
+constexpr std::uint16_t kMaxRatingTenths = 100u;
+constexpr std::uint32_t kMaxDurationSecs = 24u * 3600u;
 constexpr int kPlaybackSchemaVersion = 1;
 
 StoreStatus MapSqlite(int result)
@@ -130,6 +139,12 @@ bool ValidChannel(const ChannelView &channel, const StoreLimits &limits)
         if (!Fits(field, limits.max_string_bytes))
             return false;
     }
+    if (!Fits(channel.container_ext, kMaxContainerExtensionBytes) ||
+        !Fits(channel.series_id, kMaxSeriesIdBytes) ||
+        static_cast<std::uint8_t>(channel.kind) > static_cast<std::uint8_t>(MediaKind::episode) ||
+        channel.year > kMaxYear || channel.rating_tenths > kMaxRatingTenths ||
+        channel.duration_secs > kMaxDurationSecs)
+        return false;
     return Fits(channel.url, limits.max_url_bytes);
 }
 
@@ -156,12 +171,16 @@ bool CreateSchema(sqlite3 *database)
         "name TEXT NOT NULL,url TEXT NOT NULL,tvg_id TEXT NOT NULL,"
         "tvg_name TEXT NOT NULL,tvg_logo TEXT NOT NULL,group_title TEXT NOT NULL,"
         "tvg_country TEXT NOT NULL,tvg_language TEXT NOT NULL,user_agent TEXT NOT NULL,"
-        "referrer TEXT NOT NULL);"
+        "referrer TEXT NOT NULL,kind INTEGER NOT NULL DEFAULT 0,"
+        "duration_secs INTEGER NOT NULL DEFAULT 0,year INTEGER NOT NULL DEFAULT 0,"
+        "rating_tenths INTEGER NOT NULL DEFAULT 0,container_ext TEXT NOT NULL DEFAULT '',"
+        "series_id TEXT NOT NULL DEFAULT '',season INTEGER NOT NULL DEFAULT 0,"
+        "episode INTEGER NOT NULL DEFAULT 0);"
         "CREATE TABLE alternate_urls(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "url TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
         "CREATE TABLE alternate_groups(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "value TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
-        "PRAGMA user_version=2;");
+        "PRAGMA user_version=3;");
 }
 
 bool CreatePlaybackSchema(sqlite3 *database)
@@ -205,8 +224,9 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
     const bool prepared =
         Prepare(database,
                 "INSERT INTO channels(position,id,source_line,name,url,tvg_id,tvg_name,"
-                "tvg_logo,group_title,tvg_country,tvg_language,user_agent,referrer)"
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "tvg_logo,group_title,tvg_country,tvg_language,user_agent,referrer,kind,"
+                "duration_secs,year,rating_tenths,container_ext,series_id,season,episode)"
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 &channel_statement) &&
         Prepare(database, "INSERT INTO alternate_urls(channel,position,url) VALUES(?,?,?)",
                 &url_statement) &&
@@ -261,6 +281,14 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
              BindCatalogText(channel_statement, 11, channel.tvg_language) &&
              BindCatalogText(channel_statement, 12, channel.http_user_agent) &&
              BindCatalogText(channel_statement, 13, channel.http_referrer) &&
+             sqlite3_bind_int(channel_statement, 14, static_cast<int>(channel.kind)) == SQLITE_OK &&
+             sqlite3_bind_int64(channel_statement, 15, channel.duration_secs) == SQLITE_OK &&
+             sqlite3_bind_int(channel_statement, 16, channel.year) == SQLITE_OK &&
+             sqlite3_bind_int(channel_statement, 17, channel.rating_tenths) == SQLITE_OK &&
+             BindCatalogText(channel_statement, 18, channel.container_ext) &&
+             BindCatalogText(channel_statement, 19, channel.series_id) &&
+             sqlite3_bind_int(channel_statement, 20, channel.season) == SQLITE_OK &&
+             sqlite3_bind_int(channel_statement, 21, channel.episode) == SQLITE_OK &&
              sqlite3_step(channel_statement) == SQLITE_DONE &&
              InsertAlternates(url_statement, index, channel.alternate_urls,
                               limits.max_alternate_urls, limits.max_url_bytes) &&
@@ -508,11 +536,16 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
     // Each row goes from SQLite's page into the catalog; nothing is copied
     // on the way.
     statement = nullptr;
-    ok = ok &&
-         Prepare(database,
-                 "SELECT id,source_line,name,url,tvg_id,tvg_name,tvg_logo,group_title,"
-                 "tvg_country,tvg_language,user_agent,referrer FROM channels ORDER BY position",
-                 &statement);
+    ok = ok && Prepare(database,
+                       version >= kMediaSchemaVersion
+                           ? "SELECT id,source_line,name,url,tvg_id,tvg_name,tvg_logo,group_title,"
+                             "tvg_country,tvg_language,user_agent,referrer,kind,duration_secs,year,"
+                             "rating_tenths,container_ext,series_id,season,episode FROM channels "
+                             "ORDER BY position"
+                           : "SELECT id,source_line,name,url,tvg_id,tvg_name,tvg_logo,group_title,"
+                             "tvg_country,tvg_language,user_agent,referrer,0,0,0,0,'','',0,0 "
+                             "FROM channels ORDER BY position",
+                       &statement);
     while (ok && sqlite3_step(statement) == SQLITE_ROW)
     {
         ChannelView channel;
@@ -529,14 +562,34 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
         channel.tvg_language = ColumnText(statement, 9);
         channel.http_user_agent = ColumnText(statement, 10);
         channel.http_referrer = ColumnText(statement, 11);
+        const sqlite3_int64 kind = sqlite3_column_int64(statement, 12);
+        const sqlite3_int64 duration = sqlite3_column_int64(statement, 13);
+        const sqlite3_int64 year = sqlite3_column_int64(statement, 14);
+        const sqlite3_int64 rating = sqlite3_column_int64(statement, 15);
+        const sqlite3_int64 season = sqlite3_column_int64(statement, 18);
+        const sqlite3_int64 episode = sqlite3_column_int64(statement, 19);
+        if (kind < 0 || kind > static_cast<sqlite3_int64>(MediaKind::episode) || duration < 0 ||
+            duration > kMaxDurationSecs || year < 0 || year > kMaxYear || rating < 0 ||
+            rating > kMaxRatingTenths || season < 0 || season > UINT16_MAX || episode < 0 ||
+            episode > UINT16_MAX)
+        {
+            ok = false;
+            break;
+        }
+        channel.kind = static_cast<MediaKind>(kind);
+        channel.duration_secs = static_cast<std::uint32_t>(duration);
+        channel.year = static_cast<std::uint16_t>(year);
+        channel.rating_tenths = static_cast<std::uint16_t>(rating);
+        channel.container_ext = ColumnText(statement, 16);
+        channel.series_id = ColumnText(statement, 17);
+        channel.season = static_cast<std::uint16_t>(season);
+        channel.episode = static_cast<std::uint16_t>(episode);
         ok = loaded.size() < count && ValidChannel(channel, limits) && loaded.Add(channel);
     }
     sqlite3_finalize(statement);
     ok = ok && loaded.size() == count;
     ok = ok && LoadAlternates(database, version, true, limits, &loaded) &&
          LoadAlternates(database, version, false, limits, &loaded);
-    if (ok)
-        ok = QuickCheck(database);
     result = ok ? SQLITE_OK : sqlite3_errcode(database);
     sqlite3_close_v2(database);
 

@@ -51,7 +51,8 @@ enum FormRow : int
     kRowDiagnostics,
 };
 
-constexpr const char *kTabNames[] = {"Live TV", "Favorites", "Sources", "Settings", "About"};
+constexpr const char *kTabNames[] = {"Live TV", "Movies",   "Series", "Favorites",
+                                     "Sources", "Settings", "About"};
 constexpr const char *kActionNames[] = {"Up",       "Down", "Left", "Right", "Cross", "Circle",
                                         "Triangle", "Square", "L1",  "R1",    "L2",    "R2",
                                         "Options",  "Touchpad", "L3", "R3"};
@@ -92,7 +93,8 @@ const char *source_label(iptv::SourceKind source)
 App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
     : shared_(model, fonts, settings), browse_(shared_), sources_(shared_), search_(shared_),
-      update_(shared_), glass_texture_(glass_texture), version_(std::move(version))
+      series_(shared_), update_(shared_), glass_texture_(glass_texture),
+      version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
 
@@ -126,8 +128,9 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     tabs_.style.track = false;
     tabs_.style.focus_ring = false;
     tabs_.style.on_page = true;
-    tabs_.set_tabs({{"Live TV"}, {"Favorites"}, {"Sources"}, {"Settings"}, {"About"}});
-    tabs_.set_bounds({486.0f, kHeaderY - 28.0f, 900.0f, 56.0f});
+    tabs_.set_tabs(
+        {{"Live TV"}, {"Movies"}, {"Series"}, {"Favorites"}, {"Sources"}, {"Settings"}, {"About"}});
+    tabs_.set_bounds({430.0f, kHeaderY - 28.0f, 1060.0f, 56.0f});
     tabs_.set_focused(false);
     tabs_.set_active(std::clamp(model.view.tab, 0, kTabCount - 1), true);
 
@@ -167,6 +170,13 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     lean_.snap(tone::ember);
     lean_dark_.snap(tone::wine);
     tab_changed();
+    // Back from an episode: its series is open again where it was.
+    if (!model.view.open_series.empty() && model.series_id() == model.view.open_series &&
+        tabs_.active() == kSeries)
+    {
+        ui::Feedback quiet;
+        series_.open(quiet);
+    }
 }
 
 bool App::take_settings_changed()
@@ -271,9 +281,19 @@ void App::tab_changed()
     shared_.model.view.tab = tabs_.active();
     diag::event("tab %s", kTabNames[std::clamp(tabs_.active(), 0, kTabCount - 1)]);
     page_age_ = 0.0f;
-    switch (tabs_.active())
+    // Films and Series have shelves of their own; everything else is about
+    // the live channels.
+    const int tab = tabs_.active();
+    shared_.model.set_shelf(tab == kMovies   ? Shelf::movies
+                            : tab == kSeries ? Shelf::series
+                                             : Shelf::live);
+    if (series_.visible())
+        series_.dismiss();
+    switch (tab)
     {
     case kLive:
+    case kMovies:
+    case kSeries:
         browse_.show(false);
         break;
     case kFavorites:
@@ -293,6 +313,23 @@ void App::tab_changed()
 void App::refresh(ui::Feedback &feedback)
 {
     Model &model = shared_.model;
+    if (model.shelf() != Shelf::live)
+    {
+        const bool series = model.shelf() == Shelf::series;
+        if (!model.has_library())
+        {
+            feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+            shared_.toasts.push(ui::StatusKind::info, "Movies and series need an Xtream account",
+                                "Add one in Sources.");
+            return;
+        }
+        feedback.play(audio::Cue::select);
+        model.refresh_shelf(model.shelf());
+        shared_.toasts.push(ui::StatusKind::info,
+                            series ? "Updating the series" : "Updating the movies",
+                            "You can keep browsing while it downloads.");
+        return;
+    }
     if (model.refreshing())
     {
         feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
@@ -395,11 +432,16 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     switch (tabs_.active())
     {
     case kLive:
+    case kMovies:
+    case kSeries:
     case kFavorites:
         switch (browse_.handle(input, feedback))
         {
         case BrowseScreen::Result::search:
             search_.open(feedback);
+            break;
+        case BrowseScreen::Result::series:
+            series_.open(feedback);
             break;
         case BrowseScreen::Result::go_live:
             show_tab(kLive, true);
@@ -592,6 +634,10 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     {
         search_.handle(input, feedback);
     }
+    else if (series_.is_open())
+    {
+        (void)series_.handle(input, feedback);
+    }
     else
     {
         handle_screen(input, feedback);
@@ -612,6 +658,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     browse_.update(dt);
     sources_.update(dt);
     search_.update(dt);
+    series_.update(dt);
     form_.update(dt);
     failure_.update(dt);
     update_.update(dt, feedback);
@@ -649,7 +696,10 @@ void App::draw_status(ui::Canvas &canvas) const
         dot = tone::bad;
         break;
     case Level::ready:
-        text = group_digits(model.channel_count()) + " channels";
+        text =
+            group_digits(model.channel_count()) + (model.shelf() == Shelf::movies   ? " movies"
+                                                   : model.shelf() == Shelf::series ? " series"
+                                                                                    : " channels");
         break;
     }
     const bool busy = model.refreshing();
@@ -922,9 +972,14 @@ void App::draw_hints(ui::Canvas &canvas) const
 {
     ui::Hint hints[8];
     int count = 0;
-    switch (tabs_.active())
+    switch (series_.is_open() ? -1 : tabs_.active())
     {
+    case -1:
+        count = series_.hints(hints, 6);
+        break;
     case kLive:
+    case kMovies:
+    case kSeries:
     case kFavorites:
         count = browse_.hints(hints, 6);
         break;
@@ -940,9 +995,9 @@ void App::draw_hints(ui::Canvas &canvas) const
     default:
         break;
     }
-    if (tabs_.active() < kSettings)
+    if (tabs_.active() < kSettings && !series_.is_open())
         hints[count++] = {ui::Button::options, "Update"};
-    if (tabs_.active() != kLive && !(browsing() && shared_.model.filtering()))
+    if (tabs_.active() != kLive && !series_.is_open() && !(browsing() && shared_.model.filtering()))
         hints[count++] = {ui::Button::circle, "Live TV"};
     ui::HintLayout layout;
     layout.size = 36.0f;
@@ -979,6 +1034,8 @@ void App::draw(Frame &frame) const
     switch (tabs_.active())
     {
     case kLive:
+    case kMovies:
+    case kSeries:
     case kFavorites:
         browse_.draw(canvas);
         break;
@@ -999,6 +1056,7 @@ void App::draw(Frame &frame) const
     shared_.toasts.draw(over);
     announcements_.draw(over);
     search_.draw(over);
+    series_.draw(over);
     failure_.draw(over);
     update_.draw(over);
     if (pairing_open_)

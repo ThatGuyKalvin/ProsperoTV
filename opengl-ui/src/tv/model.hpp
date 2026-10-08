@@ -11,6 +11,7 @@
 #include "iptv_catalog.h"
 #include "iptv_http.h"
 #include "iptv_source_state.h"
+#include "iptv_store.h"
 #include "iptv_user_state.h"
 #include "iptv_xtream.h"
 #include "tv/catalog_index.hpp"
@@ -20,6 +21,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -38,6 +40,26 @@ struct PlayRequest
     std::string referrer;
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
+};
+
+// What the browse screens show: the live channels, or the films and the
+// series of the source in use. Each keeps its own list, filters and focus.
+enum class Shelf : std::uint8_t
+{
+    live,
+    movies,
+    series,
+    count,
+};
+inline constexpr unsigned kShelfCount = static_cast<unsigned>(Shelf::count);
+
+// How far a shelf's list (or a series' episodes) has come.
+enum class LibraryState : std::uint8_t
+{
+    none,    // not asked for, or the source has none
+    loading, // being read from the console or downloaded
+    ready,
+    failed, // error() says why
 };
 
 // The lists a catalog is browsed by.
@@ -99,6 +121,11 @@ struct ViewState
     Group live_group = Group::all;
     std::string focused_channel; // its id
     int focused_source = 0;
+    // The films' and the series' own lists and focus.
+    std::array<Group, kShelfCount> shelf_group{};
+    std::array<std::string, kShelfCount> shelf_focus;
+    std::string open_series; // the series whose episodes were on screen
+    int open_season = 0;
 };
 
 class Model
@@ -154,6 +181,65 @@ class Model
     // Where a channel is in that list, or -1.
     int position_of(std::string_view channel_id) const;
     std::optional<iptv::ChannelView> find(std::string_view channel_id) const;
+
+    // ---- shelves: live channels, films, series (tv/library.cpp) ----
+    // Everything above (the catalog, its lists, groups, search and filters)
+    // is the shelf on screen; each shelf keeps its own while another is.
+    Shelf shelf() const
+    {
+        return shelf_;
+    }
+    void set_shelf(Shelf shelf);
+    // The source in use has films and series (an Xtream account).
+    bool has_library() const;
+    LibraryState shelf_state(Shelf shelf) const;
+    const std::string &shelf_error(Shelf shelf) const;
+    // Downloads a shelf's list again.
+    void refresh_shelf(Shelf shelf);
+    // The details of a film or a series (plot, cast, runtime), once fetched;
+    // want_details() asks for them, the newest wish first.
+    const iptv::MediaDetails *details(std::string_view id) const;
+    bool details_failed(std::string_view id) const;
+    void want_details(unsigned catalog_index);
+
+    // ---- one series' episodes (tv/library.cpp) ----
+    // Opens the series at that index of the shelf on screen: its episodes
+    // are fetched, and episodes() has them once episodes_state() is ready.
+    bool open_series(unsigned catalog_index);
+    void close_series();
+    const std::string &series_id() const
+    {
+        return series_open_;
+    }
+    const std::string &series_name() const
+    {
+        return series_name_;
+    }
+    LibraryState episodes_state() const
+    {
+        return episodes_state_;
+    }
+    const std::string &episodes_error() const
+    {
+        return episodes_error_;
+    }
+    const iptv::Catalog &episodes() const
+    {
+        return episodes_;
+    }
+    // The seasons the series has, in order, and its episodes in a season.
+    const std::vector<std::uint16_t> &seasons() const
+    {
+        return seasons_;
+    }
+    std::vector<unsigned> season_episodes(std::uint16_t season) const;
+    // The episode to go on with: after the last one watched, or the first.
+    int continue_episode() const;
+    // An episode of it was watched (or begun) before.
+    bool series_started() const;
+    // Asks for the episodes again after they could not be read.
+    void retry_series();
+    bool play_episode(unsigned episode_index);
     // The letter (0 for '#', 1 to 26) the channel at a position is filed under.
     int letter_at(unsigned position) const;
     // The position of the first channel of that list under a letter, or -1.
@@ -355,10 +441,73 @@ class Model
         password,
     };
 
+    // One shelf while another is on screen.
+    struct ShelfData
+    {
+        iptv::Catalog catalog;
+        CatalogIndex index;
+        bool loaded = false;
+        std::uint64_t saved_unix = 0;
+        std::vector<std::uint8_t> marks;
+        std::vector<std::uint32_t> visible;
+        unsigned visible_count = 0;
+        std::array<int, kLetterCount> letter_starts{};
+        Group group = Group::all;
+        std::array<unsigned, kGroupCount> group_sizes{};
+        std::string query;
+        std::string country;
+        std::string category;
+        std::string language;
+        unsigned quality = kQualityAny;
+    };
+    // A job for the library's worker, and what it brings back.
+    struct LibraryJob
+    {
+        enum class Kind : std::uint8_t
+        {
+            load,     // a shelf's saved copy
+            download, // a shelf's list from the account
+            episodes, // one series
+            details,  // one film or series
+        };
+        Kind kind = Kind::load;
+        Shelf shelf = Shelf::movies;
+        std::string id;        // the entry asked about
+        std::string remote_id; // the provider's id for it
+        std::string url;       // a series' episode list
+        std::string name;
+        bool series = false;
+    };
+    struct LibraryResult
+    {
+        bool ok = false;
+        bool stale = false; // a saved copy old enough to download again
+        bool saved = false;
+        std::uint64_t saved_unix = 0;
+        std::string error;
+        iptv::Catalog catalog;
+        CatalogIndex index;
+        iptv::MediaDetails details;
+    };
+
+    // Swaps the shelf on screen into its place in shelves_ and `shelf` out.
+    void swap_shelf(Shelf shelf);
+    std::string library_cache_path(Shelf shelf) const;
+    void library_check_source();
+    void library_reset();
+    void library_queue(LibraryJob job);
+    void library_poll();
+    void library_stop();
+    void finish_library_job();
+    static void *library_entry(void *self);
+    void run_library();
+    void run_library_job(const LibraryJob &job, LibraryResult *result);
+
     std::string path(const char *name) const;
     std::string cache_path(iptv::SourceKind source) const;
     std::uint64_t source_id(iptv::SourceKind source) const;
     void load_cache();
+    void load_live_cache();
     void adopt_catalog();
     void mark_lists();
     void recount_groups();
@@ -439,6 +588,35 @@ class Model
     std::string pending_account_stage_;
     std::string pending_account_message_;
     bool pending_saved_ = false;
+
+    // ---- shelves and the library (tv/library.cpp) ----
+    Shelf shelf_ = Shelf::live;
+    std::array<ShelfData, kShelfCount> shelves_; // the one on screen is in the members above
+    std::array<LibraryState, kShelfCount> shelf_state_{};
+    std::array<std::string, kShelfCount> shelf_error_;
+    std::uint64_t library_source_ = 0; // the source the library belongs to
+    iptv::XtreamCredentials library_account_;
+    std::deque<LibraryJob> library_jobs_;
+    LibraryJob library_job_;       // the one the worker has
+    LibraryResult library_result_; // what it brought back
+    void *library_thread_ = nullptr;
+    std::atomic<bool> library_done_{false};
+    std::atomic<bool> library_stop_{false};
+    struct DetailsEntry
+    {
+        std::string id;
+        iptv::MediaDetails details;
+        bool failed = false;
+    };
+    std::deque<DetailsEntry> details_; // the newest first, a few dozen at most
+    std::string series_open_;
+    std::string series_name_;
+    std::string series_url_;
+    std::string series_remote_;
+    LibraryState episodes_state_ = LibraryState::none;
+    std::string episodes_error_;
+    iptv::Catalog episodes_;
+    std::vector<std::uint16_t> seasons_;
 
     // ---- playback ----
     bool play_requested_ = false;

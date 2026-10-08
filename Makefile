@@ -92,16 +92,17 @@ $(HOST_ELEVATION_TEST): tests/test_elevation.cpp \
 	@$(HOST_CXX) $(HOST_TEST_CXXFLAGS) tests/test_elevation.cpp \
 		$(HOST_TEST_LDFLAGS) -o $@
 
-$(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
-		tests/test_iptv_hls.cpp tests/test_iptv_http.cpp \
+$(HOST_UNIT_TEST): tests/test_vp9_packet.cpp \
+		tests/test_iptv_catalog.cpp tests/test_iptv_http.cpp tests/test_iptv_hls.cpp \
 		tests/test_iptv_store.cpp tests/test_iptv_stream.cpp tests/test_iptv_webm.cpp \
-		tests/test_iptv_xtream.cpp \
-		src/iptv_vp9_packet.c src/iptv_catalog.cpp \
-		src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp src/iptv_store.cpp \
-		src/iptv_stream.cpp src/iptv_webm.cpp src/iptv_xtream.cpp \
-		include/iptv_vp9_packet.h include/iptv_catalog.h \
-		include/iptv_hls.h include/iptv_http.h include/iptv_source_state.h include/iptv_store.h \
-		include/iptv_stream.h include/iptv_mp2.h include/iptv_audio_frame.h include/iptv_webm.h include/iptv_xtream.h \
+		tests/test_iptv_xtream.cpp tests/test_iptv_panel.cpp src/iptv_vp9_packet.c \
+		src/iptv_catalog.cpp src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp \
+		src/iptv_store.cpp src/iptv_stream.cpp src/iptv_user_state.cpp src/iptv_webm.cpp \
+		src/iptv_xtream.cpp src/iptv_panel.cpp include/iptv_vp9_packet.h include/iptv_catalog.h \
+		include/iptv_user_state.h include/iptv_hls.h include/iptv_http.h include/iptv_source_state.h \
+		include/iptv_store.h include/iptv_stream.h include/iptv_mp2.h include/iptv_audio_frame.h \
+		include/iptv_webm.h include/iptv_xtream.h include/iptv_json.h include/iptv_panel.h \
+		$(wildcard include/iptv_panel_local.h) \
 		tools/setup-test-dependencies.sh | test-deps
 	@printf '%s\n' '==> [test-unit] Compiling the host-native GoogleTest binary'
 	@mkdir -p -- $(@D)
@@ -118,9 +119,10 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 			-isystem "$$gtest/googletest/include" \
 			tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp tests/test_iptv_http.cpp \
 			tests/test_iptv_hls.cpp tests/test_iptv_store.cpp tests/test_iptv_stream.cpp \
-			tests/test_iptv_webm.cpp tests/test_iptv_xtream.cpp src/iptv_catalog.cpp \
-			src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp src/iptv_store.cpp \
-			src/iptv_stream.cpp src/iptv_webm.cpp src/iptv_xtream.cpp \
+			tests/test_iptv_webm.cpp tests/test_iptv_xtream.cpp tests/test_iptv_panel.cpp \
+			src/iptv_catalog.cpp src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp \
+			src/iptv_store.cpp src/iptv_stream.cpp src/iptv_user_state.cpp src/iptv_webm.cpp \
+			src/iptv_xtream.cpp src/iptv_panel.cpp \
 			$(@D)/iptv-vp9-packet.o \
 			$(@D)/gtest-all.o $(@D)/gtest-main.o \
 			$(HOST_TEST_LDFLAGS) $(HOST_TEST_LIBS) -o $@
@@ -154,9 +156,20 @@ $(RUNTIME): $(RUNTIME_INPUTS)
 	@printf '%s\n' '==> [libc] Generating the missing or outdated runtime'
 	@bash tools/rebuild-libc.sh
 
-app: $(RUNTIME)
-	@printf '%s\n' '==> [app] Compiling, linking, signing, and assembling the app folder'
-	@bash tools/build.sh Folder
+# The app is the interface in opengl-ui/ (the earlier RmlUi interface is
+# retired in this fork): its build tree is assembled beside the repository,
+# built there, and its folder and ZIP are copied to dist/.
+APP_BUILD_TREE ?= $(abspath $(CURDIR)/../prosperotv-ui-build)
+APP_HOST_CXX ?= $(shell command -v clang++-18 || command -v clang++)
+# The build tree has settings of its own: none of this Makefile's goes with it.
+APP_TREE_ENV := env -u MAKEFLAGS -u MFLAGS -u APP_DEFINITIONS -u APP_CXXFLAGS -u APP_INCLUDE_PATHS \
+	-u APP_STATIC_ARCHIVES -u APP_IMPORT_STUBS -u APP_RUNTIME_MODULES -u PACBREW_PACKAGES \
+	-u PACBREW_INCLUDE_PATHS -u PACBREW_STATIC_ARCHIVES
+app:
+	@printf '%s\n' '==> [app] Assembling and building the app (opengl-ui)'
+	@$(APP_TREE_ENV) HOST_CXX="$(APP_HOST_CXX)" bash opengl-ui/ps5/assemble.sh "$(APP_BUILD_TREE)"
+	@$(APP_TREE_ENV) $(MAKE) --no-print-directory -C "$(APP_BUILD_TREE)" app
+	@rm -rf dist && mkdir -p dist && cp -a "$(APP_BUILD_TREE)/dist/." dist/
 
 ffpkg: $(RUNTIME)
 	@printf '%s\n' '==> [ffpkg] Building the app folder and UFS2 image'
