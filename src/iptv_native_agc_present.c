@@ -6,6 +6,8 @@
 
 #include "iptv_native_agc_present.h"
 #include "iptv_osd.h"
+#include "iptv_picture.h"
+#include "iptv_subtitle.h"
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -167,8 +169,10 @@ typedef struct iptv_native_agc_presenter
     size_t overlay_pool_bytes;
     uint8_t overlay_valid;
     uint32_t overlay_sequence;
+    uint64_t overlay_subtitles;
     char overlay_stats[96];
     int64_t overlay_stats_ms;
+    int32_t overlay_picture[4];
     uint32_t overlay_first; /* the rows with anything on them */
     uint32_t overlay_end;
 } iptv_native_agc_presenter_t;
@@ -468,7 +472,7 @@ static void draw_disc(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t he
                 luma[(size_t)(center_y + y) * pitch + (uint32_t)(center_x + x)] = value;
 }
 
-/* ---- The screen overlay: controls and statistics ----
+/* ---- The screen overlay: controls, subtitles and statistics ----
  *
  * Drawn by the CPU into two surfaces of their own (iptv_osd.h) and blended over the placed
  * picture by two more draws: the picture is darkened by the mask, then the premultiplied colour
@@ -525,13 +529,15 @@ static void flush_overlay_rows(const iptv_osd_surface_t *surface, uint32_t first
     }
 }
 
-/* Brings the overlay up to date for the next frame. Returns 1 when it has anything on it. */
-static int compose_overlay(const iptv_native_video_overlay_t *overlay)
+/* Brings the overlay up to date for a frame shown at `pts_us` with the picture at `viewport`
+ * on the screen. Returns 1 when the overlay has anything on it. */
+static int compose_overlay(const int32_t viewport[4], const iptv_native_video_overlay_t *overlay)
 {
     if (!presenter.overlay)
         return 0;
     iptv_osd_state_t state;
     const uint32_t sequence = iptv_osd_snapshot(&state);
+    const uint64_t subtitles = iptv_subtitle_signature(overlay->pts_us);
 
     /* The statistics line, refreshed twice a second. */
     char stats[96] = {0};
@@ -562,8 +568,16 @@ static int compose_overlay(const iptv_native_video_overlay_t *overlay)
         }
     }
 
+    /* Where the picture is, in overlay pixels. */
+    const float scale = (float)IPTV_OSD_OVERLAY_WIDTH / (float)presenter.output_width;
+    const int32_t picture[4] = {
+        (int32_t)((float)viewport[0] * scale), (int32_t)((float)viewport[1] * scale),
+        (int32_t)((float)viewport[2] * scale), (int32_t)((float)viewport[3] * scale)};
+
     if (presenter.overlay_valid && sequence == presenter.overlay_sequence &&
-        memcmp(stats, presenter.overlay_stats, sizeof(stats)) == 0)
+        subtitles == presenter.overlay_subtitles &&
+        memcmp(stats, presenter.overlay_stats, sizeof(stats)) == 0 &&
+        (!subtitles || memcmp(picture, presenter.overlay_picture, sizeof(picture)) == 0))
         return presenter.overlay_end > presenter.overlay_first;
 
     const iptv_osd_surface_t surface = overlay_surface();
@@ -575,6 +589,16 @@ static int compose_overlay(const iptv_native_video_overlay_t *overlay)
     uint32_t end = 0;
     uint32_t drawn_first = 0;
     uint32_t drawn_rows = 0;
+    /* Subtitles keep clear of the controls: above the bar, and left of the settings. */
+    iptv_osd_surface_t subtitle_area = surface;
+    subtitle_area.width -= iptv_osd_reserved_columns(&surface, &state);
+    if (subtitles && iptv_subtitle_draw(&subtitle_area, overlay->pts_us, picture,
+                                        iptv_osd_reserved_rows(&surface, &state), &drawn_first,
+                                        &drawn_rows) == 0)
+    {
+        first = drawn_first;
+        end = drawn_first + drawn_rows;
+    }
     if (iptv_osd_draw(&surface, &state, &drawn_first, &drawn_rows) == 0)
     {
         first = drawn_first < first ? drawn_first : first;
@@ -595,7 +619,9 @@ static int compose_overlay(const iptv_native_video_overlay_t *overlay)
 
     presenter.overlay_valid = 1;
     presenter.overlay_sequence = sequence;
+    presenter.overlay_subtitles = subtitles;
     memcpy(presenter.overlay_stats, stats, sizeof(stats));
+    memcpy(presenter.overlay_picture, picture, sizeof(picture));
     presenter.overlay_first = first & ~1u;
     presenter.overlay_end = end;
     return end > first;
@@ -1370,11 +1396,25 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
 
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
 
-    /* The picture fills the screen. */
-    const int32_t viewport[4] = {0, 0, (int32_t)presenter.output_width,
-                                 (int32_t)presenter.output_height};
+    /* Video takes the shape and zoom the viewer chose; the loading screen fills the screen. */
+    iptv_picture_layout_t layout = {0, 0, presenter.output_width, presenter.output_height,
+                                    0, 0, visible_width,          visible_height};
+    if (overlay)
+    {
+        int aspect = IPTV_ASPECT_AUTO;
+        int zoom = IPTV_ZOOM_FIT;
+        uint32_t sar_num = 0;
+        uint32_t sar_den = 0;
+        iptv_picture_modes(&aspect, &zoom);
+        iptv_picture_sample_aspect(&sar_num, &sar_den);
+        if (iptv_picture_layout(visible_width, visible_height, sar_num, sar_den, aspect, zoom,
+                                presenter.output_width, presenter.output_height, &layout) != 0)
+            layout = (iptv_picture_layout_t){0, 0, presenter.output_width, presenter.output_height,
+                                             0, 0, visible_width,          visible_height};
+    }
+    const int32_t viewport[4] = {layout.x, layout.y, (int32_t)layout.width, (int32_t)layout.height};
 
-    const int with_overlay = overlay ? compose_overlay(overlay) : 0;
+    const int with_overlay = overlay ? compose_overlay(viewport, overlay) : 0;
     result =
         render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
                      presenter.vertex_shader, presenter.pixel_shader, source, source_bytes, pitch,

@@ -121,6 +121,10 @@
   reopens the file with Range requests to seek or to continue after a dropped connection.
 - Pause, seek and change audio track in films and episodes, which resume where
   they were left off; a live channel's banner says what is on now and next.
+- Change the aspect ratio, zoom, audio and subtitle tracks (text, and Blu-ray,
+  DVD and DVB pictures) and audio delay from Options during playback, in a
+  settings panel drawn with the interface's own components; each aspect ratio
+  and zoom shows the shape it gives the picture.
 - Adapt read-ahead buffering to live HLS timing and recover from stale live
   segments without discarding the channel immediately.
 - Display codec, resolution, frame rate, and bitrate during playback; toggle
@@ -352,6 +356,9 @@ src/iptv_media.cpp            MKV/MP4 playback through FFmpeg's demuxers and Ran
 src/iptv_media_pack.cpp       Container sniffing and AAC-to-ADTS repackaging
 src/iptv_video_sps.cpp        H.264/HEVC SPS parsing shared by the TS and file players
 src/iptv_osd.c                The player's controls, drawn on a screen overlay
+src/iptv_picture.c            Aspect ratio and zoom: where the picture goes on the screen
+src/iptv_player_menu.cpp      The playback settings menu: its pages, focus and changes
+src/iptv_subtitle.c           Subtitle cues, their layout and drawing
 include/                      Public application and media interfaces
 ui/                           Earlier interface (retired): RML, RCSS, fonts, and icons
 sce_sys/                      PS5 metadata and launcher assets

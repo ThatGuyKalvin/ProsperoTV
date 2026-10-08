@@ -10,6 +10,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* A colour as BT.709 limited-range YUV with 10-bit precision (8-bit frames drop two bits). */
@@ -404,6 +405,7 @@ enum
     ICON_TRIANGLE,
     ICON_LEFT_RIGHT,
     ICON_UP_DOWN,
+    ICON_OPTIONS,
 };
 
 static void draw_icon(const osd_canvas_t *canvas, int icon, float x, float y, float size)
@@ -441,6 +443,12 @@ static void draw_icon(const osd_canvas_t *canvas, int icon, float x, float y, fl
         line(canvas, x - s * 1.0f, y, x - s * 0.3f, y + s * 0.7f, stroke, colours.white);
         line(canvas, x + s * 0.3f, y - s * 0.7f, x + s * 1.0f, y, stroke, colours.white);
         line(canvas, x + s * 1.0f, y, x + s * 0.3f, y + s * 0.7f, stroke, colours.white);
+        break;
+    case ICON_OPTIONS:
+        /* The Options button's three lines. */
+        for (int bar = -1; bar <= 1; ++bar)
+            line(canvas, x - s * 0.85f, y + (float)bar * s * 0.62f, x + s * 0.85f,
+                 y + (float)bar * s * 0.62f, stroke, colours.white);
         break;
     default:
         line(canvas, x - s * 0.7f, y - s * 0.3f, x, y - s * 1.0f, stroke, colours.white);
@@ -590,6 +598,8 @@ static int draw_media(osd_canvas_t *canvas, const iptv_osd_state_t *state)
         x = draw_hint(canvas, x, hints_middle, ICON_TRIANGLE, "Audio");
     if (state->buttons & IPTV_OSD_BUTTON_RESTART)
         x = draw_hint(canvas, x, hints_middle, ICON_SQUARE, "Start over");
+    if (state->buttons & IPTV_OSD_BUTTON_MENU)
+        x = draw_hint(canvas, x, hints_middle, ICON_OPTIONS, "Settings");
     if (state->buttons & IPTV_OSD_BUTTON_BACK)
         (void)draw_hint(canvas, x, hints_middle, ICON_CIRCLE, "Back");
     return top;
@@ -641,8 +651,327 @@ static int draw_live(osd_canvas_t *canvas, const iptv_osd_state_t *state)
         draw_timeline(canvas, margin + label_space, width - margin - label_space, bar_middle,
                       state->position_us, state->duration_us, 0, 0);
     }
-    draw_text(canvas, body, margin, height - px(canvas, 96.0f), width - 2 * margin, ALIGN_LEFT,
-              state->next, colours.dim);
+    int next_width = width - 2 * margin;
+    if (state->buttons & IPTV_OSD_BUTTON_MENU)
+    {
+        /* Settings, at the right of the last line. */
+        const osd_text_style_t hint = text_style(px(canvas, 22.0f));
+        const int hint_width =
+            (int)pxf(canvas, 34.0f) + px(canvas, 12.0f) + full_width(hint, "Settings");
+        (void)draw_hint(canvas, width - margin - hint_width, height - px(canvas, 96.0f),
+                        ICON_OPTIONS, "Settings");
+        next_width -= hint_width + px(canvas, 40.0f);
+    }
+    draw_text(canvas, body, margin, height - px(canvas, 96.0f), next_width, ALIGN_LEFT, state->next,
+              colours.dim);
+    return top;
+}
+
+/* The settings menu as the player draws it when nobody paints it: a panel at the right, above
+ * the controls. Returns its top row. */
+static int draw_menu(osd_canvas_t *canvas, const iptv_osd_state_t *state)
+{
+    const iptv_osd_surface_t *surface = canvas->surface;
+    const osd_palette_t colours = palette();
+    const int width = (int)surface->width;
+    const int height = (int)surface->height;
+    const uint32_t count =
+        state->menu_rows < IPTV_OSD_MENU_ROWS ? state->menu_rows : IPTV_OSD_MENU_ROWS;
+    const osd_text_style_t heading = text_style(px(canvas, 28.0f));
+    const osd_text_style_t body = text_style(px(canvas, 28.0f));
+    const osd_text_style_t small = text_style(px(canvas, 20.0f));
+    const float row_height = pxf(canvas, 62.0f);
+    const float head = pxf(canvas, 78.0f);
+    const float foot = pxf(canvas, 70.0f);
+    const float panel_width = fminf(pxf(canvas, 660.0f), (float)width - pxf(canvas, 80.0f));
+    const float panel_height = head + row_height * (float)count + foot;
+    const float right = (float)width - pxf(canvas, 72.0f);
+    const float left = right - panel_width;
+    float bottom = (float)height - pxf(canvas, 330.0f);
+    float top = bottom - panel_height;
+    if (top < pxf(canvas, 24.0f))
+    {
+        top = pxf(canvas, 24.0f);
+        bottom = top + panel_height;
+    }
+    const float radius = pxf(canvas, 22.0f);
+    rounded_rect(canvas, left, top, right, bottom, radius, colours.dark, 0.88f);
+
+    const int inset = px(canvas, 34.0f);
+    draw_text(canvas, heading, (int)left + inset, (int)(top + head * 0.55f),
+              (int)panel_width - 2 * inset, ALIGN_LEFT,
+              state->menu_title[0] ? state->menu_title : "Settings", colours.white);
+    for (uint32_t row = 0; row < count; ++row)
+    {
+        const iptv_osd_menu_row_t *item = &state->menu[row];
+        const float row_top = top + head + row_height * (float)row;
+        const int middle = (int)(row_top + row_height * 0.5f);
+        if (item->kind == IPTV_OSD_ROW_HEADER)
+        {
+            draw_text(canvas, small, (int)left + inset, middle + px(canvas, 6.0f),
+                      (int)panel_width - 2 * inset, ALIGN_LEFT, item->label, colours.dim);
+            continue;
+        }
+        const int chosen = row == state->menu_selected;
+        if (chosen)
+            rounded_rect(canvas, left + pxf(canvas, 12.0f), row_top + pxf(canvas, 4.0f),
+                         right - pxf(canvas, 12.0f), row_top + row_height - pxf(canvas, 4.0f),
+                         pxf(canvas, 14.0f), colours.white, 0.14f);
+        if (chosen)
+            rounded_rect(canvas, left + pxf(canvas, 12.0f), row_top + pxf(canvas, 14.0f),
+                         left + pxf(canvas, 18.0f), row_top + row_height - pxf(canvas, 14.0f),
+                         pxf(canvas, 3.0f), colours.accent, 1.0f);
+        const int label_space = (int)(panel_width * 0.46f);
+        const int value_right = (int)right - inset;
+        const int value_space = (int)panel_width - label_space - 2 * inset - px(canvas, 40.0f);
+        const osd_colour_t value_colour = chosen ? colours.accent : colours.dim;
+        int label_x = (int)left + inset;
+        if (item->kind == IPTV_OSD_ROW_OPTION)
+        {
+            /* A tick before the value in use. */
+            if (item->checked)
+            {
+                const float cx = (float)label_x + pxf(canvas, 8.0f);
+                const float stroke = pxf(canvas, 3.5f);
+                line(canvas, cx - pxf(canvas, 8.0f), (float)middle, cx - pxf(canvas, 2.0f),
+                     (float)middle + pxf(canvas, 7.0f), stroke, colours.accent);
+                line(canvas, cx - pxf(canvas, 2.0f), (float)middle + pxf(canvas, 7.0f),
+                     cx + pxf(canvas, 10.0f), (float)middle - pxf(canvas, 8.0f), stroke,
+                     colours.accent);
+            }
+            label_x += px(canvas, 36.0f);
+        }
+        draw_text(canvas, body, label_x, middle, label_space, ALIGN_LEFT, item->label,
+                  chosen ? colours.white : colours.soft);
+        if (item->kind == IPTV_OSD_ROW_PICKER)
+        {
+            /* The value, then an arrow: this opens the values. */
+            const float arrow = pxf(canvas, 7.0f);
+            const float stroke = pxf(canvas, 3.0f);
+            const float ax = (float)value_right - arrow;
+            line(canvas, ax - arrow, (float)middle - arrow, ax, (float)middle, stroke,
+                 chosen ? colours.white : colours.dim);
+            line(canvas, ax, (float)middle, ax - arrow, (float)middle + arrow, stroke,
+                 chosen ? colours.white : colours.dim);
+            draw_text(canvas, body, value_right - px(canvas, 30.0f), middle, value_space,
+                      ALIGN_RIGHT, item->value, value_colour);
+        }
+        else if (item->kind == IPTV_OSD_ROW_STEPPER && chosen)
+        {
+            /* The value between arrows. */
+            const float arrow = pxf(canvas, 7.0f);
+            const float stroke = pxf(canvas, 3.0f);
+            const float ax = (float)value_right - arrow;
+            line(canvas, ax - arrow, (float)middle - arrow, ax, (float)middle, stroke,
+                 colours.white);
+            line(canvas, ax, (float)middle, ax - arrow, (float)middle + arrow, stroke,
+                 colours.white);
+            const int text_right = value_right - px(canvas, 30.0f);
+            const int value_width = draw_text(canvas, body, text_right, middle, value_space,
+                                              ALIGN_RIGHT, item->value, value_colour);
+            const float bx = (float)(text_right - value_width) - pxf(canvas, 22.0f);
+            line(canvas, bx + arrow, (float)middle - arrow, bx, (float)middle, stroke,
+                 colours.white);
+            line(canvas, bx, (float)middle, bx + arrow, (float)middle + arrow, stroke,
+                 colours.white);
+        }
+        else
+        {
+            draw_text(canvas, body, value_right - px(canvas, 30.0f), middle, value_space,
+                      ALIGN_RIGHT, item->value, value_colour);
+        }
+    }
+    int x = (int)left + inset;
+    const int hints_middle = (int)(bottom - foot * 0.5f);
+    x = draw_hint(canvas, x, hints_middle, ICON_UP_DOWN, "Choose");
+    if (state->menu_page == IPTV_OSD_MENU_PICKER)
+    {
+        x = draw_hint(canvas, x, hints_middle, ICON_CROSS, "Select");
+        (void)draw_hint(canvas, x, hints_middle, ICON_CIRCLE, "Back");
+    }
+    else
+    {
+        x = draw_hint(canvas, x, hints_middle, ICON_LEFT_RIGHT, "Change");
+        (void)draw_hint(canvas, x, hints_middle, ICON_CIRCLE, "Close");
+    }
+    return (int)top & ~1;
+}
+
+/* ---- The painted menu ---- */
+
+/* The painter draws into the back image while the presenter reads the front one; the lock is
+ * held only while the presenter composites and while the images change places. */
+static iptv_osd_menu_painter_t menu_painter;
+static void *menu_painter_context;
+static uint8_t *menu_images[2];
+static atomic_flag menu_lock = ATOMIC_FLAG_INIT;
+static unsigned menu_front;  /* menu_images[menu_front] is the one shown */
+static int menu_front_valid; /* it holds the menu of menu_front_state */
+static iptv_osd_image_t menu_front_image;
+static iptv_osd_state_t menu_front_state; /* only the menu's fields are kept */
+
+static void lock_menu(void)
+{
+    while (atomic_flag_test_and_set_explicit(&menu_lock, memory_order_acquire))
+    {
+    }
+}
+
+static void unlock_menu(void)
+{
+    atomic_flag_clear_explicit(&menu_lock, memory_order_release);
+}
+
+/* Whether two states show the same menu. */
+static int same_menu(const iptv_osd_state_t *a, const iptv_osd_state_t *b)
+{
+    if (a->menu_rows != b->menu_rows || a->menu_selected != b->menu_selected ||
+        a->menu_page != b->menu_page || strcmp(a->menu_title, b->menu_title) != 0)
+        return 0;
+    const uint32_t count = a->menu_rows < IPTV_OSD_MENU_ROWS ? a->menu_rows : IPTV_OSD_MENU_ROWS;
+    for (uint32_t row = 0; row < count; ++row)
+    {
+        const iptv_osd_menu_row_t *x = &a->menu[row];
+        const iptv_osd_menu_row_t *y = &b->menu[row];
+        if (x->kind != y->kind || x->checked != y->checked || x->preview != y->preview ||
+            x->preview_milli != y->preview_milli || strcmp(x->label, y->label) != 0 ||
+            strcmp(x->value, y->value) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static void keep_menu(iptv_osd_state_t *out, const iptv_osd_state_t *state)
+{
+    memset(out, 0, sizeof(*out));
+    out->menu_rows = state->menu_rows;
+    out->menu_selected = state->menu_selected;
+    out->menu_page = state->menu_page;
+    memcpy(out->menu_title, state->menu_title, sizeof(out->menu_title));
+    memcpy(out->menu, state->menu, sizeof(out->menu));
+}
+
+void iptv_osd_set_menu_painter(iptv_osd_menu_painter_t painter, void *context)
+{
+    const size_t bytes = (size_t)IPTV_OSD_MENU_IMAGE_WIDTH * 4u * IPTV_OSD_OVERLAY_HEIGHT;
+    if (painter && (!menu_images[0] || !menu_images[1]))
+    {
+        for (int index = 0; index < 2; ++index)
+            if (!menu_images[index])
+                menu_images[index] = (uint8_t *)calloc(1, bytes);
+        if (!menu_images[0] || !menu_images[1])
+            painter = NULL;
+    }
+    lock_menu();
+    menu_painter = painter;
+    menu_painter_context = context;
+    menu_front_valid = 0;
+    unlock_menu();
+}
+
+/* Paints the menu of `state` when it differs from the one shown. On the publishing thread. */
+static void paint_menu(const iptv_osd_state_t *state)
+{
+    if (!menu_painter || !state->menu_rows || state->kind == IPTV_OSD_HIDDEN)
+        return;
+    if (menu_front_valid && same_menu(state, &menu_front_state))
+        return;
+    const unsigned back = menu_front ^ 1u;
+    iptv_osd_image_t image = {menu_images[back], 0, 0, 0, 0};
+    const int painted = menu_painter(menu_painter_context, state, &image) == 0 && image.width &&
+                        image.height && image.x + image.width <= IPTV_OSD_MENU_IMAGE_WIDTH &&
+                        image.y + image.height <= IPTV_OSD_OVERLAY_HEIGHT;
+    lock_menu();
+    if (painted)
+    {
+        menu_front = back;
+        menu_front_image = image;
+        menu_front_image.rgba = menu_images[back];
+        keep_menu(&menu_front_state, state);
+    }
+    menu_front_valid = painted;
+    unlock_menu();
+}
+
+/* Puts the painted image over the overlay. Called with the lock held. */
+static void composite_menu(const iptv_osd_surface_t *surface, const iptv_osd_image_t *image)
+{
+    const uint32_t offset = IPTV_OSD_OVERLAY_WIDTH - IPTV_OSD_MENU_IMAGE_WIDTH;
+    const size_t stride = (size_t)IPTV_OSD_MENU_IMAGE_WIDTH * 4u;
+    const size_t chroma = (size_t)surface->pitch * surface->surface_height;
+    const uint32_t x0 = image->x & ~1u;
+    const uint32_t y0 = image->y & ~1u;
+    const uint32_t x1 = image->x + image->width;
+    const uint32_t y1 = image->y + image->height;
+    unsigned last_rgb = 0xffffffffu;
+    osd_colour_t last = {64, 512, 512};
+    for (uint32_t y = y0; y < y1; ++y)
+    {
+        const uint8_t *row = image->rgba + (size_t)y * stride;
+        for (uint32_t x = x0; x < x1; ++x)
+        {
+            const uint8_t *pixel = row + (size_t)x * 4u;
+            const unsigned alpha = pixel[3];
+            if (!alpha)
+                continue;
+            /* Premultiplied to straight colour. */
+            const unsigned r = (pixel[0] * 255u + alpha / 2u) / alpha;
+            const unsigned g = (pixel[1] * 255u + alpha / 2u) / alpha;
+            const unsigned b = (pixel[2] * 255u + alpha / 2u) / alpha;
+            const unsigned rgb =
+                (r > 255u ? 255u : r) << 16 | (g > 255u ? 255u : g) << 8 | (b > 255u ? 255u : b);
+            if (rgb != last_rgb)
+            {
+                last = osd_rgb(rgb >> 16, (rgb >> 8) & 255u, rgb & 255u);
+                last_rgb = rgb;
+            }
+            iptv_overlay_luma(surface, (size_t)y * surface->pitch + offset + x, last.y,
+                              (int)(alpha + (alpha >> 7)));
+        }
+    }
+    /* Chroma: each sample from the 2x2 pixels it covers. */
+    for (uint32_t y = y0; y < y1; y += 2u)
+    {
+        const uint8_t *top = image->rgba + (size_t)y * stride;
+        const uint8_t *bottom = y + 1u < IPTV_OSD_OVERLAY_HEIGHT ? top + stride : top;
+        for (uint32_t x = x0; x < x1; x += 2u)
+        {
+            const uint8_t *p[4] = {top + (size_t)x * 4u, top + (size_t)x * 4u + 4u,
+                                   bottom + (size_t)x * 4u, bottom + (size_t)x * 4u + 4u};
+            const unsigned alpha = (p[0][3] + p[1][3] + p[2][3] + p[3][3]) / 4u;
+            if (!alpha)
+                continue;
+            const unsigned sum_r = p[0][0] + p[1][0] + p[2][0] + p[3][0];
+            const unsigned sum_g = p[0][1] + p[1][1] + p[2][1] + p[3][1];
+            const unsigned sum_b = p[0][2] + p[1][2] + p[2][2] + p[3][2];
+            const unsigned total = alpha * 4u;
+            const unsigned r = (sum_r * 255u + total / 2u) / total;
+            const unsigned g = (sum_g * 255u + total / 2u) / total;
+            const unsigned b = (sum_b * 255u + total / 2u) / total;
+            const osd_colour_t colour =
+                osd_rgb(r > 255u ? 255u : r, g > 255u ? 255u : g, b > 255u ? 255u : b);
+            iptv_overlay_chroma(surface, chroma + (size_t)(y / 2u) * surface->pitch + offset + x,
+                                colour.u, colour.v, (int)(alpha + (alpha >> 7)));
+        }
+    }
+}
+
+/* Draws the painted menu. The image is painted before its state is published, so the newest
+ * image is shown even when the state at hand is a moment older. Returns its top row, or -1. */
+static int draw_painted_menu(const iptv_osd_surface_t *surface, const iptv_osd_state_t *state)
+{
+    if (surface->width != IPTV_OSD_OVERLAY_WIDTH || surface->height != IPTV_OSD_OVERLAY_HEIGHT ||
+        surface->x || surface->y || surface->pitch < IPTV_OSD_OVERLAY_WIDTH)
+        return -1;
+    int top = -1;
+    lock_menu();
+    (void)state;
+    if (menu_painter && menu_front_valid)
+    {
+        composite_menu(surface, &menu_front_image);
+        top = (int)(menu_front_image.y & ~1u);
+    }
+    unlock_menu();
     return top;
 }
 
@@ -653,6 +982,14 @@ static float canvas_scale(const iptv_osd_surface_t *surface)
     if ((float)surface->height / 1080.0f < scale * 0.75f)
         scale = (float)surface->height / 1080.0f / 0.75f;
     return scale;
+}
+
+uint32_t iptv_osd_reserved_rows(const iptv_osd_surface_t *surface, const iptv_osd_state_t *state)
+{
+    if (!surface || !state || state->kind == IPTV_OSD_HIDDEN)
+        return 0;
+    const float rows = canvas_scale(surface) * (state->kind == IPTV_OSD_LIVE ? 316.0f : 300.0f);
+    return rows < (float)surface->height ? (uint32_t)rows : surface->height;
 }
 
 /* Whether the surface can be drawn on: both planes present and big enough. */
@@ -740,6 +1077,26 @@ int iptv_osd_draw_stats(const iptv_osd_surface_t *surface, const char *text, uin
     return 0;
 }
 
+uint32_t iptv_osd_reserved_columns(const iptv_osd_surface_t *surface, const iptv_osd_state_t *state)
+{
+    if (!surface || !state || state->kind == IPTV_OSD_HIDDEN || !state->menu_rows)
+        return 0;
+    if (surface->width == IPTV_OSD_OVERLAY_WIDTH)
+    {
+        uint32_t painted = 0;
+        lock_menu();
+        if (menu_painter && menu_front_valid)
+            painted = IPTV_OSD_MENU_IMAGE_WIDTH - menu_front_image.x + 40u;
+        unlock_menu();
+        if (painted)
+            return painted & ~1u;
+    }
+    const float scale = canvas_scale(surface);
+    const float panel = fminf(660.0f * scale, (float)surface->width - 80.0f * scale);
+    const float columns = panel + (72.0f + 40.0f) * scale;
+    return columns < (float)surface->width ? (uint32_t)columns & ~1u : surface->width;
+}
+
 int iptv_osd_draw(const iptv_osd_surface_t *surface, const iptv_osd_state_t *state,
                   uint32_t *first_row, uint32_t *rows)
 {
@@ -753,6 +1110,14 @@ int iptv_osd_draw(const iptv_osd_surface_t *surface, const iptv_osd_state_t *sta
     int first = state->kind == IPTV_OSD_MEDIA && state->paused
                     ? (int)((float)surface->height * 0.42f - pxf(&canvas, 80.0f)) & ~1
                     : top;
+    if (state->menu_rows)
+    {
+        int menu_top = draw_painted_menu(surface, state);
+        if (menu_top < 0)
+            menu_top = draw_menu(&canvas, state);
+        if (menu_top < first)
+            first = menu_top;
+    }
     if (first < 0)
         first = 0;
     if (first_row)
@@ -789,6 +1154,8 @@ void iptv_osd_publish(const iptv_osd_state_t *state)
 {
     if (!state)
         return;
+    /* The image first, so the presenter finds it with the state. */
+    paint_menu(state);
     const uint32_t start = atomic_load_explicit(&osd_sequence, memory_order_relaxed);
     atomic_store_explicit(&osd_sequence, start + 1u, memory_order_relaxed);
     atomic_thread_fence(memory_order_release);

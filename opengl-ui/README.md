@@ -82,6 +82,8 @@ src/tv/               the interface and its logic (namespace ptv), as the consol
   search_sheet.*      the search and filter drawer
   sources_screen.*    the three sources and their state
   update_sheet.*      a newer version: the offer, the download, the hand-over
+  player_menu.*       the settings panel over a playing video, painted into the player's overlay
+  soft_raster.*       draw lists drawn by the CPU, as the kit's shader draws them, for that panel
   app.*               tabs, status, the Settings and About pages, hints, the failure dialog, notices
 host/                 PC renderer, the scripted walk, stand-ins for keyboard and network
 tests/                GoogleTest: the logic, the interface under scripted and random input

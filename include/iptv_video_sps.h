@@ -39,6 +39,9 @@ struct SpsInfo
     uint32_t visible_height = 0;
     uint32_t bit_depth = 0;
     uint32_t chroma = IPTV_STREAM_CHROMA_UNKNOWN;
+    // H.264 only: the pixel shape from the VUI (0:0 when absent or square).
+    uint32_t sar_num = 0;
+    uint32_t sar_den = 0;
 };
 
 // `nal` starts at the NAL header (no start code). Returns IPTV_STREAM_OK, or

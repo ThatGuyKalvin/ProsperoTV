@@ -335,6 +335,8 @@ static int parse_h264_sps(iptv_stream_session_t *session, impl_t *impl, const ui
     const int result = iptv::video::ParseH264Sps(nal, bytes, &sps, &error);
     if (result != IPTV_STREAM_OK)
         return fail(session, result, error);
+    impl->format.sample_aspect_num = sps.sar_num;
+    impl->format.sample_aspect_den = sps.sar_den;
     return accept_video_format(session, impl, sps.profile, sps.level, sps.coded_width,
                                sps.coded_height, sps.visible_width, sps.visible_height,
                                sps.bit_depth, sps.chroma);
