@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -321,11 +322,34 @@ struct Record
     std::uint32_t at[kFieldCount];
     std::uint16_t bytes[kFieldCount];
     std::uint8_t playback;
-    std::uint8_t reserved;
+    std::uint8_t kind; // a MediaKind
     std::uint32_t source_line;
     std::uint32_t urls;   // its first other address, or kNone
     std::uint32_t groups; // its first other category, or kNone
 };
+
+// What a film, a series or an episode has beyond a channel. A catalog of live
+// channels has none of these: they are kept beside the records, a chunk for
+// each chunk of records, only once a channel with any of them is added.
+struct Media
+{
+    std::uint32_t container_ext;
+    std::uint32_t series_id;
+    std::uint16_t container_ext_bytes;
+    std::uint16_t series_id_bytes;
+    std::uint32_t duration_secs;
+    std::uint16_t year;
+    std::uint16_t rating_tenths;
+    std::uint16_t season;
+    std::uint16_t episode;
+};
+
+bool HasMedia(const ChannelView &channel)
+{
+    return channel.kind != MediaKind::live || !channel.container_ext.empty() ||
+           !channel.series_id.empty() || channel.duration_secs != 0 || channel.year != 0 ||
+           channel.rating_tenths != 0 || channel.season != 0 || channel.episode != 0;
+}
 
 struct Alternate
 {
@@ -438,6 +462,7 @@ struct Catalog::Storage
     std::vector<std::unique_ptr<char[]>> blocks;
     std::size_t block_used = kBlockBytes;
     std::vector<std::unique_ptr<Record[]>> chunks;
+    std::vector<std::unique_ptr<Media[]>> media; // by chunk; empty, or null, when none has any
     std::size_t count = 0;
     std::vector<Alternate> alternates;
     std::unordered_map<std::string_view, std::uint32_t> shared;
@@ -462,6 +487,28 @@ struct Catalog::Storage
     const Record &At(std::size_t index) const
     {
         return chunks[index / kRecordsPerChunk][index % kRecordsPerChunk];
+    }
+
+    const Media *MediaAt(std::size_t index) const
+    {
+        const std::size_t chunk = index / kRecordsPerChunk;
+        return chunk < media.size() && media[chunk] ? &media[chunk][index % kRecordsPerChunk]
+                                                    : nullptr;
+    }
+
+    // The media entry of a channel, made (zeroed) when its chunk has none.
+    Media *MakeMedia(std::size_t index)
+    {
+        const std::size_t chunk = index / kRecordsPerChunk;
+        if (media.size() <= chunk)
+            media.resize(chunk + 1u);
+        if (!media[chunk])
+        {
+            media[chunk].reset(new (std::nothrow) Media[kRecordsPerChunk]());
+            if (!media[chunk])
+                return nullptr;
+        }
+        return &media[chunk][index % kRecordsPerChunk];
     }
 
     // Copies a text, and the NUL after it, into the blocks.
@@ -593,6 +640,17 @@ ChannelView Catalog::operator[](std::size_t index) const
     view.http_user_agent = text(Field::http_user_agent);
     view.http_referrer = text(Field::http_referrer);
     view.source_line = record.source_line;
+    view.kind = static_cast<MediaKind>(record.kind);
+    if (const Media *media = storage.MediaAt(index))
+    {
+        view.duration_secs = media->duration_secs;
+        view.year = media->year;
+        view.rating_tenths = media->rating_tenths;
+        view.container_ext = storage.View(media->container_ext, media->container_ext_bytes);
+        view.series_id = storage.View(media->series_id, media->series_id_bytes);
+        view.season = media->season;
+        view.episode = media->episode;
+    }
     view.playback_status = static_cast<PlaybackStatus>(record.playback);
     if (view.playback_status != PlaybackStatus::unknown)
     {
@@ -682,6 +740,7 @@ bool Catalog::Add(const ChannelView &channel)
         record.bytes[field] = static_cast<std::uint16_t>(texts[field].size());
     }
     record.source_line = channel.source_line;
+    record.kind = static_cast<std::uint8_t>(channel.kind);
     record.urls = kNone;
     record.groups = kNone;
     for (const std::string_view url : channel.alternate_urls)
@@ -691,9 +750,30 @@ bool Catalog::Add(const ChannelView &channel)
         if (!storage.AddAlternate(&record.groups, group, true))
             return false;
 
+    Media media{};
+    const bool has_media = HasMedia(channel);
+    if (has_media)
+    {
+        if (channel.container_ext.size() > kMaxTextBytes ||
+            channel.series_id.size() > kMaxTextBytes ||
+            !storage.StoreShared(channel.container_ext, &media.container_ext) ||
+            !storage.StoreShared(channel.series_id, &media.series_id))
+            return false;
+        media.container_ext_bytes = static_cast<std::uint16_t>(channel.container_ext.size());
+        media.series_id_bytes = static_cast<std::uint16_t>(channel.series_id.size());
+        media.duration_secs = channel.duration_secs;
+        media.year = channel.year;
+        media.rating_tenths = channel.rating_tenths;
+        media.season = channel.season;
+        media.episode = channel.episode;
+    }
+
     const std::uint32_t index = static_cast<std::uint32_t>(storage.count);
-    if (!storage.ids.Add(KeyOf(channel.id), index))
+    Media *slot = has_media ? storage.MakeMedia(index) : nullptr;
+    if ((has_media && !slot) || !storage.ids.Add(KeyOf(channel.id), index))
         return false;
+    if (slot)
+        *slot = media;
     storage.At(index) = record;
     ++storage.count;
     if (channel.playback_status != PlaybackStatus::unknown)
@@ -770,8 +850,12 @@ std::size_t Catalog::MemoryBytes() const
     if (!storage_)
         return 0;
     const Storage &storage = *storage_;
+    const std::size_t media_chunks = static_cast<std::size_t>(
+        std::count_if(storage.media.begin(), storage.media.end(),
+                      [](const std::unique_ptr<Media[]> &chunk) { return chunk != nullptr; }));
     return storage.blocks.size() * kBlockBytes +
            storage.chunks.size() * kRecordsPerChunk * sizeof(Record) +
+           media_chunks * kRecordsPerChunk * sizeof(Media) +
            storage.alternates.capacity() * sizeof(Alternate) + storage.ids.Bytes() +
            (storage.shared.size() + storage.played.size()) * 64u;
 }
@@ -869,7 +953,10 @@ ChannelView::ChannelView(const Channel &channel)
       tvg_language(channel.tvg_language), http_user_agent(channel.http_user_agent),
       http_referrer(channel.http_referrer), source_line(channel.source_line),
       playback_status(channel.playback_status), playback_result(channel.playback_result),
-      playback_checked_unix(channel.playback_checked_unix)
+      playback_checked_unix(channel.playback_checked_unix), kind(channel.kind),
+      duration_secs(channel.duration_secs), year(channel.year),
+      rating_tenths(channel.rating_tenths), container_ext(channel.container_ext),
+      series_id(channel.series_id), season(channel.season), episode(channel.episode)
 {
 }
 
@@ -894,6 +981,14 @@ Channel ChannelView::Copy() const
     channel.playback_status = playback_status;
     channel.playback_result = playback_result;
     channel.playback_checked_unix = playback_checked_unix;
+    channel.kind = kind;
+    channel.duration_secs = duration_secs;
+    channel.year = year;
+    channel.rating_tenths = rating_tenths;
+    channel.container_ext = container_ext;
+    channel.series_id = series_id;
+    channel.season = season;
+    channel.episode = episode;
     return channel;
 }
 
@@ -1374,7 +1469,11 @@ struct M3uParser::State
         }
 
         const EntryMetadata &metadata = entry.metadata;
-        const std::string normalized_tvg_id = LowerTrimmed(metadata.tvg_id);
+        // Movies and episodes are never merged by tvg-id: providers reuse one id for every
+        // episode of a show, and each title is its own entry.
+        const std::string normalized_tvg_id = ClassifyPlaylistUrl(canonical_url) == MediaKind::live
+                                                  ? LowerTrimmed(metadata.tvg_id)
+                                                  : std::string();
         const std::uint64_t tvg_key = KeyOf(normalized_tvg_id);
         const std::uint64_t url_key = KeyOf(canonical_url);
         std::uint32_t existing = kNone;
@@ -1519,6 +1618,249 @@ Catalog ParseExtendedM3u(std::string_view input, std::uint64_t source_id, const 
     if (parser.Feed(input))
         parser.Finish();
     return catalog;
+}
+
+MediaKind ClassifyPlaylistUrl(std::string_view url)
+{
+    const std::size_t scheme = url.find("://");
+    if (scheme == std::string_view::npos)
+        return MediaKind::live;
+    std::string_view path = url.substr(scheme + 3u);
+    path = path.substr(0, path.find_first_of("?#"));
+    const std::size_t slash = path.find('/');
+    if (slash == std::string_view::npos)
+        return MediaKind::live;
+    path.remove_prefix(slash + 1u);
+    // Every segment but the last (the file name) is a directory.
+    while (true)
+    {
+        const std::size_t next = path.find('/');
+        if (next == std::string_view::npos)
+            return MediaKind::live;
+        const std::string segment = LowerTrimmed(path.substr(0, next));
+        if (segment == "movie" || segment == "movies")
+            return MediaKind::movie;
+        if (segment == "series")
+            return MediaKind::episode;
+        path.remove_prefix(next + 1u);
+    }
+}
+
+namespace
+{
+
+bool IsSeparator(char value)
+{
+    return value == ' ' || value == '-' || value == ':' || value == '|' || value == '.' ||
+           value == '_' || value == '\t';
+}
+
+std::string_view TrimSeparators(std::string_view value)
+{
+    while (!value.empty() && IsSeparator(value.front()))
+        value.remove_prefix(1);
+    while (!value.empty() && IsSeparator(value.back()))
+        value.remove_suffix(1);
+    return value;
+}
+
+std::size_t Digits(std::string_view text, std::size_t start, std::size_t maximum,
+                   std::uint32_t *value)
+{
+    std::size_t count = 0;
+    std::uint32_t parsed = 0;
+    while (start + count < text.size() && count < maximum &&
+           std::isdigit(static_cast<unsigned char>(text[start + count])))
+    {
+        parsed = parsed * 10u + static_cast<std::uint32_t>(text[start + count] - '0');
+        ++count;
+    }
+    if (count && value)
+        *value = parsed;
+    return count;
+}
+
+struct EpisodeName
+{
+    std::string_view show;
+    std::string_view title;
+    std::uint32_t season = 0;
+    std::uint32_t episode = 0;
+};
+
+// Finds "S01E02", "s1 e2" or "S01.E02" as a separate word: "Show S01 E02 Title".
+bool ParseEpisodeName(std::string_view name, EpisodeName *parsed)
+{
+    for (std::size_t index = 0; index + 3u < name.size(); ++index)
+    {
+        if ((name[index] != 'S' && name[index] != 's') ||
+            (index && std::isalnum(static_cast<unsigned char>(name[index - 1u]))))
+            continue;
+        std::uint32_t season = 0;
+        const std::size_t season_digits = Digits(name, index + 1u, 3u, &season);
+        if (!season_digits)
+            continue;
+        std::size_t cursor = index + 1u + season_digits;
+        while (cursor < name.size() && (name[cursor] == ' ' || name[cursor] == '.'))
+            ++cursor;
+        if (cursor >= name.size() || (name[cursor] != 'E' && name[cursor] != 'e'))
+            continue;
+        std::uint32_t episode = 0;
+        const std::size_t episode_digits = Digits(name, cursor + 1u, 4u, &episode);
+        if (!episode_digits)
+            continue;
+        cursor += 1u + episode_digits;
+        if (cursor < name.size() && std::isalnum(static_cast<unsigned char>(name[cursor])))
+            continue;
+        parsed->show = TrimSeparators(name.substr(0, index));
+        parsed->title = TrimSeparators(name.substr(cursor));
+        parsed->season = season;
+        parsed->episode = episode;
+        return !parsed->show.empty();
+    }
+    return false;
+}
+
+// "Dune (2021)" -> 2021. Only a year in parentheses counts: "Blade Runner 2049" has none.
+std::uint16_t YearInParentheses(std::string_view name)
+{
+    for (std::size_t index = 0; index + 5u < name.size(); ++index)
+    {
+        std::uint32_t year = 0;
+        if (name[index] == '(' && Digits(name, index + 1u, 4u, &year) == 4u &&
+            name[index + 5u] == ')' && year >= 1880u && year <= 2200u)
+            return static_cast<std::uint16_t>(year);
+    }
+    return 0;
+}
+
+// The lower-cased extension of a URL's file name: "mkv" for ".../42.mkv?token=x".
+std::string FileExtension(std::string_view url)
+{
+    const std::string_view path = url.substr(0, url.find_first_of("?#"));
+    const std::size_t slash = path.rfind('/');
+    const std::size_t dot = path.rfind('.');
+    if (dot == std::string_view::npos || (slash != std::string_view::npos && dot < slash))
+        return {};
+    const std::string extension = LowerTrimmed(path.substr(dot + 1u));
+    if (extension.empty() || extension.size() > 12u ||
+        !std::all_of(extension.begin(), extension.end(),
+                     [](unsigned char value) { return std::isalnum(value) != 0; }))
+        return {};
+    return extension;
+}
+
+} // namespace
+
+void SplitPlaylistLibrary(Catalog &&playlist, PlaylistLibrary *library)
+{
+    if (!library)
+        return;
+    *library = {};
+    const std::uint64_t source_id = playlist.source_id;
+    library->live.source_id = library->movies.source_id = library->series.source_id =
+        library->episodes.source_id = source_id;
+    std::unordered_map<std::string, std::size_t> series_by_key;
+    for (const ChannelView view : playlist)
+    {
+        Channel channel = view.Copy();
+        switch (ClassifyPlaylistUrl(channel.url))
+        {
+        case MediaKind::live:
+        case MediaKind::series:
+            if (library->live.size() >= kDefaultMaxChannels)
+            {
+                ++library->skipped;
+                break;
+            }
+            if (!library->live.Add(channel))
+                ++library->skipped;
+            break;
+        case MediaKind::movie:
+            if (library->movies.size() >= kDefaultMaxLibraryEntries)
+            {
+                ++library->skipped;
+                break;
+            }
+            channel.kind = MediaKind::movie;
+            channel.container_ext = FileExtension(channel.url);
+            channel.year = YearInParentheses(channel.name);
+            if (!library->movies.Add(channel))
+                ++library->skipped;
+            break;
+        case MediaKind::episode:
+        {
+            EpisodeName parsed;
+            const bool numbered = ParseEpisodeName(channel.name, &parsed);
+            // Without SxxEyy the playlist's group is the best guess at the show.
+            const std::string show(numbered                       ? parsed.show
+                                   : !channel.group_title.empty() ? channel.group_title
+                                                                  : channel.name);
+            const std::string key = LowerTrimmed(show);
+            auto found = series_by_key.find(key);
+            if (found == series_by_key.end())
+            {
+                if (library->series.size() >= kDefaultMaxLibraryEntries)
+                {
+                    ++library->skipped;
+                    break;
+                }
+                Channel series;
+                series.kind = MediaKind::series;
+                series.source_id = source_id;
+                series.id = StableId(source_id, "series:" + key);
+                series.series_id = "m3u-" + Hex(Fnv1a("series:" + key));
+                series.name = show;
+                series.group_title = channel.group_title.empty() ? "Series" : channel.group_title;
+                series.tvg_logo = channel.tvg_logo;
+                series.year = YearInParentheses(show);
+                // Never played: opening a series lists its episodes instead.
+                series.url = channel.url;
+                series.source_line = channel.source_line;
+                if (!library->series.Add(series))
+                {
+                    ++library->skipped;
+                    break;
+                }
+                found = series_by_key.emplace(key, library->series.size() - 1u).first;
+            }
+            if (library->episodes.size() >= kDefaultMaxLibraryEntries)
+            {
+                ++library->skipped;
+                break;
+            }
+            const ChannelView series = library->series[found->second];
+            channel.kind = MediaKind::episode;
+            channel.series_id = series.series_id;
+            channel.tvg_name = series.name;
+            channel.container_ext = FileExtension(channel.url);
+            if (numbered)
+            {
+                char label[32]{};
+                std::snprintf(label, sizeof(label), "S%02u E%02u",
+                              static_cast<unsigned>(parsed.season),
+                              static_cast<unsigned>(parsed.episode));
+                char group[32]{};
+                std::snprintf(group, sizeof(group), "Season %u",
+                              static_cast<unsigned>(parsed.season));
+                channel.season = static_cast<std::uint16_t>(std::min(parsed.season, 9999u));
+                channel.episode = static_cast<std::uint16_t>(std::min(parsed.episode, 9999u));
+                channel.name = parsed.title.empty()
+                                   ? std::string(label)
+                                   : std::string(label) + " " + std::string(parsed.title);
+                channel.group_title = group;
+            }
+            else
+            {
+                channel.group_title = "Episodes";
+            }
+            if (!library->episodes.Add(channel))
+                ++library->skipped;
+            break;
+        }
+        }
+    }
+    playlist.Clear();
 }
 
 } // namespace iptv

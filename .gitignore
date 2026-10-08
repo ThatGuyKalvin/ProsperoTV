@@ -29,3 +29,6 @@ dist/
 *.sprx
 *.prx
 *.pkg
+
+# A local, never-committed default for the provider panel (see include/iptv_panel_local.h.example).
+include/iptv_panel_local.h

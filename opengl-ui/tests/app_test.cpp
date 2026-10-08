@@ -89,9 +89,28 @@ std::string playlist_text()
     return text;
 }
 
+// The tabs, in their order on screen.
+enum : int
+{
+    kLive,
+    kMovies,
+    kSeries,
+    kFavorites,
+    kSources,
+    kSettings,
+    kAbout,
+};
+
 class AppTest : public ::testing::Test
 {
   protected:
+    // Turns the tabs with L1 and R1 until that one is on screen.
+    void to_tab(int tab)
+    {
+        for (int i = 0; i < 10 && app_->tab() != tab; ++i)
+            press(app_->tab() < tab ? Action::page_next : Action::page_prev);
+    }
+
     void SetUp() override
     {
         host::reset();
@@ -271,17 +290,20 @@ TEST_F(AppTest, PhoneBackDismissesSearchAndShouldersChangeTabs)
     EXPECT_FALSE(app_->searching());
     EXPECT_TRUE(model_->query().empty());
     frame(ptv::remote_input(IPTV_INPUT_R1));
-    EXPECT_EQ(app_->tab(), 1);
-    frame(ptv::remote_input(IPTV_INPUT_R1));
-    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_EQ(app_->tab(), kMovies);
+    for (int tab = kSeries; tab <= kSources; ++tab)
+    {
+        frame(ptv::remote_input(IPTV_INPUT_R1));
+        EXPECT_EQ(app_->tab(), tab);
+    }
     EXPECT_FALSE(app_->remote_search("Channel"));
     frame(ptv::remote_input(IPTV_INPUT_L1));
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), kFavorites);
 }
 
 TEST_F(AppTest, TheMenuComesBackWhereItWas)
 {
-    press(Action::page_next); // Favorites
+    press(Action::page_next); // Movies
     press(Action::page_prev);
     move(Direction::down);
     move(Direction::down);
@@ -304,20 +326,26 @@ TEST_F(AppTest, TheMenuComesBackWhereItWas)
 TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsHome)
 {
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), kMovies);
+    EXPECT_EQ(model_->shelf(), ptv::Shelf::movies);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), kSeries);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), kFavorites);
+    EXPECT_EQ(model_->shelf(), ptv::Shelf::live);
     EXPECT_EQ(model_->group(), ptv::Group::favorites);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_EQ(app_->tab(), kSources);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
-    EXPECT_EQ(model_->view.tab, 3);
+    EXPECT_EQ(app_->tab(), kSettings);
+    EXPECT_EQ(model_->view.tab, kSettings);
     press(Action::page_next); // About
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), kAbout);
     press(Action::page_next); // the last tab: nothing further
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), kAbout);
     // About only reads: nothing on it answers Cross.
     press(Action::confirm);
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), kAbout);
     EXPECT_FALSE(frame_.scene.empty());
     press(Action::back);
     EXPECT_EQ(app_->tab(), 0);
@@ -332,7 +360,7 @@ TEST_F(AppTest, SquareStarsAndTheFavoritesTabListsIt)
     EXPECT_FALSE(frame_.overlay.empty()); // the toast
     EXPECT_TRUE(frame_.glass);
 
-    press(Action::page_next);
+    to_tab(kFavorites);
     EXPECT_EQ(model_->visible_count(), 1u);
     EXPECT_EQ(model_->view.focused_channel, model_->channel(1).id);
     press(Action::west);
@@ -446,8 +474,7 @@ TEST_F(AppTest, AChannelThatFailedIsAskedAboutFirst)
 
 TEST_F(AppTest, ASourceIsSetUpFromItsRow)
 {
-    press(Action::page_next);
-    press(Action::page_next); // Sources
+    to_tab(kSources);
     move(Direction::down);    // Custom playlist
     press(Action::confirm);   // not set up: its form
     EXPECT_EQ(host::keyboard_requests(), 1);
@@ -468,10 +495,8 @@ TEST_F(AppTest, SettingsAreChangedAndReported)
 {
     press(Action::page_prev); // wraps to nothing: stays on Live TV
     EXPECT_EQ(app_->tab(), 0);
-    press(Action::page_next);
-    press(Action::page_next);
-    press(Action::page_next);
-    ASSERT_EQ(app_->tab(), 3);
+    to_tab(kSettings);
+    ASSERT_EQ(app_->tab(), kSettings);
     EXPECT_FALSE(app_->take_settings_changed());
     press(Action::confirm); // Reduce motion
     EXPECT_TRUE(app_->settings().reduced_motion);
@@ -493,9 +518,7 @@ TEST_F(AppTest, SettingsAreChangedAndReported)
 TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
 {
     app_->set_pairing_info("http://192.0.2.1:8888", "123456", 120, 1);
-    press(Action::page_next);
-    press(Action::page_next);
-    press(Action::page_next);
+    to_tab(kSettings);
     for (int i = 0; i < 4; ++i)
         move(Direction::down);
     EXPECT_FALSE(app_->take_pair_phone_requested());
@@ -504,18 +527,18 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     EXPECT_TRUE(app_->take_pair_phone_requested());
     EXPECT_FALSE(app_->take_pair_phone_requested());
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), kSettings);
     app_->set_pairing_info("http://192.0.2.1:8888", "", 0, 1);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_pair_phone_requested());
     press(Action::back);
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), kSettings);
     press(Action::confirm);
     EXPECT_TRUE(app_->pairing_open());
     app_->phone_connected();
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), kSettings);
     move(Direction::down);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_forget_phones_requested());
@@ -540,10 +563,8 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     EXPECT_FALSE(ptv::diag::enabled());
 
     // Off: the viewer moves about and nothing is written.
-    press(Action::page_next);
-    press(Action::page_next);
-    press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
+    to_tab(kSettings);
+    EXPECT_EQ(app_->tab(), kSettings);
     EXPECT_TRUE(g_traced.empty());
 
     // The switch is the last row of Settings.
@@ -560,9 +581,8 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     press(Action::page_prev);
     EXPECT_TRUE(traced("input L1 on Settings"));
     EXPECT_TRUE(traced("tab Sources"));
-    press(Action::page_prev);
-    press(Action::page_prev);
-    EXPECT_EQ(app_->tab(), 0);
+    to_tab(kLive);
+    EXPECT_EQ(app_->tab(), kLive);
     move(Direction::right);
     EXPECT_TRUE(traced("input right on Live TV"));
     press(Action::confirm);
@@ -573,9 +593,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
 
     // And off again, with its own last line.
     g_traced.clear();
-    press(Action::page_next);
-    press(Action::page_next);
-    press(Action::page_next);
+    to_tab(kSettings);
     for (int i = 0; i < 12; ++i)
         move(Direction::down);
     press(Action::confirm);
@@ -590,9 +608,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
 
 TEST_F(AppTest, PhoneVolumeUpdatesTheSliderWithoutOverwritingOtherSettings)
 {
-    press(Action::page_next);
-    press(Action::page_next);
-    press(Action::page_next);
+    to_tab(kSettings);
     press(Action::confirm); // reduce motion
     app_->take_settings_changed();
     app_->set_volume(30);
@@ -1248,7 +1264,7 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
             make_app();
         }
         ASSERT_GE(app_->tab(), 0);
-        ASSERT_LT(app_->tab(), 5);
+        ASSERT_LT(app_->tab(), kAbout + 1);
         ASSERT_FALSE(frame_.scene.empty());
     }
 }

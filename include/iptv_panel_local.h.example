@@ -1,0 +1,8 @@
+/* ProsperoTV - optional build-time default for the provider panel.
+ *
+ * Copy this file to include/iptv_panel_local.h (git ignores that name) and set the address
+ * of the panel whose dns.php lists your provider's servers. Builds made on this machine then
+ * offer that panel's server list without asking for its address. Any binary built this way
+ * contains the address as plain text. */
+
+#define IPTV_DEFAULT_PANEL_URL "https://panel.example/path/api/"

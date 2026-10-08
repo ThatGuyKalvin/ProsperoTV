@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace iptv {
 
@@ -18,6 +20,8 @@ inline constexpr std::size_t kDefaultMaxStoreBytes = 256u * 1024u * 1024u;
 inline constexpr std::size_t kDefaultMaxStoredRecordBytes = 32u * 1024u;
 inline constexpr char kDefaultPlaybackHistoryPath[] =
     "/download0/prosperotv-playback-history.sqlite3";
+
+inline constexpr std::size_t kLibraryMaxStoreBytes = kDefaultMaxStoreBytes;
 
 struct StoreLimits {
     std::size_t max_file_bytes = kDefaultMaxStoreBytes;
@@ -28,6 +32,14 @@ struct StoreLimits {
     std::size_t max_alternate_urls = kDefaultMaxAlternateUrls;
     std::size_t max_alternate_groups = kDefaultMaxAlternateGroups;
 };
+
+// Limits for Xtream movie and series catalogs.
+inline StoreLimits LibraryStoreLimits() {
+    StoreLimits limits;
+    limits.max_file_bytes = kLibraryMaxStoreBytes;
+    limits.max_channels = kDefaultMaxLibraryEntries;
+    return limits;
+}
 
 enum class StoreStatus : std::uint8_t {
     ok,

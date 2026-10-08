@@ -26,6 +26,9 @@ void set_keyboard_available(bool available);
 // The stand-in network: every download answers with this file, after this
 // long, or fails when `reachable` is false.
 void set_network(bool reachable, const std::string &playlist_path, unsigned delay_ms = 0);
+// From now on, an address that contains `fragment` is answered with the file
+// at `path` instead (the first route that matches wins).
+void set_network_route(const std::string &fragment, const std::string &path);
 // The size of the pieces a list arrives in (0: as on the console).
 void set_network_piece(std::size_t bytes);
 // How many downloads were asked for.

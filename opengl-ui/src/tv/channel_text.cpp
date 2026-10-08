@@ -214,8 +214,23 @@ const char *codec_label(const iptv::ChannelView &channel)
     return "";
 }
 
+namespace
+{
+
+// "2021": a year a film's or a series' name ends with, in round brackets.
+bool is_year_note(std::string_view note)
+{
+    return note.size() == 4 &&
+           std::all_of(note.begin(), note.end(), [](char c) { return c >= '0' && c <= '9'; }) &&
+           (note[0] == '1' || note[0] == '2');
+}
+
+} // namespace
+
 std::string display_name(const iptv::ChannelView &channel, std::vector<std::string> *notes)
 {
+    // A film or a series shows its year on its own: "(2021)" leaves its name.
+    const bool title = channel.kind != iptv::MediaKind::live;
     std::string_view rest = trimmed(channel.name);
     // Notes sit at the end, each in its own brackets: peel them off from the right.
     for (;;)
@@ -233,7 +248,7 @@ std::string display_name(const iptv::ChannelView &channel, std::vector<std::stri
         const std::string_view note = trimmed(rest.substr(at + 1, rest.size() - at - 2));
         // Only the playlist's notes go: a size in round brackets, any remark
         // in square ones. "(HD)" and "(Pluto TV)" are part of the name.
-        if (close == ')' && !is_size_note(note))
+        if (close == ')' && !is_size_note(note) && !(title && is_year_note(note)))
             break;
         if (notes != nullptr && close == ']' && !note.empty())
             notes->insert(notes->begin(), std::string(note));
@@ -246,9 +261,13 @@ std::string display_name(const iptv::ChannelView &channel, std::vector<std::stri
 
 std::string monogram(const iptv::ChannelView &channel)
 {
-    const std::string_view source = !channel.tvg_name.empty() ? channel.tvg_name
-                                    : !channel.tvg_id.empty() ? channel.tvg_id
-                                                              : channel.name;
+    // A film's initials are its title's, without the year beside it.
+    const std::string title =
+        channel.kind != iptv::MediaKind::live ? display_name(channel) : std::string();
+    const std::string_view source = !title.empty()              ? std::string_view(title)
+                                    : !channel.tvg_name.empty() ? channel.tvg_name
+                                    : !channel.tvg_id.empty()   ? channel.tvg_id
+                                                                : channel.name;
     std::string letters;
     bool word_start = true;
     for (const char raw : source)
@@ -295,6 +314,17 @@ std::string monogram(const iptv::ChannelView &channel)
 
 std::string category_of(const iptv::ChannelView &channel)
 {
+    // Providers file films as "EN | Action": the kind is after the language.
+    if (channel.kind != iptv::MediaKind::live)
+    {
+        const std::size_t bar = channel.group_title.rfind('|');
+        if (bar != std::string_view::npos)
+        {
+            const std::string_view kind = trimmed(channel.group_title.substr(bar + 1u));
+            if (!kind.empty())
+                return std::string(kind);
+        }
+    }
     const std::string first = first_value(channel.group_title);
     return first.empty() ? "Uncategorized" : first;
 }

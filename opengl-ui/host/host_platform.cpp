@@ -14,7 +14,10 @@
 #include <ctime>
 #include <mutex>
 #include <pthread.h>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -37,6 +40,8 @@ struct Network
     std::mutex mutex;
     bool reachable = false;
     std::string playlist_path;
+    // Addresses that contain the first text are answered with the second file.
+    std::vector<std::pair<std::string, std::string>> routes;
     unsigned delay_ms = 0;
     std::size_t piece_bytes = iptv::http::kListPieceBytes;
     std::atomic<bool> cancelled{false};
@@ -113,6 +118,12 @@ void set_network(bool reachable, const std::string &playlist_path, unsigned dela
     g_network.delay_ms = delay_ms;
 }
 
+void set_network_route(const std::string &fragment, const std::string &path)
+{
+    const std::lock_guard<std::mutex> lock(g_network.mutex);
+    g_network.routes.emplace_back(fragment, path);
+}
+
 void set_network_piece(std::size_t bytes)
 {
     const std::lock_guard<std::mutex> lock(g_network.mutex);
@@ -161,6 +172,10 @@ void reset()
     g_keyboard = {};
     g_update = {};
     set_network(false, "", 0);
+    {
+        const std::lock_guard<std::mutex> lock(g_network.mutex);
+        g_network.routes.clear();
+    }
     set_network_piece(0);
     g_network.fetches.store(0);
     g_network.delivered.store(0);
@@ -282,7 +297,7 @@ void network_cancel()
     g_network.cancelled.store(true);
 }
 
-iptv::http::FetchResult fetch(const char *, char *buffer, std::size_t capacity,
+iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacity,
                               std::size_t max_bytes, const iptv::http::RequestControl *control)
 {
     g_network.fetches.fetch_add(1);
@@ -293,6 +308,12 @@ iptv::http::FetchResult fetch(const char *, char *buffer, std::size_t capacity,
         const std::lock_guard<std::mutex> lock(g_network.mutex);
         reachable = g_network.reachable;
         playlist_path = g_network.playlist_path;
+        for (const auto &[fragment, path] : g_network.routes)
+            if (url != nullptr && std::strstr(url, fragment.c_str()) != nullptr)
+            {
+                playlist_path = path;
+                break;
+            }
         delay_ms = g_network.delay_ms;
     }
     if (capacity != 0)
@@ -320,9 +341,8 @@ iptv::http::FetchResult fetch(const char *, char *buffer, std::size_t capacity,
     return {iptv::http::Status::ok, bytes, 200, 0};
 }
 
-iptv::http::FetchResult fetch_list(const char *, const iptv::http::ListSink &sink,
-                                   std::size_t max_bytes,
-                                   const iptv::http::RequestControl *control)
+iptv::http::FetchResult fetch_list(const char *url, const iptv::http::ListSink &sink,
+                                   std::size_t max_bytes, const iptv::http::RequestControl *control)
 {
     g_network.fetches.fetch_add(1);
     bool reachable = false;
@@ -333,6 +353,12 @@ iptv::http::FetchResult fetch_list(const char *, const iptv::http::ListSink &sin
         const std::lock_guard<std::mutex> lock(g_network.mutex);
         reachable = g_network.reachable;
         playlist_path = g_network.playlist_path;
+        for (const auto &[fragment, path] : g_network.routes)
+            if (url != nullptr && std::strstr(url, fragment.c_str()) != nullptr)
+            {
+                playlist_path = path;
+                break;
+            }
         delay_ms = g_network.delay_ms;
         piece_bytes = g_network.piece_bytes;
     }

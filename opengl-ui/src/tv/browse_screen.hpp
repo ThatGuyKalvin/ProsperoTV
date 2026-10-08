@@ -12,6 +12,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ptv
 {
@@ -25,6 +26,7 @@ class BrowseScreen
         play,    // a channel was queued in the model
         search,  // open the search sheet
         go_live, // the favorites list is empty: go and find some
+        series,  // a series was opened in the model: show its episodes
     };
 
     explicit BrowseScreen(Shared &shared);
@@ -78,7 +80,16 @@ class BrowseScreen
     float appear(int order) const;
     void draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &channel, unsigned index,
                         bool favorite, float alpha, float dx) const;
+    void draw_title_text(ui::Canvas &canvas, const iptv::ChannelView &title, bool favorite,
+                         float alpha, float dx) const;
     void draw_hero_art(ui::Canvas &canvas, const iptv::ChannelView &channel, float alpha) const;
+    // The lists of the shelf on screen, as chips.
+    void set_chips();
+    int chip_of(Group group) const;
+    const char *shelf_title() const;
+    // The shelf's list could not be had, or is on its way.
+    bool list_failed() const;
+    bool list_busy() const;
     void draw_list_header(ui::Canvas &canvas) const;
     void draw_waiting(ui::Canvas &canvas) const;
 
@@ -87,7 +98,13 @@ class BrowseScreen
     ui::TabBar groups_;
     ui::EmptyState empty_;
     bool favorites_ = false;
+    std::vector<Group> chips_;
     Zone zone_ = Zone::grid;
+    // The title the focus rests on, and for how long: its details are asked
+    // for once it has stayed.
+    std::string dwell_id_;
+    float dwell_ = 0.0f;
+    bool dwell_asked_ = false;
     unsigned seen_revision_ = 0;
     bool keep_place_ = false; // the list is about to lose the focused channel: stay put
     std::string focused_id_;

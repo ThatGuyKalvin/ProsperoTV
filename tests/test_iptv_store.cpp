@@ -14,6 +14,7 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace
 {
@@ -42,6 +43,14 @@ iptv::Channel MakeChannel(std::size_t index, std::uint64_t source_id = kSourceId
     channel.http_user_agent = "ProsperoTV-test/1.0 (channel " + std::to_string(index) + ")";
     channel.http_referrer = "https://portal.example/watch/" + std::to_string(index);
     channel.source_line = static_cast<std::uint32_t>(index * 2u + 2u);
+    channel.kind = static_cast<iptv::MediaKind>(index % 4u);
+    channel.duration_secs = static_cast<std::uint32_t>(index % 5000u);
+    channel.year = static_cast<std::uint16_t>(1990u + index % 30u);
+    channel.rating_tenths = static_cast<std::uint16_t>(index % 101u);
+    channel.container_ext = "mkv";
+    channel.series_id = "series-" + std::to_string(index);
+    channel.season = static_cast<std::uint16_t>(index % 20u);
+    channel.episode = static_cast<std::uint16_t>(index % 50u);
     return channel;
 }
 
@@ -71,6 +80,14 @@ void ExpectChannelEquals(const iptv::ChannelView &expected, const iptv::ChannelV
     EXPECT_EQ(actual.http_user_agent, expected.http_user_agent);
     EXPECT_EQ(actual.http_referrer, expected.http_referrer);
     EXPECT_EQ(actual.source_line, expected.source_line);
+    EXPECT_EQ(actual.kind, expected.kind);
+    EXPECT_EQ(actual.duration_secs, expected.duration_secs);
+    EXPECT_EQ(actual.year, expected.year);
+    EXPECT_EQ(actual.rating_tenths, expected.rating_tenths);
+    EXPECT_EQ(actual.container_ext, expected.container_ext);
+    EXPECT_EQ(actual.series_id, expected.series_id);
+    EXPECT_EQ(actual.season, expected.season);
+    EXPECT_EQ(actual.episode, expected.episode);
     EXPECT_EQ(actual.playback_status, expected.playback_status);
     EXPECT_EQ(actual.playback_result, expected.playback_result);
     EXPECT_EQ(actual.playback_checked_unix, expected.playback_checked_unix);
@@ -113,6 +130,17 @@ class IptvStoreTest : public ::testing::Test
         ASSERT_TRUE(output.good());
     }
 
+    static void RunSql(const fs::path &path, const char *sql)
+    {
+        sqlite3 *database = nullptr;
+        ASSERT_EQ(sqlite3_open(path.string().c_str(), &database), SQLITE_OK);
+        char *message = nullptr;
+        EXPECT_EQ(sqlite3_exec(database, sql, nullptr, nullptr, &message), SQLITE_OK)
+            << (message ? message : "");
+        sqlite3_free(message);
+        sqlite3_close(database);
+    }
+
     fs::path root_;
     fs::path path_;
     fs::path history_path_;
@@ -139,6 +167,25 @@ TEST_F(IptvStoreTest, RoundTripsEveryChannelFieldAlternatesAndHttpHeaders)
     EXPECT_EQ(load_report.records, actual.size());
     EXPECT_EQ(load_report.bytes, save_report.bytes);
     EXPECT_GT(load_report.saved_unix, 0u);
+}
+
+TEST_F(IptvStoreTest, KeepsPlaylistOrderWhenIdsSortDifferently)
+{
+    // Rows are read in id order and put back in playlist order.
+    iptv::Catalog expected;
+    expected.source_id = kSourceId;
+    for (std::size_t index = 0; index < 40; ++index)
+    {
+        iptv::Channel channel = MakeChannel(index);
+        channel.id = "id-" + std::to_string(1000 - index * 7 % 41);
+        ASSERT_TRUE(expected.Add(channel));
+    }
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), expected), iptv::StoreStatus::ok);
+    iptv::Catalog loaded;
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &loaded), iptv::StoreStatus::ok);
+    ASSERT_EQ(loaded.size(), expected.size());
+    for (std::size_t index = 0; index < expected.size(); ++index)
+        ExpectChannelEquals(expected[index], loaded[index]);
 }
 
 TEST_F(IptvStoreTest, RestoresAValidBackupWhenPrimaryIsCorrupt)
@@ -314,6 +361,104 @@ TEST_F(IptvStoreTest, PersistsPlaybackResultsAcrossCatalogRefreshesAndSources)
               iptv::StoreStatus::ok);
     EXPECT_EQ(other_source[0].playback_status, iptv::PlaybackStatus::unknown);
 }
+
+TEST_F(IptvStoreTest, LoadsVersionOneCachesWithDefaultMediaFields)
+{
+    // Exactly what the previous release wrote: no movie or series columns.
+    RunSql(path_,
+           "CREATE TABLE metadata(key TEXT PRIMARY KEY NOT NULL,value INTEGER NOT NULL) "
+           "WITHOUT ROWID;"
+           "CREATE TABLE channels(id TEXT PRIMARY KEY NOT NULL,source_id INTEGER NOT NULL,"
+           "position INTEGER NOT NULL,source_line INTEGER NOT NULL,name TEXT NOT NULL,"
+           "url TEXT NOT NULL,tvg_id TEXT NOT NULL,tvg_name TEXT NOT NULL,tvg_logo TEXT NOT NULL,"
+           "group_title TEXT NOT NULL,tvg_country TEXT NOT NULL,tvg_language TEXT NOT NULL,"
+           "user_agent TEXT NOT NULL,referrer TEXT NOT NULL) WITHOUT ROWID;"
+           "CREATE UNIQUE INDEX channels_position ON channels(position);"
+           "CREATE TABLE alternate_urls(channel_id TEXT NOT NULL,position INTEGER NOT NULL,"
+           "url TEXT NOT NULL,PRIMARY KEY(channel_id,position)) WITHOUT ROWID;"
+           "CREATE TABLE alternate_groups(channel_id TEXT NOT NULL,position INTEGER NOT NULL,"
+           "value TEXT NOT NULL,PRIMARY KEY(channel_id,position)) WITHOUT ROWID;"
+           "INSERT INTO metadata VALUES('source_id',77),('saved_unix',1700000000);"
+           "INSERT INTO channels VALUES('old-1',77,0,4,'Old Channel','https://old.example/1.m3u8',"
+           "'','','','News','','','','');"
+           "INSERT INTO alternate_urls VALUES('old-1',0,'https://old.example/backup');"
+           "PRAGMA user_version=1;");
+
+    iptv::Catalog loaded;
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &loaded), iptv::StoreStatus::ok);
+    EXPECT_EQ(loaded.source_id, 77u);
+    ASSERT_EQ(loaded.size(), 1u);
+    const iptv::ChannelView channel = loaded[0];
+    EXPECT_EQ(channel.name, "Old Channel");
+    EXPECT_EQ(channel.alternate_urls, std::vector<std::string>{"https://old.example/backup"});
+    EXPECT_EQ(channel.kind, iptv::MediaKind::live);
+    EXPECT_EQ(channel.duration_secs, 0u);
+    EXPECT_EQ(channel.year, 0u);
+    EXPECT_TRUE(channel.container_ext.empty());
+    EXPECT_TRUE(channel.series_id.empty());
+
+    // Saving rewrites the cache in the current format and keeps it loadable.
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), loaded), iptv::StoreStatus::ok);
+    iptv::Catalog reloaded;
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &reloaded), iptv::StoreStatus::ok);
+    ExpectChannelEquals(channel, reloaded[0]);
+}
+
+TEST_F(IptvStoreTest, RejectsUnknownSchemaVersions)
+{
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), MakeCatalog(1)), iptv::StoreStatus::ok);
+    RunSql(path_, "PRAGMA user_version=4;");
+    iptv::Catalog loaded;
+    EXPECT_EQ(iptv::LoadCatalog(path_.string(), &loaded), iptv::StoreStatus::unsupported_version);
+}
+
+TEST_F(IptvStoreTest, RejectsOutOfRangeMediaFieldsOnSaveAndLoad)
+{
+    const auto expect_unsaved = [&](auto mutate)
+    {
+        iptv::Channel changed = MakeChannel(1, kSourceId);
+        mutate(changed);
+        iptv::Catalog catalog = MakeCatalog(1);
+        EXPECT_TRUE(catalog.Add(changed));
+        iptv::StoreReport report;
+        EXPECT_EQ(iptv::SaveCatalog(path_.string(), catalog, {}, &report),
+                  iptv::StoreStatus::invalid_argument);
+        EXPECT_EQ(report.status, iptv::StoreStatus::invalid_argument);
+        EXPECT_FALSE(fs::exists(path_));
+        EXPECT_FALSE(fs::exists(StagingPath()));
+    };
+    expect_unsaved([](iptv::Channel &channel) { channel.container_ext = "thirteenchars"; });
+    expect_unsaved([](iptv::Channel &channel) { channel.series_id.assign(65u, 's'); });
+    expect_unsaved([](iptv::Channel &channel) { channel.kind = static_cast<iptv::MediaKind>(9); });
+    expect_unsaved([](iptv::Channel &channel) { channel.year = 3000u; });
+    expect_unsaved([](iptv::Channel &channel) { channel.rating_tenths = 101u; });
+    expect_unsaved([](iptv::Channel &channel) { channel.duration_secs = 24u * 3600u + 1u; });
+
+    // A damaged file with an impossible value is reported as corrupt, not clamped.
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), MakeCatalog(2)), iptv::StoreStatus::ok);
+    RunSql(path_, "UPDATE channels SET kind=9 WHERE position=1;");
+    iptv::Catalog loaded;
+    EXPECT_EQ(iptv::LoadCatalog(path_.string(), &loaded), iptv::StoreStatus::corrupt);
+}
+
+TEST_F(IptvStoreTest, LibraryLimitsHoldAWholeLibrary)
+{
+    const iptv::StoreLimits library = iptv::LibraryStoreLimits();
+    EXPECT_GE(library.max_channels, iptv::kDefaultMaxLibraryEntries);
+    EXPECT_GE(library.max_file_bytes, iptv::kDefaultMaxStoreBytes);
+
+    const iptv::Catalog catalog = MakeCatalog(3);
+    iptv::StoreLimits small = library;
+    small.max_channels = 2;
+    EXPECT_EQ(iptv::SaveCatalog(path_.string(), catalog, small),
+              iptv::StoreStatus::invalid_argument);
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), catalog, library), iptv::StoreStatus::ok);
+    iptv::Catalog loaded;
+    EXPECT_EQ(iptv::LoadCatalog(path_.string(), &loaded, small), iptv::StoreStatus::corrupt);
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &loaded, library), iptv::StoreStatus::ok);
+    ExpectChannelEquals(catalog.back(), loaded.back());
+}
+
 TEST_F(IptvStoreTest, RoundTripsMoreThanAHundredThousandChannels)
 {
     constexpr std::size_t kChannelCount = 120000u;

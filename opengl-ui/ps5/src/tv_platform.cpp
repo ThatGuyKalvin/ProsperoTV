@@ -52,14 +52,31 @@ std::uint64_t unix_time()
     return now > 0 ? static_cast<std::uint64_t>(now) : 0u;
 }
 
+// The channel list and the library download on threads of their own, at the
+// same time: the network stays up until the last of them is done with it.
+namespace
+{
+pthread_mutex_t g_network_lock = PTHREAD_MUTEX_INITIALIZER;
+unsigned g_network_users = 0;
+} // namespace
+
 iptv::http::Status network_init()
 {
-    return iptv::http::NetworkInit();
+    pthread_mutex_lock(&g_network_lock);
+    const iptv::http::Status status =
+        g_network_users != 0 ? iptv::http::Status::ok : iptv::http::NetworkInit();
+    if (status == iptv::http::Status::ok)
+        ++g_network_users;
+    pthread_mutex_unlock(&g_network_lock);
+    return status;
 }
 
 void network_shutdown()
 {
-    iptv::http::NetworkShutdown();
+    pthread_mutex_lock(&g_network_lock);
+    if (g_network_users != 0 && --g_network_users == 0)
+        iptv::http::NetworkShutdown();
+    pthread_mutex_unlock(&g_network_lock);
 }
 
 void network_cancel()

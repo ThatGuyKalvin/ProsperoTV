@@ -21,6 +21,8 @@ inline constexpr std::size_t kDefaultMaxUrlBytes = 4096u;
 inline constexpr std::size_t kDefaultMaxFieldBytes = 2048u;
 // A quarter of a million: more than the largest providers list as live channels.
 inline constexpr std::size_t kDefaultMaxChannels = 250000u;
+// Xtream movie and series libraries.
+inline constexpr std::size_t kDefaultMaxLibraryEntries = 120000u;
 inline constexpr std::size_t kDefaultMaxAlternateUrls = 3u;
 inline constexpr std::size_t kDefaultMaxAlternateGroups = 4u;
 inline constexpr std::size_t kDefaultMaxDiagnostics = 128u;
@@ -73,6 +75,13 @@ enum class PlaybackStatus : std::uint8_t {
     failed,
 };
 
+enum class MediaKind : std::uint8_t {
+    live,
+    movie,
+    series,
+    episode,
+};
+
 // One channel with texts of its own: what a test or a form fills in. A catalog
 // does not hold these (see Catalog); it reads them through a ChannelView.
 struct Channel {
@@ -94,6 +103,31 @@ struct Channel {
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
     std::uint64_t playback_checked_unix = 0;
+    // Xtream VOD and series metadata; unused for live channels.
+    MediaKind kind = MediaKind::live;
+    std::uint32_t duration_secs = 0;
+    std::uint16_t year = 0;
+    std::uint16_t rating_tenths = 0;
+    std::string container_ext;
+    std::string series_id;
+    std::uint16_t season = 0;
+    std::uint16_t episode = 0;
+};
+
+// Descriptive details for a movie or series, fetched from the provider when the title is
+// selected. Text fields are bounded and may be empty.
+struct MediaDetails {
+    std::string plot;
+    std::string genre;
+    std::string cast;
+    std::string director;
+    std::string release_date;
+    std::uint32_t duration_secs = 0;
+    std::uint16_t rating_tenths = 0;
+    // The video as the provider measured it (Xtream "info.video"); 0 / empty when unknown.
+    std::uint32_t video_width = 0;
+    std::uint32_t video_height = 0;
+    std::string video_codec;
 };
 
 class Catalog;
@@ -171,6 +205,14 @@ struct ChannelView {
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
     std::uint64_t playback_checked_unix = 0;
+    MediaKind kind = MediaKind::live;
+    std::uint32_t duration_secs = 0;
+    std::uint16_t year = 0;
+    std::uint16_t rating_tenths = 0;
+    std::string_view container_ext;
+    std::string_view series_id;
+    std::uint16_t season = 0;
+    std::uint16_t episode = 0;
 
     ChannelView() = default;
     // A Channel is read like any other: this is meant to be implicit.
@@ -318,6 +360,24 @@ Catalog ParseExtendedM3u(std::string_view input,
                          std::uint64_t source_id,
                          const ParseLimits& limits = ParseLimits{},
                          ParseReport* report = nullptr);
+
+// Sorts a playlist entry by its stream URL, as IPTV Smarters does: a /movie/ or /movies/
+// directory marks a movie and /series/ an episode (the layout of Xtream panels' M3U export).
+// Everything else is live. MediaKind::series is never returned.
+MediaKind ClassifyPlaylistUrl(std::string_view url);
+
+struct PlaylistLibrary {
+    Catalog live;
+    Catalog movies;
+    Catalog series;    // one entry per show, keyed by series_id
+    Catalog episodes;  // every episode, each carrying its show's series_id
+    std::size_t skipped = 0;  // entries over the live or library caps
+};
+
+// Splits a parsed playlist into live channels, movies, and series with their episodes.
+// Episodes are grouped into shows by the name before "SxxEyy" in their titles, or by
+// group-title when a title has no episode number.
+void SplitPlaylistLibrary(Catalog&& playlist, PlaylistLibrary* library);
 
 }  // namespace iptv
 

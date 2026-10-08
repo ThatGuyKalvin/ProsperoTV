@@ -4,6 +4,8 @@
 
 #include "iptv_xtream.h"
 
+#include "iptv_json.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -11,6 +13,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #ifdef _WIN32
@@ -23,400 +26,51 @@ namespace
 {
 
 constexpr char kCredentialsMagic[] = "PROSPEROTV-XTREAM-1";
-constexpr std::size_t kMaxJsonDepth = 24u;
 constexpr std::size_t kMaxCategories = 4096u;
 
-bool EqualsCi(std::string_view left, std::string_view right)
-{
-    if (left.size() != right.size())
-        return false;
-    for (std::size_t index = 0; index < left.size(); ++index)
-        if (std::tolower(static_cast<unsigned char>(left[index])) !=
-            std::tolower(static_cast<unsigned char>(right[index])))
-            return false;
-    return true;
-}
-
-bool SafeCredential(std::string_view value, std::size_t maximum)
-{
-    if (value.empty() || value.size() > maximum)
-        return false;
-    for (const unsigned char byte : value)
-        if (byte < 0x20u || byte == 0x7fu)
-            return false;
-    return true;
-}
-
-bool EndsWithCi(std::string_view value, std::string_view suffix)
-{
-    return value.size() >= suffix.size() &&
-           EqualsCi(value.substr(value.size() - suffix.size()), suffix);
-}
-
-bool PercentEncode(std::string_view input, std::string *output)
-{
-    if (!output)
-        return false;
-    static constexpr char digits[] = "0123456789ABCDEF";
-    output->clear();
-    output->reserve(input.size() * 3u);
-    for (const unsigned char byte : input)
-    {
-        if (std::isalnum(byte) || byte == '-' || byte == '_' || byte == '.' || byte == '~')
-        {
-            output->push_back(static_cast<char>(byte));
-        }
-        else
-        {
-            output->push_back('%');
-            output->push_back(digits[byte >> 4u]);
-            output->push_back(digits[byte & 0x0fu]);
-        }
-    }
-    return true;
-}
+using json::EndsWithCi;
+using json::EqualsCi;
+using json::JsonReader;
+using json::ParseRatingTenths;
+using json::ParseUnsigned;
+using json::ParseYear;
+using json::PercentEncode;
+using json::ReadArray;
+using json::ReadArrayResponse;
+using json::ReadObject;
+using json::SafeCredential;
+using json::ValidExtension;
 
 XtreamStatus ReplaceFile(const std::string &temporary, const std::string &path)
 {
-#ifdef _WIN32
-    return MoveFileExA(temporary.c_str(), path.c_str(),
-                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
-               ? XtreamStatus::ok
-               : XtreamStatus::io_error;
-#else
-    return std::rename(temporary.c_str(), path.c_str()) == 0 ? XtreamStatus::ok
-                                                             : XtreamStatus::io_error;
-#endif
-}
-
-int HexDigit(char value)
-{
-    if (value >= '0' && value <= '9')
-        return value - '0';
-    if (value >= 'a' && value <= 'f')
-        return value - 'a' + 10;
-    if (value >= 'A' && value <= 'F')
-        return value - 'A' + 10;
-    return -1;
-}
-
-bool AppendUtf8(std::uint32_t codepoint, std::string *output, std::size_t maximum)
-{
-    if (!output)
-        return true;
-    if (codepoint < 0x20u || codepoint > 0x10ffffu ||
-        (codepoint >= 0xd800u && codepoint <= 0xdfffu))
-        return false;
-    const std::size_t bytes = codepoint < 0x80u      ? 1u
-                              : codepoint < 0x800u   ? 2u
-                              : codepoint < 0x10000u ? 3u
-                                                     : 4u;
-    if (output->size() + bytes > maximum)
-        return false;
-    char encoded[4]{};
-    if (bytes == 1u)
-        encoded[0] = static_cast<char>(codepoint);
-    else if (bytes == 2u)
-    {
-        encoded[0] = static_cast<char>(0xc0u | (codepoint >> 6u));
-        encoded[1] = static_cast<char>(0x80u | (codepoint & 0x3fu));
-    }
-    else if (bytes == 3u)
-    {
-        encoded[0] = static_cast<char>(0xe0u | (codepoint >> 12u));
-        encoded[1] = static_cast<char>(0x80u | ((codepoint >> 6u) & 0x3fu));
-        encoded[2] = static_cast<char>(0x80u | (codepoint & 0x3fu));
-    }
-    else
-    {
-        encoded[0] = static_cast<char>(0xf0u | (codepoint >> 18u));
-        encoded[1] = static_cast<char>(0x80u | ((codepoint >> 12u) & 0x3fu));
-        encoded[2] = static_cast<char>(0x80u | ((codepoint >> 6u) & 0x3fu));
-        encoded[3] = static_cast<char>(0x80u | (codepoint & 0x3fu));
-    }
-    output->append(encoded, bytes);
-    return true;
-}
-
-class JsonReader
-{
-  public:
-    explicit JsonReader(std::string_view input) : input_(input)
-    {
-    }
-
-    void Whitespace()
-    {
-        while (position_ < input_.size() &&
-               std::isspace(static_cast<unsigned char>(input_[position_])))
-            ++position_;
-    }
-
-    char Peek()
-    {
-        Whitespace();
-        return position_ < input_.size() ? input_[position_] : '\0';
-    }
-
-    bool Consume(char expected)
-    {
-        Whitespace();
-        if (position_ >= input_.size() || input_[position_] != expected)
-            return false;
-        ++position_;
-        return true;
-    }
-
-    bool Finished()
-    {
-        Whitespace();
-        return position_ == input_.size();
-    }
-
-    bool String(std::string *output, std::size_t maximum = kDefaultMaxFieldBytes)
-    {
-        Whitespace();
-        if (position_ >= input_.size() || input_[position_++] != '"')
-            return false;
-        if (output)
-            output->clear();
-        while (position_ < input_.size())
-        {
-            const unsigned char byte = static_cast<unsigned char>(input_[position_++]);
-            if (byte == '"')
-                return true;
-            if (byte < 0x20u)
-                return false;
-            if (byte != '\\')
-            {
-                if (output)
-                {
-                    if (output->size() >= maximum)
-                        return false;
-                    output->push_back(static_cast<char>(byte));
-                }
-                continue;
-            }
-            if (position_ >= input_.size())
-                return false;
-            const char escaped = input_[position_++];
-            char simple = '\0';
-            switch (escaped)
-            {
-            case '"':
-            case '\\':
-            case '/':
-                simple = escaped;
-                break;
-            case 'b':
-                simple = ' ';
-                break;
-            case 'f':
-                simple = ' ';
-                break;
-            case 'n':
-                simple = ' ';
-                break;
-            case 'r':
-                simple = ' ';
-                break;
-            case 't':
-                simple = ' ';
-                break;
-            case 'u':
-            {
-                std::uint32_t codepoint = 0;
-                if (!UnicodeEscape(&codepoint))
-                    return false;
-                if (codepoint >= 0xd800u && codepoint <= 0xdbffu)
-                {
-                    if (position_ + 2u > input_.size() || input_[position_] != '\\' ||
-                        input_[position_ + 1u] != 'u')
-                        return false;
-                    position_ += 2u;
-                    std::uint32_t low = 0;
-                    if (!UnicodeEscape(&low) || low < 0xdc00u || low > 0xdfffu)
-                        return false;
-                    codepoint = 0x10000u + ((codepoint - 0xd800u) << 10u) + (low - 0xdc00u);
-                }
-                else if (codepoint >= 0xdc00u && codepoint <= 0xdfffu)
-                {
-                    return false;
-                }
-                if (!AppendUtf8(codepoint, output, maximum))
-                    return false;
-                continue;
-            }
-            default:
-                return false;
-            }
-            if (output)
-            {
-                if (output->size() >= maximum)
-                    return false;
-                output->push_back(simple);
-            }
-        }
-        return false;
-    }
-
-    bool Scalar(std::string *output)
-    {
-        Whitespace();
-        const std::size_t start = position_;
-        while (position_ < input_.size())
-        {
-            const char value = input_[position_];
-            if (value == ',' || value == ']' || value == '}' ||
-                std::isspace(static_cast<unsigned char>(value)))
-                break;
-            ++position_;
-        }
-        if (position_ == start)
-            return false;
-        if (output)
-            *output = std::string(input_.substr(start, position_ - start));
-        return true;
-    }
-
-    bool StringOrScalar(std::string *output, std::size_t maximum = kDefaultMaxFieldBytes)
-    {
-        if (Peek() == '"')
-            return String(output, maximum);
-        if (!Scalar(output))
-            return false;
-        return !output || output->size() <= maximum;
-    }
-
-    bool SkipValue(std::size_t depth = 0)
-    {
-        if (depth >= kMaxJsonDepth)
-            return false;
-        const char value = Peek();
-        if (value == '"')
-            return String(nullptr);
-        if (value == '{')
-        {
-            if (!Consume('{'))
-                return false;
-            if (Consume('}'))
-                return true;
-            for (;;)
-            {
-                if (!String(nullptr) || !Consume(':') || !SkipValue(depth + 1u))
-                    return false;
-                if (Consume('}'))
-                    return true;
-                if (!Consume(','))
-                    return false;
-            }
-        }
-        if (value == '[')
-        {
-            if (!Consume('['))
-                return false;
-            if (Consume(']'))
-                return true;
-            for (;;)
-            {
-                if (!SkipValue(depth + 1u))
-                    return false;
-                if (Consume(']'))
-                    return true;
-                if (!Consume(','))
-                    return false;
-            }
-        }
-        return Scalar(nullptr);
-    }
-
-  private:
-    bool UnicodeEscape(std::uint32_t *codepoint)
-    {
-        if (!codepoint || position_ + 4u > input_.size())
-            return false;
-        std::uint32_t value = 0;
-        for (unsigned index = 0; index < 4u; ++index)
-        {
-            const int digit = HexDigit(input_[position_++]);
-            if (digit < 0)
-                return false;
-            value = (value << 4u) | static_cast<std::uint32_t>(digit);
-        }
-        *codepoint = value;
-        return true;
-    }
-
-    std::string_view input_;
-    std::size_t position_ = 0;
-};
-
-template <typename Handler> bool ReadObject(JsonReader *reader, Handler handler)
-{
-    if (!reader || !reader->Consume('{'))
-        return false;
-    if (reader->Consume('}'))
-        return true;
-    for (;;)
-    {
-        std::string key;
-        if (!reader->String(&key, 128u) || !reader->Consume(':') || !handler(key, reader))
-            return false;
-        if (reader->Consume('}'))
-            return true;
-        if (!reader->Consume(','))
-            return false;
-    }
-}
-
-template <typename Handler> bool ReadArray(JsonReader *reader, Handler handler)
-{
-    if (!reader || !reader->Consume('['))
-        return false;
-    if (reader->Consume(']'))
-        return true;
-    for (;;)
-    {
-        if (!handler(reader))
-            return false;
-        if (reader->Consume(']'))
-            return true;
-        if (!reader->Consume(','))
-            return false;
-    }
-}
-
-template <typename Handler> bool ReadArrayResponse(JsonReader *reader, Handler handler, bool *found)
-{
-    if (!reader || !found)
-        return false;
-    *found = false;
-    if (reader->Peek() == '[')
-    {
-        *found = true;
-        return ReadArray(reader, handler) && reader->Finished();
-    }
-    if (reader->Peek() != '{')
-        return false;
-    const bool valid = ReadObject(reader,
-                                  [&](const std::string &key, JsonReader *value)
-                                  {
-                                      if (key == "data" && value->Peek() == '[')
-                                      {
-                                          *found = true;
-                                          return ReadArray(value, handler);
-                                      }
-                                      return value->SkipValue();
-                                  });
-    return valid && reader->Finished();
+    return json::ReplaceFile(temporary, path) ? XtreamStatus::ok : XtreamStatus::io_error;
 }
 
 std::string_view CategoryName(const std::unordered_map<std::string, std::string> &categories,
-                              const std::string &id)
+                              const std::string &id, std::string_view fallback = "Live TV")
 {
     const auto found = categories.find(id);
-    return found == categories.end() || found->second.empty() ? std::string_view("Live TV")
+    return found == categories.end() || found->second.empty() ? fallback
                                                               : std::string_view(found->second);
+}
+
+bool BuildXtreamMediaUrl(const XtreamCredentials &credentials, std::string_view section,
+                         std::string_view stream_id, std::string_view extension,
+                         std::string_view default_extension, std::string *url)
+{
+    if (!url || !ValidateXtreamCredentials(credentials) || stream_id.empty() ||
+        stream_id.size() > 64u || !ValidExtension(extension))
+        return false;
+    const std::string_view selected = extension.empty() ? default_extension : extension;
+    std::string username;
+    std::string password;
+    std::string stream;
+    PercentEncode(credentials.username, &username);
+    PercentEncode(credentials.password, &password);
+    PercentEncode(stream_id, &stream);
+    *url = credentials.server_url + "/" + std::string(section) + "/" + username + "/" + password +
+           "/" + stream + "." + std::string(selected);
+    return url->size() <= kDefaultMaxUrlBytes;
 }
 
 std::string StableXtreamChannelId(std::uint64_t source_id, std::string_view stream_id)
@@ -524,7 +178,7 @@ class ListSplitter
                 }
                 else if (value == '{' || value == '[')
                 {
-                    if (++depth_ > kMaxJsonDepth)
+                    if (++depth_ > json::kMaxJsonDepth)
                         return Fail();
                 }
                 else if (value == '}' || value == ']')
@@ -735,11 +389,47 @@ bool BuildXtreamApiUrl(const XtreamCredentials &credentials, std::string_view ac
     return url->size() <= kDefaultMaxUrlBytes;
 }
 
+bool BuildXtreamApiUrlWithParam(const XtreamCredentials &credentials, std::string_view action,
+                                std::string_view key, std::string_view value, std::string *url)
+{
+    if (key.empty() || key.size() > 32u || value.empty() || value.size() > 64u ||
+        !std::all_of(key.begin(), key.end(),
+                     [](unsigned char c) { return std::isalnum(c) != 0 || c == '_'; }))
+        return false;
+    std::string base;
+    std::string encoded_value;
+    if (!BuildXtreamApiUrl(credentials, action, &base))
+        return false;
+    PercentEncode(value, &encoded_value);
+    if (!url)
+        return false;
+    *url = base + "&" + std::string(key) + "=" + encoded_value;
+    return url->size() <= kDefaultMaxUrlBytes;
+}
+
 bool BuildXtreamLiveUrl(const XtreamCredentials &credentials, std::string_view stream_id,
                         std::string_view extension, std::string *url)
 {
     return url && ValidateXtreamCredentials(credentials) &&
            LiveUrlFromPrefix(LiveUrlPrefix(credentials), stream_id, extension, url);
+}
+
+bool BuildXtreamVodUrl(const XtreamCredentials &credentials, std::string_view stream_id,
+                       std::string_view extension, std::string *url)
+{
+    return BuildXtreamMediaUrl(credentials, "movie", stream_id, extension, "m3u8", url);
+}
+
+bool BuildXtreamEpisodeUrl(const XtreamCredentials &credentials, std::string_view episode_id,
+                           std::string_view extension, std::string *url)
+{
+    return BuildXtreamMediaUrl(credentials, "series", episode_id, extension, "m3u8", url);
+}
+
+bool XtreamContainerStreamable(std::string_view extension)
+{
+    return extension.empty() || EqualsCi(extension, "ts") || EqualsCi(extension, "m3u8") ||
+           EqualsCi(extension, "m3u");
 }
 
 XtreamStatus SaveXtreamCredentials(const std::string &path, const XtreamCredentials &credentials)
@@ -1074,6 +764,625 @@ XtreamStatus ParseXtreamLiveStreams(std::string_view json, const XtreamCredentia
     return parser.Finish();
 }
 
+namespace
+{
+
+std::string LibraryId(std::uint64_t source_id, std::string_view kind, std::string_view id)
+{
+    return StableXtreamChannelId(source_id, std::string(kind) + ":" + std::string(id));
+}
+
+std::unordered_map<std::string, std::string>
+CategoryNames(const std::vector<XtreamCategory> &categories)
+{
+    std::unordered_map<std::string, std::string> names;
+    names.reserve(categories.size());
+    for (const XtreamCategory &category : categories)
+        if (!category.id.empty())
+            names.emplace(category.id, category.name);
+    return names;
+}
+
+bool LibraryArgumentsValid(const Catalog *catalog, const XtreamCredentials &credentials,
+                           std::uint64_t source_id)
+{
+    return catalog && ValidateXtreamCredentials(credentials) && source_id != 0;
+}
+
+XtreamStatus CheckResponseSize(std::string_view json)
+{
+    if (json.empty())
+        return XtreamStatus::malformed_json;
+    return json.size() > kMaxXtreamLibraryResponseBytes ? XtreamStatus::too_large
+                                                        : XtreamStatus::ok;
+}
+
+} // namespace
+
+XtreamStatus ParseXtreamVodStreams(std::string_view json, const XtreamCredentials &credentials,
+                                   const std::vector<XtreamCategory> &categories,
+                                   std::uint64_t source_id, Catalog *catalog, ParseReport *report)
+{
+    if (!LibraryArgumentsValid(catalog, credentials, source_id))
+        return XtreamStatus::invalid_argument;
+    catalog->Clear();
+    catalog->source_id = source_id;
+    if (report)
+        *report = {};
+    if (const XtreamStatus size = CheckResponseSize(json); size != XtreamStatus::ok)
+        return size;
+
+    const auto category_names = CategoryNames(categories);
+    std::unordered_set<std::string> stream_ids;
+    JsonReader reader(json);
+    bool found = false;
+    std::uint32_t source_line = 0;
+    const bool valid = ReadArrayResponse(
+        &reader,
+        [&](JsonReader *entry)
+        {
+            ++source_line;
+            if (report)
+                ++report->lines_seen;
+            std::string stream_id;
+            std::string name;
+            std::string logo;
+            std::string category_id;
+            std::string extension;
+            std::string rating;
+            std::string year;
+            if (!ReadObject(entry,
+                            [&](const std::string &key, JsonReader *value)
+                            {
+                                if (key == "stream_id")
+                                    return value->StringOrScalar(&stream_id, 64u);
+                                if (key == "name")
+                                    return value->StringOrScalar(&name);
+                                if (key == "stream_icon")
+                                    return value->StringOrScalar(&logo, kDefaultMaxUrlBytes);
+                                if (key == "category_id")
+                                    return value->StringOrScalar(&category_id, 64u);
+                                if (key == "container_extension")
+                                    return value->StringOrScalar(&extension, 12u);
+                                if (key == "rating")
+                                    return value->StringOrScalar(&rating, 16u);
+                                if (key == "year")
+                                    return value->StringOrScalar(&year, 32u);
+                                return value->SkipValue();
+                            }))
+                return false;
+            std::string primary_url;
+            std::string transport_stream_url;
+            if (stream_id.empty() || !stream_ids.emplace(stream_id).second ||
+                !BuildXtreamVodUrl(credentials, stream_id, "m3u8", &primary_url) ||
+                !BuildXtreamVodUrl(credentials, stream_id, "ts", &transport_stream_url))
+            {
+                if (report)
+                    ++report->skipped;
+                return true;
+            }
+            if (catalog->size() >= kMaxXtreamLibraryEntries)
+            {
+                if (report)
+                    ++report->skipped;
+                return true;
+            }
+            Channel channel;
+            channel.kind = MediaKind::movie;
+            channel.id = LibraryId(source_id, "vod", stream_id);
+            channel.source_id = source_id;
+            // tvg_name is left empty: cards and search already fall back to the name.
+            channel.name = name.empty() ? "Movie " + stream_id : std::move(name);
+            channel.group_title = CategoryName(category_names, category_id, "Movies");
+            channel.source_line = source_line;
+            channel.container_ext = std::move(extension);
+            channel.rating_tenths = ParseRatingTenths(rating);
+            channel.year = ParseYear(year);
+            std::string canonical;
+            if (CanonicalizeStreamUrl(logo, &canonical))
+                channel.tvg_logo = std::move(canonical);
+            channel.url = std::move(primary_url);
+            channel.alternate_urls.push_back(std::move(transport_stream_url));
+            if (!catalog->Add(channel) && report)
+                ++report->skipped;
+            if (report)
+                ++report->accepted;
+            return true;
+        },
+        &found);
+    if (!valid || !found)
+    {
+        catalog->Clear();
+        return XtreamStatus::malformed_json;
+    }
+    return catalog->empty() ? XtreamStatus::no_movies : XtreamStatus::ok;
+}
+
+XtreamStatus ParseXtreamSeriesList(std::string_view json, const XtreamCredentials &credentials,
+                                   const std::vector<XtreamCategory> &categories,
+                                   std::uint64_t source_id, Catalog *catalog, ParseReport *report)
+{
+    if (!LibraryArgumentsValid(catalog, credentials, source_id))
+        return XtreamStatus::invalid_argument;
+    catalog->Clear();
+    catalog->source_id = source_id;
+    if (report)
+        *report = {};
+    if (const XtreamStatus size = CheckResponseSize(json); size != XtreamStatus::ok)
+        return size;
+
+    const auto category_names = CategoryNames(categories);
+    std::unordered_set<std::string> series_ids;
+    JsonReader reader(json);
+    bool found = false;
+    std::uint32_t source_line = 0;
+    const bool valid = ReadArrayResponse(
+        &reader,
+        [&](JsonReader *entry)
+        {
+            ++source_line;
+            if (report)
+                ++report->lines_seen;
+            std::string series_id;
+            std::string name;
+            std::string cover;
+            std::string category_id;
+            std::string rating;
+            std::string year;
+            std::string release_date;
+            if (!ReadObject(entry,
+                            [&](const std::string &key, JsonReader *value)
+                            {
+                                if (key == "series_id")
+                                    return value->StringOrScalar(&series_id, 64u);
+                                if (key == "name")
+                                    return value->StringOrScalar(&name);
+                                if (key == "cover")
+                                    return value->StringOrScalar(&cover, kDefaultMaxUrlBytes);
+                                if (key == "category_id")
+                                    return value->StringOrScalar(&category_id, 64u);
+                                if (key == "rating")
+                                    return value->StringOrScalar(&rating, 16u);
+                                if (key == "year")
+                                    return value->StringOrScalar(&year, 32u);
+                                if (key == "releaseDate" || key == "release_date")
+                                    return value->StringOrScalar(&release_date, 32u);
+                                return value->SkipValue();
+                            }))
+                return false;
+            // The URL of a series entry is its get_series_info request; episodes are
+            // resolved lazily when the user opens the series.
+            std::string info_url;
+            if (series_id.empty() || !series_ids.emplace(series_id).second ||
+                !BuildXtreamApiUrlWithParam(credentials, "get_series_info", "series_id", series_id,
+                                            &info_url))
+            {
+                if (report)
+                    ++report->skipped;
+                return true;
+            }
+            if (catalog->size() >= kMaxXtreamLibraryEntries)
+            {
+                if (report)
+                    ++report->skipped;
+                return true;
+            }
+            Channel channel;
+            channel.kind = MediaKind::series;
+            channel.id = LibraryId(source_id, "series", series_id);
+            channel.source_id = source_id;
+            channel.name = name.empty() ? "Series " + series_id : std::move(name);
+            channel.group_title = CategoryName(category_names, category_id, "Series");
+            channel.source_line = source_line;
+            channel.series_id = std::move(series_id);
+            channel.rating_tenths = ParseRatingTenths(rating);
+            channel.year = ParseYear(year.empty() ? release_date : year);
+            std::string canonical;
+            if (CanonicalizeStreamUrl(cover, &canonical))
+                channel.tvg_logo = std::move(canonical);
+            channel.url = std::move(info_url);
+            if (!catalog->Add(channel) && report)
+                ++report->skipped;
+            if (report)
+                ++report->accepted;
+            return true;
+        },
+        &found);
+    if (!valid || !found)
+    {
+        catalog->Clear();
+        return XtreamStatus::malformed_json;
+    }
+    return catalog->empty() ? XtreamStatus::no_series : XtreamStatus::ok;
+}
+
+XtreamStatus ParseXtreamSeriesInfo(std::string_view json, const XtreamCredentials &credentials,
+                                   std::string_view series_id, std::string_view series_name,
+                                   std::uint64_t source_id, Catalog *catalog, ParseReport *report)
+{
+    if (!LibraryArgumentsValid(catalog, credentials, source_id) || series_id.empty())
+        return XtreamStatus::invalid_argument;
+    catalog->Clear();
+    catalog->source_id = source_id;
+    if (report)
+        *report = {};
+    if (const XtreamStatus size = CheckResponseSize(json); size != XtreamStatus::ok)
+        return size;
+
+    std::unordered_set<std::string> episode_ids;
+    std::uint32_t source_line = 0;
+    const auto read_episode = [&](JsonReader *entry, std::uint32_t season_hint)
+    {
+        ++source_line;
+        if (report)
+            ++report->lines_seen;
+        std::string episode_id;
+        std::string title;
+        std::string extension;
+        std::string episode_number;
+        std::string season_number;
+        std::string duration;
+        if (!ReadObject(entry,
+                        [&](const std::string &key, JsonReader *value)
+                        {
+                            if (key == "id")
+                                return value->StringOrScalar(&episode_id, 64u);
+                            if (key == "title")
+                                return value->StringOrScalar(&title);
+                            if (key == "container_extension")
+                                return value->StringOrScalar(&extension, 12u);
+                            if (key == "episode_num")
+                                return value->StringOrScalar(&episode_number, 16u);
+                            if (key == "season")
+                                return value->StringOrScalar(&season_number, 16u);
+                            // Providers send "info": [] for episodes without metadata.
+                            if (key == "info" && value->Peek() == '{')
+                                return ReadObject(value,
+                                                  [&](const std::string &field, JsonReader *info)
+                                                  {
+                                                      if (field == "duration_secs")
+                                                          return info->StringOrScalar(&duration,
+                                                                                      16u);
+                                                      return info->SkipValue();
+                                                  });
+                            return value->SkipValue();
+                        }))
+            return false;
+        std::string primary_url;
+        std::string transport_stream_url;
+        if (episode_id.empty() || !episode_ids.emplace(episode_id).second ||
+            !BuildXtreamEpisodeUrl(credentials, episode_id, "m3u8", &primary_url) ||
+            !BuildXtreamEpisodeUrl(credentials, episode_id, "ts", &transport_stream_url) ||
+            catalog->size() >= kMaxXtreamEpisodes)
+        {
+            if (report)
+                ++report->skipped;
+            return true;
+        }
+        const std::uint32_t season =
+            season_number.empty() ? season_hint : ParseUnsigned(season_number, 9999u);
+        const std::uint32_t number = ParseUnsigned(episode_number, 9999u);
+        char label[32]{};
+        std::snprintf(label, sizeof(label), "S%02u E%02u", static_cast<unsigned>(season),
+                      static_cast<unsigned>(number));
+        char group[32]{};
+        std::snprintf(group, sizeof(group), "Season %u", static_cast<unsigned>(season));
+        Channel channel;
+        channel.kind = MediaKind::episode;
+        channel.id = LibraryId(source_id, "ep", episode_id);
+        channel.source_id = source_id;
+        channel.name = title.empty() ? std::string(label) : std::string(label) + " " + title;
+        channel.tvg_name = std::string(series_name);
+        channel.group_title = group;
+        channel.source_line = source_line;
+        channel.series_id = std::string(series_id);
+        channel.season = static_cast<std::uint16_t>(season);
+        channel.episode = static_cast<std::uint16_t>(number);
+        channel.duration_secs = ParseUnsigned(duration, 24u * 3600u);
+        channel.container_ext = std::move(extension);
+        channel.url = std::move(primary_url);
+        channel.alternate_urls.push_back(std::move(transport_stream_url));
+        if (!catalog->Add(channel) && report)
+            ++report->skipped;
+        if (report)
+            ++report->accepted;
+        return true;
+    };
+    const auto read_season = [&](JsonReader *value, std::uint32_t season_hint)
+    {
+        if (value->Peek() != '[')
+            return value->SkipValue();
+        return ReadArray(value,
+                         [&](JsonReader *entry) { return read_episode(entry, season_hint); });
+    };
+
+    JsonReader reader(json);
+    bool found = false;
+    const bool valid =
+        ReadObject(&reader,
+                   [&](const std::string &key, JsonReader *value)
+                   {
+                       if (key != "episodes")
+                           return value->SkipValue();
+                       found = true;
+                       // Episodes are keyed by season number, or sent as an array of seasons.
+                       if (value->Peek() == '{')
+                           return ReadObject(
+                               value, [&](const std::string &season_key, JsonReader *season)
+                               { return read_season(season, ParseUnsigned(season_key, 9999u)); });
+                       if (value->Peek() == '[')
+                       {
+                           std::uint32_t index = 0;
+                           return ReadArray(value, [&](JsonReader *season)
+                                            { return read_season(season, ++index); });
+                       }
+                       return value->SkipValue();
+                   });
+    if (!valid || !reader.Finished() || !found)
+    {
+        catalog->Clear();
+        return XtreamStatus::malformed_json;
+    }
+    return catalog->empty() ? XtreamStatus::no_episodes : XtreamStatus::ok;
+}
+
+std::size_t MergeXtreamLibraryPart(Catalog *library, Catalog &&part,
+                                   std::unordered_set<std::string> *seen)
+{
+    if (!library || !seen)
+        return 0;
+    std::size_t added = 0;
+    for (const ChannelView channel : part)
+    {
+        if (library->size() >= kMaxXtreamLibraryEntries)
+            break;
+        if (!seen->insert(std::string(channel.id)).second)
+            continue;
+        if (library->Add(channel))
+            ++added;
+    }
+    part.Clear();
+    return added;
+}
+
+XtreamStatus FetchXtreamLibrary(const XtreamCredentials &credentials, std::uint64_t source_id,
+                                XtreamLibraryKind kind, const XtreamFetcher &fetcher,
+                                Catalog *library, XtreamLibraryReport *report)
+{
+    if (!library || !fetcher.fetch || !ValidateXtreamCredentials(credentials) || source_id == 0)
+        return XtreamStatus::invalid_argument;
+    library->Clear();
+    library->source_id = source_id;
+    XtreamLibraryReport local;
+    XtreamLibraryReport &stats = report ? *report : local;
+    stats = {};
+
+    const bool movies = kind == XtreamLibraryKind::movies;
+    const char *categories_action = movies ? "get_vod_categories" : "get_series_categories";
+    const char *streams_action = movies ? "get_vod_streams" : "get_series";
+    const XtreamStatus empty_status = movies ? XtreamStatus::no_movies : XtreamStatus::no_series;
+    const auto parse = [&](std::string_view body, const std::vector<XtreamCategory> &categories,
+                           Catalog *catalog, ParseReport *parse_report)
+    {
+        return movies ? ParseXtreamVodStreams(body, credentials, categories, source_id, catalog,
+                                              parse_report)
+                      : ParseXtreamSeriesList(body, credentials, categories, source_id, catalog,
+                                              parse_report);
+    };
+    const auto failure = [](XtreamFetchOutcome outcome)
+    {
+        if (outcome == XtreamFetchOutcome::cancelled)
+            return XtreamStatus::cancelled;
+        return outcome == XtreamFetchOutcome::too_large ? XtreamStatus::too_large
+                                                        : XtreamStatus::fetch_failed;
+    };
+
+    std::string url;
+    std::string_view body;
+    // Categories give entries readable group names. A provider that cannot list them still
+    // gets its streams imported under a generic group, so a bad list is not fatal.
+    std::vector<XtreamCategory> categories;
+    if (!BuildXtreamApiUrl(credentials, categories_action, &url))
+        return XtreamStatus::invalid_argument;
+    ++stats.requests;
+    const XtreamFetchOutcome category_outcome = fetcher.fetch(fetcher.context, url, &body);
+    if (category_outcome == XtreamFetchOutcome::cancelled ||
+        category_outcome == XtreamFetchOutcome::failed)
+        return failure(category_outcome);
+    if (category_outcome == XtreamFetchOutcome::ok &&
+        ParseXtreamCategories(body, &categories) != XtreamStatus::ok)
+        categories.clear();
+    stats.categories = static_cast<unsigned>(categories.size());
+
+    if (!BuildXtreamApiUrl(credentials, streams_action, &url))
+        return XtreamStatus::invalid_argument;
+    ++stats.requests;
+    const XtreamFetchOutcome full_outcome = fetcher.fetch(fetcher.context, url, &body);
+    if (full_outcome == XtreamFetchOutcome::ok)
+    {
+        ParseReport parse_report;
+        const XtreamStatus status = parse(body, categories, library, &parse_report);
+        stats.entries_skipped = static_cast<unsigned>(parse_report.skipped);
+        if (status != XtreamStatus::ok)
+            library->Clear();
+        return status;
+    }
+    if (full_outcome != XtreamFetchOutcome::too_large)
+        return failure(full_outcome);
+
+    // The whole list is bigger than one response may be; split it by category.
+    stats.used_category_fallback = true;
+    if (categories.empty())
+        return XtreamStatus::too_large;
+    std::unordered_set<std::string> seen;
+    for (const XtreamCategory &category : categories)
+    {
+        if (!BuildXtreamApiUrlWithParam(credentials, streams_action, "category_id", category.id,
+                                        &url))
+        {
+            ++stats.categories_skipped;
+            continue;
+        }
+        ++stats.requests;
+        const XtreamFetchOutcome outcome = fetcher.fetch(fetcher.context, url, &body);
+        if (outcome == XtreamFetchOutcome::cancelled || outcome == XtreamFetchOutcome::failed)
+        {
+            library->Clear();
+            return failure(outcome);
+        }
+        if (outcome == XtreamFetchOutcome::too_large)
+        {
+            ++stats.categories_skipped;
+            continue;
+        }
+        Catalog part;
+        ParseReport parse_report;
+        const XtreamStatus status = parse(body, categories, &part, &parse_report);
+        stats.entries_skipped += static_cast<unsigned>(parse_report.skipped);
+        if (status == XtreamStatus::ok)
+            MergeXtreamLibraryPart(library, std::move(part), &seen);
+        else if (status != empty_status)
+            ++stats.categories_skipped;
+    }
+    if (library->empty())
+    {
+        library->Clear();
+        return empty_status;
+    }
+    return XtreamStatus::ok;
+}
+
+namespace
+{
+
+constexpr std::size_t kMaxPlotBytes = 640u;
+constexpr std::size_t kMaxCreditBytes = 240u;
+
+// Cuts text to at most `maximum` bytes without splitting a UTF-8 sequence.
+void TruncateUtf8(std::string *text, std::size_t maximum)
+{
+    if (text->size() <= maximum)
+        return;
+    std::size_t end = maximum;
+    while (end && (static_cast<unsigned char>((*text)[end]) & 0xc0u) == 0x80u)
+        --end;
+    text->resize(end);
+    text->append("...");
+}
+
+// "01:32:10" or "5530" -> seconds.
+std::uint32_t ParseClockOrSeconds(std::string_view text)
+{
+    if (text.find(':') == std::string_view::npos)
+        return ParseUnsigned(text, 24u * 3600u);
+    std::uint32_t total = 0;
+    std::size_t start = 0;
+    for (unsigned part = 0; part < 3u; ++part)
+    {
+        const std::size_t colon = text.find(':', start);
+        total = total * 60u + ParseUnsigned(text.substr(start, colon - start), 60000u);
+        if (colon == std::string_view::npos)
+            break;
+        start = colon + 1u;
+    }
+    return std::min<std::uint32_t>(total, 24u * 3600u);
+}
+
+} // namespace
+
+XtreamStatus ParseMediaInfo(std::string_view json, MediaDetails *details)
+{
+    if (!details)
+        return XtreamStatus::invalid_argument;
+    *details = {};
+    if (const XtreamStatus size = CheckResponseSize(json); size != XtreamStatus::ok)
+        return size;
+    std::string duration;
+    std::string duration_secs;
+    std::string run_time;
+    std::string rating;
+    std::string video_width;
+    std::string video_height;
+    const auto text = [](JsonReader *value, std::string *output)
+    {
+        // Arrays and objects (backdrop lists, nested credits) carry nothing shown here.
+        const char next = value->Peek();
+        if (next == '[' || next == '{')
+            return value->SkipValue();
+        if (!value->StringOrScalar(output, 16u * 1024u))
+            return false;
+        if (*output == "null")
+            output->clear();
+        return true;
+    };
+    JsonReader reader(json);
+    bool found = false;
+    const bool valid = ReadObject(
+        &reader,
+        [&](const std::string &key, JsonReader *value)
+        {
+            if (key != "info" || value->Peek() != '{')
+                return value->SkipValue();
+            found = true;
+            return ReadObject(
+                value,
+                [&](const std::string &field, JsonReader *entry)
+                {
+                    if (field == "plot" || (field == "description" && details->plot.empty()))
+                        return text(entry, &details->plot);
+                    if (field == "genre")
+                        return text(entry, &details->genre);
+                    if (field == "cast" || (field == "actors" && details->cast.empty()))
+                        return text(entry, &details->cast);
+                    if (field == "director")
+                        return text(entry, &details->director);
+                    if (field == "releasedate" || field == "releaseDate" || field == "release_date")
+                        return text(entry, &details->release_date);
+                    if (field == "duration_secs")
+                        return text(entry, &duration_secs);
+                    if (field == "duration")
+                        return text(entry, &duration);
+                    if (field == "episode_run_time")
+                        return text(entry, &run_time);
+                    if (field == "rating")
+                        return text(entry, &rating);
+                    if (field == "video" && entry->Peek() == '{')
+                        return ReadObject(entry,
+                                          [&](const std::string &name, JsonReader *item)
+                                          {
+                                              if (name == "width")
+                                                  return text(item, &video_width);
+                                              if (name == "height")
+                                                  return text(item, &video_height);
+                                              if (name == "codec_name")
+                                                  return text(item, &details->video_codec);
+                                              return item->SkipValue();
+                                          });
+                    return entry->SkipValue();
+                });
+        });
+    if (!valid || !reader.Finished())
+    {
+        *details = {};
+        return XtreamStatus::malformed_json;
+    }
+    if (!found)
+        return XtreamStatus::ok;
+    TruncateUtf8(&details->plot, kMaxPlotBytes);
+    TruncateUtf8(&details->genre, kMaxCreditBytes);
+    TruncateUtf8(&details->cast, kMaxCreditBytes);
+    TruncateUtf8(&details->director, kMaxCreditBytes);
+    TruncateUtf8(&details->release_date, 32u);
+    details->duration_secs = !duration_secs.empty() ? ParseUnsigned(duration_secs, 24u * 3600u)
+                             : !duration.empty()    ? ParseClockOrSeconds(duration)
+                                                    : ParseUnsigned(run_time, 24u * 60u) * 60u;
+    details->rating_tenths = ParseRatingTenths(rating);
+    details->video_width = ParseUnsigned(video_width, 16384u);
+    details->video_height = ParseUnsigned(video_height, 16384u);
+    TruncateUtf8(&details->video_codec, 16u);
+    return XtreamStatus::ok;
+}
+
 const char *XtreamStatusDescription(XtreamStatus status)
 {
     switch (status)
@@ -1098,6 +1407,16 @@ const char *XtreamStatusDescription(XtreamStatus status)
         return "Xtream account is expired or inactive";
     case XtreamStatus::no_channels:
         return "Xtream provider returned no live channels";
+    case XtreamStatus::no_movies:
+        return "Xtream provider returned no movies";
+    case XtreamStatus::no_series:
+        return "Xtream provider returned no series";
+    case XtreamStatus::no_episodes:
+        return "Xtream provider returned no episodes";
+    case XtreamStatus::fetch_failed:
+        return "Xtream request failed";
+    case XtreamStatus::cancelled:
+        return "Xtream refresh was cancelled";
     }
     return "Xtream request failed";
 }

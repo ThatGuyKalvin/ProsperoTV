@@ -248,6 +248,110 @@ TEST(IptvCatalogTest, CapsStoredDiagnosticsWithoutHidingSkippedCount)
     EXPECT_EQ(report.diagnostics[0].line, 1u);
 }
 
+TEST(IptvCatalogTest, ClassifiesPlaylistEntriesByUrlDirectory)
+{
+    using iptv::MediaKind;
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://p.example:8080/movie/u/p/42.mkv"),
+              MediaKind::movie);
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://p.example/Movies/x.mp4"), MediaKind::movie);
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("https://p.example/series/u/p/7.mp4"), MediaKind::episode);
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://p.example/live/u/p/1.ts"), MediaKind::live);
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://p.example/u/p/1"), MediaKind::live);
+    // Only whole directory names count; a file name or query never does.
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://p.example/hls/movie.m3u8"), MediaKind::live);
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://p.example/a/b.ts?path=/movie/"), MediaKind::live);
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://p.example/moviesnow/a.ts"), MediaKind::live);
+    EXPECT_EQ(iptv::ClassifyPlaylistUrl("http://movie/a.ts"), MediaKind::live);
+}
+
+TEST(IptvCatalogTest, SplitsAPlaylistIntoLiveMoviesAndSeries)
+{
+    const std::string playlist =
+        "#EXTM3U\n"
+        "#EXTINF:-1 tvg-id=\"news.uk\" group-title=\"News\",News One\n"
+        "http://p.example/live/u/p/1.ts\n"
+        "#EXTINF:-1 tvg-id=\"same\" tvg-logo=\"http://img.example/d.jpg\" "
+        "group-title=\"Movies | Sci-Fi\",Dune (2021)\n"
+        "http://p.example/movie/u/p/10.mkv\n"
+        "#EXTINF:-1 tvg-id=\"same\" group-title=\"Movies | Sci-Fi\",Blade Runner 2049\n"
+        "http://p.example/movie/u/p/11.mp4\n"
+        "#EXTINF:-1 tvg-id=\"show\" tvg-logo=\"http://img.example/s.jpg\" "
+        "group-title=\"Drama\",Breaking Bad S01 E01\n"
+        "http://p.example/series/u/p/100.mkv\n"
+        "#EXTINF:-1 tvg-id=\"show\" group-title=\"Drama\",breaking bad s01e02 - Cat's in the Bag\n"
+        "http://p.example/series/u/p/101.mkv\n"
+        "#EXTINF:-1 group-title=\"Drama\",Breaking Bad S02.E01\n"
+        "http://p.example/series/u/p/102.mkv\n"
+        "#EXTINF:-1 group-title=\"Documentaries\",Planet Earth Part 1\n"
+        "http://p.example/series/u/p/200.mp4\n";
+    iptv::ParseLimits limits;
+    limits.max_channels = iptv::kDefaultMaxLibraryEntries;
+    iptv::Catalog parsed = iptv::ParseExtendedM3u(playlist, kSourceId, limits);
+    // Movies and episodes sharing a tvg-id stay separate titles.
+    ASSERT_EQ(parsed.size(), 7u);
+
+    iptv::PlaylistLibrary library;
+    iptv::SplitPlaylistLibrary(std::move(parsed), &library);
+    EXPECT_EQ(library.skipped, 0u);
+    ASSERT_EQ(library.live.size(), 1u);
+    EXPECT_EQ(library.live[0].kind, iptv::MediaKind::live);
+    EXPECT_EQ(library.live.source_id, kSourceId);
+
+    ASSERT_EQ(library.movies.size(), 2u);
+    EXPECT_EQ(library.movies.source_id, kSourceId);
+    EXPECT_EQ(library.movies[0].kind, iptv::MediaKind::movie);
+    EXPECT_EQ(library.movies[0].year, 2021u);
+    EXPECT_EQ(library.movies[0].container_ext, "mkv");
+    EXPECT_EQ(library.movies[0].group_title, "Movies | Sci-Fi");
+    EXPECT_EQ(library.movies[1].year, 0u);
+    EXPECT_EQ(library.movies[1].container_ext, "mp4");
+
+    ASSERT_EQ(library.series.size(), 2u);
+    const iptv::ChannelView show = library.series[0];
+    EXPECT_EQ(show.kind, iptv::MediaKind::series);
+    EXPECT_EQ(show.name, "Breaking Bad");
+    EXPECT_EQ(show.group_title, "Drama");
+    EXPECT_EQ(show.tvg_logo, "http://img.example/s.jpg");
+    EXPECT_FALSE(show.url.empty());
+    EXPECT_LE(show.series_id.size(), 64u);
+    EXPECT_EQ(library.series[1].name, "Documentaries");
+
+    ASSERT_EQ(library.episodes.size(), 4u);
+    const iptv::ChannelView pilot = library.episodes[0];
+    EXPECT_EQ(pilot.kind, iptv::MediaKind::episode);
+    EXPECT_EQ(pilot.series_id, show.series_id);
+    EXPECT_EQ(pilot.name, "S01 E01");
+    EXPECT_EQ(pilot.group_title, "Season 1");
+    EXPECT_EQ(pilot.season, 1u);
+    EXPECT_EQ(pilot.episode, 1u);
+    EXPECT_EQ(pilot.tvg_name, "Breaking Bad");
+    // Show names match without regard to case.
+    EXPECT_EQ(library.episodes[1].series_id, show.series_id);
+    EXPECT_EQ(library.episodes[1].name, "S01 E02 Cat's in the Bag");
+    EXPECT_EQ(library.episodes[2].group_title, "Season 2");
+    const iptv::ChannelView documentary = library.episodes[3];
+    EXPECT_EQ(documentary.series_id, library.series[1].series_id);
+    EXPECT_EQ(documentary.name, "Planet Earth Part 1");
+    EXPECT_EQ(documentary.group_title, "Episodes");
+    EXPECT_NE(show.id, library.series[1].id);
+}
+
+TEST(IptvCatalogTest, SplittingKeepsLivePlaylistsUnchanged)
+{
+    const std::string playlist = "#EXTM3U\n"
+                                 "#EXTINF:-1 tvg-id=\"a\",A\nhttp://p.example/hls/movie.m3u8\n"
+                                 "#EXTINF:-1 tvg-id=\"a\",A backup\nhttp://q.example/a.m3u8\n";
+    iptv::Catalog parsed = iptv::ParseExtendedM3u(playlist, kSourceId);
+    ASSERT_EQ(parsed.size(), 1u); // still merged by tvg-id
+    iptv::PlaylistLibrary library;
+    iptv::SplitPlaylistLibrary(std::move(parsed), &library);
+    ASSERT_EQ(library.live.size(), 1u);
+    EXPECT_EQ(library.live[0].alternate_urls.size(), 1u);
+    EXPECT_TRUE(library.movies.empty());
+    EXPECT_TRUE(library.series.empty());
+    EXPECT_TRUE(library.episodes.empty());
+}
+
 // ---- the catalog itself ----------------------------------------------------------
 
 iptv::Channel Station(int number, const char *group)
