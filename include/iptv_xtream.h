@@ -90,9 +90,16 @@ bool BuildXtreamVodUrl(const XtreamCredentials &credentials, std::string_view st
                        std::string_view extension, std::string *url);
 bool BuildXtreamEpisodeUrl(const XtreamCredentials &credentials, std::string_view episode_id,
                            std::string_view extension, std::string *url);
-// True for containers ProsperoTV can demux (MPEG-TS and HLS). MP4/MKV titles may still
-// be offered as MPEG-TS or HLS by the provider, so callers should try before giving up.
+// Containers the player reads as files (Matroska, WebM and MP4/QuickTime).
+bool XtreamContainerDirect(std::string_view extension);
+// True for containers ProsperoTV can play: MPEG-TS, HLS and the direct containers.
 bool XtreamContainerStreamable(std::string_view extension);
+// The addresses to try for an Xtream movie or episode, best first. A title listed as MKV or
+// MP4 is requested in that container, then as HLS and MPEG-TS; any other listed container is
+// tried after those. Duplicates are dropped and applying it twice changes nothing.
+std::vector<std::string> XtreamPlaybackOrder(const std::string &primary,
+                                             const std::vector<std::string> &alternates,
+                                             std::string_view container_ext);
 
 XtreamStatus SaveXtreamCredentials(const std::string &path,
                                     const XtreamCredentials &credentials);

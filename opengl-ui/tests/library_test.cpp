@@ -180,7 +180,7 @@ TEST_F(LibraryTest, TheListIsSavedAndReadBackOnTheNextLaunch)
     again.close();
 }
 
-TEST_F(LibraryTest, AFilmHasItsDetailsAndPlaysFromTheAccount)
+TEST_F(LibraryTest, AFilmIsPlayedInItsOwnContainerFromWhereItStopped)
 {
     ptv::Model model(dir_);
     open(model);
@@ -195,12 +195,26 @@ TEST_F(LibraryTest, AFilmHasItsDetailsAndPlaysFromTheAccount)
     EXPECT_EQ(model.details(id)->plot, "A courier outruns the dawn.");
     EXPECT_EQ(model.details(id)->video_height, 2160u);
 
+    // Where it stopped last time, as the player saved it.
+    ASSERT_EQ(iptv::SaveResumePosition(dir_ + "/prosperotv-playback-history.sqlite3",
+                                       iptv::XtreamSourceId(account_), id, 754, 6300),
+              iptv::StoreStatus::ok);
+    model.close();
+    ASSERT_TRUE(model.open());
+    EXPECT_EQ(model.resume_secs(id), 754u);
+
     ASSERT_TRUE(model.play(comet));
     ptv::PlayRequest request;
     ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_TRUE(request.vod);
     EXPECT_FALSE(request.reconnect_live);
+    EXPECT_EQ(request.start_position_us, 754000000ll);
     ASSERT_FALSE(request.urls.empty());
-    EXPECT_NE(request.urls[0].find("/movie/viewer/secret/501."), std::string::npos);
+    EXPECT_NE(request.urls[0].find("/movie/viewer/secret/501.mkv"), std::string::npos);
+
+    ASSERT_TRUE(model.play(comet, true));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.start_position_us, 0);
     model.close();
 }
 
@@ -228,8 +242,11 @@ TEST_F(LibraryTest, ASeriesListsItsSeasonsAndGoesOnAfterTheLastEpisodeWatched)
     ASSERT_TRUE(model.play_episode(first[0]));
     ptv::PlayRequest request;
     ASSERT_TRUE(model.take_play_request(&request));
-    EXPECT_EQ(request.channel_name, "Harbour  S01 E01");
-    // Next time it goes on with the second.
+    EXPECT_TRUE(request.vod);
+    EXPECT_EQ(request.channel_name, "Harbour");
+    EXPECT_EQ(request.subtitle, "S01 E01  Pilot");
+    EXPECT_EQ(request.duration_secs, 2580u);
+    // Watched to the end: next time it goes on with the second.
     EXPECT_TRUE(model.series_started());
     EXPECT_EQ(model.continue_episode(), static_cast<int>(first[1]));
     model.close();
@@ -251,6 +268,15 @@ TEST_F(LibraryTest, TheGuideSaysWhatIsOnNowAndNext)
     EXPECT_EQ(on.stop, 1759996800ll);
     // A channel the guide does not know has nothing on.
     EXPECT_TRUE(model.on_now(model.channel(model.visible(1))).title.empty());
+
+    // The banner of the channel when it plays.
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_FALSE(request.vod);
+    EXPECT_EQ(request.info_now, "Morning Briefing");
+    EXPECT_EQ(request.info_end_unix, 1759996800ll);
+    EXPECT_NE(request.info_next.find("Markets"), std::string::npos);
     model.close();
     EXPECT_TRUE(fs::exists(dir_ + "/prosperotv-guide.sqlite3"));
 }

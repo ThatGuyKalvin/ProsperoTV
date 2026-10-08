@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# ps5-native-app-boilerplate - Pinned audio-only FFmpeg for the native fallback.
+# ps5-native-app-boilerplate - Pinned FFmpeg: audio decoders for the native fallback, and the
+# MKV/MP4 demuxers for films and episodes (fed by the app's own HTTP reader, so no protocols).
 # Copyright (C) 2026 BlackBearReloaded
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
@@ -27,14 +28,26 @@ cd "$build"
 "$source/configure" --prefix="$prefix" --target-os=freebsd --arch=x86_64 \
     --enable-cross-compile --cc="$sdk/bin/prospero-clang" --ar="$sdk/bin/prospero-ar" \
     --ranlib="$sdk/bin/prospero-ranlib" --disable-autodetect --disable-everything \
-    --disable-programs --disable-doc --disable-network --disable-avformat --disable-avdevice \
+    --disable-programs --disable-doc --disable-network --disable-avdevice \
     --disable-avfilter --disable-swscale --disable-shared --enable-static \
     --disable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
-    --enable-avcodec --enable-avutil --enable-swresample \
-    --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3
-# The SDK probe linker permits unresolved imports. PS5 exports gmtime, not
-# gmtime_r; select FFmpeg's own portability fallback instead of a bogus import.
+    --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
+    --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3 \
+    --enable-demuxer=matroska,mov \
+    --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,eac3_core \
+    --enable-parser=ac3
+# The SDK probe linker permits unresolved imports. PS5 exports gmtime and localtime, not
+# gmtime_r or localtime_r; select FFmpeg's own portability fallbacks instead of bogus imports.
 sed -i 's/^#define HAVE_GMTIME_R 1$/#define HAVE_GMTIME_R 0/' config.h
+sed -i 's/^#define HAVE_LOCALTIME_R 1$/#define HAVE_LOCALTIME_R 0/' config.h
+# configure drops a component silently when a dependency is missing; the player needs these.
+# Component flags live in config_components.h since FFmpeg 5.1.
+for wanted in CONFIG_MATROSKA_DEMUXER CONFIG_MOV_DEMUXER CONFIG_H264_MP4TOANNEXB_BSF \
+    CONFIG_HEVC_MP4TOANNEXB_BSF CONFIG_EAC3_CORE_BSF CONFIG_AC3_PARSER; do
+    grep -q "^#define $wanted 1$" config_components.h ||
+        { echo "FFmpeg configure dropped $wanted" >&2; exit 1; }
+done
 make -j4
 make install
+bash "$root/tools/check-ffmpeg-imports.sh" "$prefix/lib" "$sdk"
 printf '%s\n' "$stamp" > "$prefix/.complete"

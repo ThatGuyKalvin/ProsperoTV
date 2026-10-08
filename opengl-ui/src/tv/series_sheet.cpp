@@ -32,6 +32,17 @@ std::string minutes_words(std::uint32_t seconds)
     return minutes == 0 ? std::string() : std::to_string(minutes) + " min";
 }
 
+std::string clock_words(std::uint32_t seconds)
+{
+    char text[24]{};
+    if (seconds >= 3600u)
+        std::snprintf(text, sizeof(text), "%u:%02u:%02u", seconds / 3600u, seconds / 60u % 60u,
+                      seconds % 60u);
+    else
+        std::snprintf(text, sizeof(text), "%u:%02u", seconds / 60u, seconds % 60u);
+    return text;
+}
+
 // "E03  The title", without the "S01 E03" a provider puts in front of it.
 std::string episode_title(const iptv::ChannelView &episode)
 {
@@ -169,7 +180,8 @@ void SeriesSheet::show_season(int chip, bool snap)
         const iptv::ChannelView episode = model.episodes()[static_cast<unsigned>(next)];
         ui::ListItem row;
         row.title = "Continue  \xC2\xB7  " + episode_title(episode);
-        row.subtitle = "The next episode";
+        const std::uint32_t left_at = model.resume_secs(episode.id);
+        row.subtitle = left_at != 0 ? "From " + clock_words(left_at) : "The next episode";
         row.tag = kContinueTag;
         row.chevron = true;
         items.push_back(std::move(row));
@@ -179,7 +191,10 @@ void SeriesSheet::show_season(int chip, bool snap)
         const iptv::ChannelView episode = model.episodes()[index];
         ui::ListItem row;
         row.title = readable(shared_.fonts.semibold, episode_title(episode));
-        if (model.is_recent(episode))
+        const std::uint32_t left_at = model.resume_secs(episode.id);
+        if (left_at != 0)
+            row.subtitle = "Left off at " + clock_words(left_at);
+        else if (model.is_recent(episode))
             row.subtitle = "Watched";
         row.value = minutes_words(episode.duration_secs);
         row.tag = static_cast<int>(index);

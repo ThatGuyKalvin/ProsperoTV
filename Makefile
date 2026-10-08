@@ -52,7 +52,7 @@ APP_CXXFLAGS += -frtti -Os
 APP_INCLUDE_PATHS += include src vendor/ps5/sdl/include vendor/ps5/sdl/include/SDL2 vendor/ps5/rmlui/include
 APP_INCLUDE_PATHS += .deps/ffmpeg-audio/root/include
 APP_STATIC_ARCHIVES += vendor/ps5/sdl/lib/libSDL2.a vendor/ps5/rmlui/lib/librmlui.a vendor/ps5/freetype/lib/libfreetype.a vendor/ps5/sdk/lib/libunwind.a vendor/ps5/sdk/lib/libcxx.a vendor/ps5/sdk/lib/libcxxabi.a
-APP_STATIC_ARCHIVES += .deps/ffmpeg-audio/root/lib/libavcodec.a .deps/ffmpeg-audio/root/lib/libswresample.a .deps/ffmpeg-audio/root/lib/libavutil.a
+APP_STATIC_ARCHIVES += .deps/ffmpeg-audio/root/lib/libavformat.a .deps/ffmpeg-audio/root/lib/libavcodec.a .deps/ffmpeg-audio/root/lib/libswresample.a .deps/ffmpeg-audio/root/lib/libavutil.a
 PACBREW_INCLUDE_PATHS += include
 PACBREW_STATIC_ARCHIVES += lib/libsqlite3.a
 HOST_UNIT_TEST := build/tests/iptv_core_tests
@@ -96,15 +96,18 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp \
 		tests/test_iptv_catalog.cpp tests/test_iptv_http.cpp tests/test_iptv_hls.cpp \
 		tests/test_iptv_store.cpp tests/test_iptv_stream.cpp tests/test_iptv_webm.cpp \
 		tests/test_iptv_xtream.cpp tests/test_iptv_panel.cpp tests/test_iptv_inflate.cpp \
-		tests/test_iptv_xmltv.cpp tests/test_iptv_guide.cpp src/iptv_vp9_packet.c \
-		src/iptv_catalog.cpp src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp \
-		src/iptv_store.cpp src/iptv_stream.cpp src/iptv_user_state.cpp src/iptv_webm.cpp \
-		src/iptv_xtream.cpp src/iptv_panel.cpp src/iptv_inflate.cpp src/iptv_xmltv.cpp \
-		src/iptv_guide.cpp include/iptv_vp9_packet.h include/iptv_catalog.h include/iptv_user_state.h \
-		include/iptv_hls.h include/iptv_http.h include/iptv_source_state.h include/iptv_store.h \
-		include/iptv_stream.h include/iptv_mp2.h include/iptv_audio_frame.h include/iptv_webm.h \
-		include/iptv_xtream.h include/iptv_json.h include/iptv_panel.h include/iptv_inflate.h \
-		include/iptv_xmltv.h include/iptv_guide.h tests/gzip_fixtures.h \
+		tests/test_iptv_xmltv.cpp tests/test_iptv_guide.cpp tests/test_iptv_video_sps.cpp \
+		tests/test_iptv_media_pack.cpp tests/test_iptv_osd.cpp src/iptv_vp9_packet.c src/iptv_osd.c \
+		src/iptv_osd_font.h src/iptv_overlay_blend.h src/iptv_catalog.cpp src/iptv_hls.cpp \
+		src/iptv_http.cpp src/iptv_source_state.cpp src/iptv_store.cpp src/iptv_stream.cpp \
+		src/iptv_user_state.cpp src/iptv_webm.cpp src/iptv_xtream.cpp src/iptv_panel.cpp \
+		src/iptv_inflate.cpp src/iptv_xmltv.cpp src/iptv_guide.cpp src/iptv_video_sps.cpp \
+		src/iptv_media_pack.cpp include/iptv_vp9_packet.h include/iptv_catalog.h \
+		include/iptv_user_state.h include/iptv_hls.h include/iptv_http.h include/iptv_source_state.h \
+		include/iptv_store.h include/iptv_stream.h include/iptv_mp2.h include/iptv_audio_frame.h \
+		include/iptv_webm.h include/iptv_xtream.h include/iptv_json.h include/iptv_panel.h \
+		include/iptv_inflate.h include/iptv_xmltv.h include/iptv_guide.h tests/gzip_fixtures.h \
+		include/iptv_video_sps.h include/iptv_media_pack.h include/iptv_osd.h \
 		$(wildcard include/iptv_panel_local.h) \
 		tools/setup-test-dependencies.sh | test-deps
 	@printf '%s\n' '==> [test-unit] Compiling the host-native GoogleTest binary'
@@ -118,19 +121,22 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp \
 			-c "$$gtest/googletest/src/gtest_main.cc" -o $(@D)/gtest-main.o; \
 		$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -Iinclude \
 			-c src/iptv_vp9_packet.c -o $(@D)/iptv-vp9-packet.o; \
+		$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
+			-c src/iptv_osd.c -o $(@D)/iptv-osd.o; \
 		$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Iinclude \
 			-isystem "$$gtest/googletest/include" \
 			tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp tests/test_iptv_http.cpp \
 			tests/test_iptv_hls.cpp tests/test_iptv_store.cpp tests/test_iptv_stream.cpp \
 			tests/test_iptv_webm.cpp tests/test_iptv_xtream.cpp tests/test_iptv_panel.cpp \
 			tests/test_iptv_inflate.cpp tests/test_iptv_xmltv.cpp tests/test_iptv_guide.cpp \
+			tests/test_iptv_video_sps.cpp tests/test_iptv_media_pack.cpp tests/test_iptv_osd.cpp \
 			src/iptv_catalog.cpp src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp \
 			src/iptv_store.cpp src/iptv_stream.cpp src/iptv_user_state.cpp src/iptv_webm.cpp \
 			src/iptv_xtream.cpp src/iptv_panel.cpp src/iptv_inflate.cpp src/iptv_xmltv.cpp \
-			src/iptv_guide.cpp \
-			$(@D)/iptv-vp9-packet.o \
+			src/iptv_guide.cpp src/iptv_video_sps.cpp src/iptv_media_pack.cpp \
+			$(@D)/iptv-vp9-packet.o $(@D)/iptv-osd.o \
 			$(@D)/gtest-all.o $(@D)/gtest-main.o \
-			$(HOST_TEST_LDFLAGS) $(HOST_TEST_LIBS) -o $@
+			$(HOST_TEST_LDFLAGS) $(HOST_TEST_LIBS) -lm -o $@
 
 test-integration:
 	@printf '%s\n' '==> [test-integration] Running host tooling integration tests'

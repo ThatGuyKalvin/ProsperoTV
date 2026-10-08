@@ -61,7 +61,7 @@ cp -a "$tv/vendor/minimp3" "$out/vendor/minimp3"
 cp -a "$tv/vendor/qrcodegen" "$out/vendor/qrcodegen"
 cp "$tv/vendor/ps5/sdk/stubs/videodec2_link_stub.c" "$out/vendor/ps5/sdk/stubs/"
 cp "$tv"/tooling/native/ps5_radio_import_stub_{audiodec,common_dialog}.cpp "$out/tooling/native/"
-cp "$tv/tools/setup-audio-dependencies.sh" "$out/tools/"
+cp "$tv"/tools/{setup-audio-dependencies.sh,check-ffmpeg-imports.sh} "$out/tools/"
 cp -a "$tv/assets/." "$out/assets/"
 cp -a "$tv/sce_sys" "$out/sce_sys"
 # The home-screen artwork of this interface replaces the released one, and

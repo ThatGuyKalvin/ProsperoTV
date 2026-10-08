@@ -91,11 +91,14 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 #include "iptv_hls.h"
 #include "iptv_http.h"
 #include "iptv_input.h"
+#include "iptv_media.h"
 #include "iptv_native_agc_present.h"
 #include "iptv_native_backend.h"
+#include "iptv_osd.h"
 #include "iptv_stream.h"
 #include "iptv_webm.h"
 
+#include <array>
 #include <atomic>
 #include <cstdarg>
 #include <cstddef>
@@ -103,6 +106,7 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <new>
 #include <time.h>
 
@@ -196,6 +200,23 @@ const char *DirectEndName(DirectEnd end)
 }
 
 char gLastPlaybackError[192]{};
+
+// What the session shows in its controls, and where it ended (for resuming).
+struct PlaybackInfo
+{
+    char title[IPTV_OSD_TEXT_BYTES] = {};
+    char subtitle[IPTV_OSD_TEXT_BYTES] = {};
+    char now[IPTV_OSD_TEXT_BYTES] = {};
+    char next[IPTV_OSD_TEXT_BYTES] = {};
+    bool vod = false;
+    bool live = false;
+    std::int64_t start_position_us = 0;
+    long long now_start_unix = 0;
+    long long now_end_unix = 0;
+};
+PlaybackInfo gPlaybackInfo{};
+std::int64_t gLastPositionUs = -1;
+std::int64_t gLastDurationUs = -1;
 
 void SetLastPlaybackError(const char *format, ...)
 {
@@ -756,7 +777,8 @@ enum class RunnerMode
 {
     none,
     transport_stream,
-    webm
+    webm,
+    media // MKV and MP4 files, demuxed by FFmpeg (iptv_media)
 };
 
 class StreamRunner
@@ -827,6 +849,57 @@ class StreamRunner
     bool IsWebm() const
     {
         return active_ && mode_ == RunnerMode::webm;
+    }
+
+    bool StartMedia()
+    {
+        if (!StartWebm())
+            return false;
+        mode_ = RunnerMode::media;
+        return true;
+    }
+
+    bool IsMedia() const
+    {
+        return active_ && mode_ == RunnerMode::media;
+    }
+
+    int OpenMedia(const iptv_stream_format_t &format)
+    {
+        if (!active_ || mode_ != RunnerMode::media || adapter_.opened)
+            return IPTV_STREAM_INVALID_STATE;
+        const int opened = AdapterOpen(&adapter_, &format);
+        if (opened != 0)
+            return FailWebm(IPTV_STREAM_NATIVE_UNAVAILABLE, "native video decoder open failed");
+        session_.telemetry.format = format;
+        session_.telemetry.backend_open = 1u;
+        session_.telemetry.state = IPTV_STREAM_STATE_READY;
+        return IPTV_STREAM_OK;
+    }
+
+    int PushMediaVideo(const std::uint8_t *data, std::size_t bytes, std::uint64_t pts_us)
+    {
+        if (!active_ || mode_ != RunnerMode::media || !adapter_.opened)
+            return IPTV_STREAM_INVALID_STATE;
+        if (AdapterVideo(&adapter_, data, bytes, pts_us) != 0)
+        {
+            ++session_.telemetry.video_submit_errors;
+            return FailWebm(IPTV_STREAM_NATIVE_ERROR, "native video submit failed");
+        }
+        ++session_.telemetry.video_access_units;
+        session_.telemetry.video_bytes += bytes;
+        session_.telemetry.last_video_pts_us = pts_us;
+        session_.telemetry.state = IPTV_STREAM_STATE_PLAYING;
+        return IPTV_STREAM_OK;
+    }
+
+    // Audio problems never stop the picture; the backend turns audio off by itself.
+    int PushMediaAudio(const std::uint8_t *data, std::size_t bytes, std::uint64_t pts_us)
+    {
+        if (!active_ || mode_ != RunnerMode::media || !adapter_.opened)
+            return IPTV_STREAM_INVALID_STATE;
+        return AdapterAudio(&adapter_, data, bytes, pts_us) == 0 ? IPTV_STREAM_OK
+                                                                 : IPTV_STREAM_NATIVE_ERROR;
     }
 
     int Push(const void *data, std::size_t bytes)
@@ -970,9 +1043,19 @@ class StreamRunner
                 {
                     iptv_native_backend_request_stop(&adapter_.backend);
                 }
+                iptv_osd_hide();
                 return true;
             }
+            // Any other button shows the controls; films and episodes also act on it.
+            if (event.pressed && event.action != IPTV_INPUT_TOUCHPAD &&
+                !(event.action == IPTV_INPUT_R1 && iptv_input_pressed(IPTV_INPUT_TOUCHPAD)))
+            {
+                ShowControls();
+                if (mode_ == RunnerMode::media)
+                    QueueCommand(event.action);
+            }
         }
+        UpdateControls();
         if (adapter_.initialized && iptv_native_backend_stop_requested(&adapter_.backend) != 0)
         {
             playback_stop_requested_ = true;
@@ -984,6 +1067,140 @@ class StreamRunner
     const iptv_stream_telemetry_t *Telemetry() const
     {
         return iptv_stream_telemetry(&session_);
+    }
+
+    // ---- On-screen controls ----
+    void ShowControls()
+    {
+        const std::uint64_t now = MonotonicUsec();
+        controls_until_usec_ = now + (gPlaybackInfo.live ? UINT64_C(5000000) : UINT64_C(4000000));
+        controls_dirty_ = true;
+    }
+
+    iptv::media::Command TakeCommand()
+    {
+        if (command_read_ == command_write_)
+            return iptv::media::Command::none;
+        return commands_[command_read_++ % commands_.size()];
+    }
+
+    void SetMediaStatus(const iptv::media::Status &status)
+    {
+        media_status_ = status;
+        have_media_status_ = true;
+        controls_dirty_ = true;
+        UpdateControls();
+    }
+
+    const iptv::media::Status &MediaStatus() const
+    {
+        return media_status_;
+    }
+
+    int PauseMedia(bool paused)
+    {
+        return adapter_.opened ? iptv_native_backend_set_paused(&adapter_.backend, paused ? 1 : 0)
+                               : -1;
+    }
+
+    int SeekReset(std::uint32_t audio_stream_type)
+    {
+        return adapter_.opened
+                   ? iptv_native_backend_seek_reset(&adapter_.backend, audio_stream_type)
+                   : -1;
+    }
+
+    std::uint64_t PresentedPosition(std::uint32_t *generation) const
+    {
+        return iptv_native_backend_presented_pts(&adapter_.backend, generation);
+    }
+
+    std::uint32_t DecoderGeneration() const
+    {
+        return iptv_native_backend_generation(&adapter_.backend);
+    }
+
+    // Composes the controls and publishes them when anything shown changes.
+    void UpdateControls()
+    {
+        const std::uint64_t now = MonotonicUsec();
+        // A live channel introduces itself once its first picture is up.
+        if (gPlaybackInfo.live && !live_intro_shown_ && HasPresentedVideo())
+        {
+            live_intro_shown_ = true;
+            ShowControls();
+        }
+        if (!controls_dirty_ && now - controls_checked_usec_ < UINT64_C(100000))
+            return;
+        controls_dirty_ = false;
+        controls_checked_usec_ = now;
+        iptv_osd_state_t state{};
+        const bool shown = now < controls_until_usec_;
+        if (mode_ == RunnerMode::media && have_media_status_ &&
+            (shown || media_status_.paused || media_status_.seeking))
+        {
+            state.kind = IPTV_OSD_MEDIA;
+            state.paused = media_status_.paused ? 1u : 0u;
+            state.seeking = media_status_.seeking ? 1u : 0u;
+            // Whole seconds: the timeline shows nothing finer, and this limits redraws.
+            state.position_us =
+                media_status_.position_us < 0 ? -1 : media_status_.position_us / 1000000 * 1000000;
+            state.duration_us = media_status_.duration_us;
+            std::snprintf(state.title, sizeof(state.title), "%s", gPlaybackInfo.title);
+            std::snprintf(state.subtitle, sizeof(state.subtitle), "%s", gPlaybackInfo.subtitle);
+            if (media_status_.audio_tracks > 1u)
+                std::snprintf(state.detail, sizeof(state.detail), "%s  (%u of %u)",
+                              media_status_.audio_label, media_status_.audio_track,
+                              media_status_.audio_tracks);
+            else
+                std::snprintf(state.detail, sizeof(state.detail), "%s", media_status_.audio_label);
+            state.buttons = IPTV_OSD_BUTTON_PAUSE | IPTV_OSD_BUTTON_SEEK | IPTV_OSD_BUTTON_JUMP |
+                            IPTV_OSD_BUTTON_BACK;
+            if (media_status_.audio_tracks > 1u)
+                state.buttons |= IPTV_OSD_BUTTON_AUDIO;
+            if (gPlaybackInfo.start_position_us > 0)
+                state.buttons |= IPTV_OSD_BUTTON_RESTART;
+            // When it will end, at the current position (to the minute).
+            if (media_status_.duration_us > 0 && media_status_.position_us >= 0)
+            {
+                const std::time_t end =
+                    std::time(nullptr) +
+                    static_cast<std::time_t>(
+                        (media_status_.duration_us - media_status_.position_us) / 1000000);
+                if (const std::tm *local = std::localtime(&end))
+                    std::strftime(state.clock, sizeof(state.clock), "Ends %H:%M", local);
+            }
+        }
+        else if (mode_ != RunnerMode::media && gPlaybackInfo.live && shown && HasPresentedVideo())
+        {
+            state.kind = IPTV_OSD_LIVE;
+            std::snprintf(state.title, sizeof(state.title), "%s", gPlaybackInfo.title);
+            std::snprintf(state.detail, sizeof(state.detail), "%s", gPlaybackInfo.now);
+            std::snprintf(state.next, sizeof(state.next), "%s", gPlaybackInfo.next);
+            const std::time_t clock = std::time(nullptr);
+            if (const std::tm *local = std::localtime(&clock))
+                std::strftime(state.clock, sizeof(state.clock), "%H:%M", local);
+            // How far through the programme on now (to the minute).
+            const long long start = gPlaybackInfo.now_start_unix;
+            const long long stop = gPlaybackInfo.now_end_unix;
+            if (start > 0 && stop > start && clock >= start)
+            {
+                state.duration_us = (stop - start) * INT64_C(1000000);
+                state.position_us =
+                    (static_cast<long long>(clock) - start) / 60 * INT64_C(60000000);
+                const std::time_t times[2] = {static_cast<std::time_t>(start),
+                                              static_cast<std::time_t>(stop)};
+                if (const std::tm *local = std::localtime(&times[0]))
+                    std::strftime(state.start_label, sizeof(state.start_label), "%H:%M", local);
+                if (const std::tm *local = std::localtime(&times[1]))
+                    std::strftime(state.end_label, sizeof(state.end_label), "%H:%M", local);
+            }
+        }
+        if (std::memcmp(&state, &published_controls_, sizeof(state)) != 0)
+        {
+            published_controls_ = state;
+            iptv_osd_publish(&state);
+        }
     }
 
     bool NativeTelemetry(iptv_native_telemetry_t *telemetry) const
@@ -1019,7 +1236,7 @@ class StreamRunner
                 return IPTV_STREAM_OK;
             return stop_result;
         }
-        if (mode_ != RunnerMode::webm)
+        if (mode_ != RunnerMode::webm && mode_ != RunnerMode::media)
             return IPTV_STREAM_INVALID_STATE;
         if (webm_finished_)
             return session_.telemetry.last_result;
@@ -1034,7 +1251,9 @@ class StreamRunner
         ++session_.telemetry.stop_count;
         webm_finished_ = true;
         if (drained != 0 || !HasPresentedVideo())
-            return FailWebm(IPTV_STREAM_NATIVE_ERROR, "native VP9 drain failed");
+            return FailWebm(IPTV_STREAM_NATIVE_ERROR, mode_ == RunnerMode::media
+                                                          ? "native video drain failed"
+                                                          : "native VP9 drain failed");
         session_.telemetry.last_result = IPTV_STREAM_OK;
         session_.telemetry.state = IPTV_STREAM_STATE_STOPPED;
         return IPTV_STREAM_OK;
@@ -1067,7 +1286,7 @@ class StreamRunner
                 (void)stop_result;
                 RecordCleanupResult(cleanup_result);
             }
-            else if (mode_ == RunnerMode::webm)
+            else if (mode_ == RunnerMode::webm || mode_ == RunnerMode::media)
             {
                 const int stop_result = Finish();
                 (void)stop_result;
@@ -1223,6 +1442,33 @@ class StreamRunner
     int player_cleanup_result_ = 0;
     bool playback_stop_requested_ = false;
     bool overlay_chord_down_ = false;
+    std::uint64_t controls_until_usec_ = 0;
+    std::uint64_t controls_checked_usec_ = 0;
+    bool controls_dirty_ = false;
+    bool live_intro_shown_ = false;
+    iptv_osd_state_t published_controls_{};
+    iptv::media::Status media_status_{};
+    bool have_media_status_ = false;
+    std::array<iptv::media::Command, 16> commands_{};
+    std::uint32_t command_read_ = 0;
+    std::uint32_t command_write_ = 0;
+
+    void QueueCommand(iptv_input_action_t action)
+    {
+        using iptv::media::Command;
+        const Command command = action == IPTV_INPUT_CROSS      ? Command::toggle_pause
+                                : action == IPTV_INPUT_LEFT     ? Command::back
+                                : action == IPTV_INPUT_RIGHT    ? Command::forward
+                                : action == IPTV_INPUT_DOWN     ? Command::back_long
+                                : action == IPTV_INPUT_UP       ? Command::forward_long
+                                : action == IPTV_INPUT_TRIANGLE ? Command::next_audio
+                                : action == IPTV_INPUT_SQUARE && gPlaybackInfo.start_position_us > 0
+                                    ? Command::start_over
+                                    : Command::none;
+        if (command == Command::none || command_write_ - command_read_ >= commands_.size())
+            return;
+        commands_[command_write_++ % commands_.size()] = command;
+    }
     std::uint8_t *read_ahead_buffer_ = nullptr;
     void *read_ahead_thread_ = nullptr;
     std::atomic<std::uint64_t> read_ahead_read_{0};
@@ -1515,6 +1761,73 @@ int RunWebm(iptv::http::StreamRequest *request, StreamRunner *runner,
     return runner->HasPresentedVideo() ? 0 : -1;
 }
 
+// Plays an MKV or MP4 file to its end. FFmpeg reconnects with Range requests itself, so a
+// failure is final for this URL and the caller moves on to the next one.
+int RunMedia(iptv::http::StreamRequest *request, StreamRunner *runner, const char *url,
+             const char *accept, const std::uint8_t *prefix, std::size_t prefix_bytes,
+             iptv::media::Container container, const iptv::http::RequestHeaders *headers)
+{
+    iptv::media::Sink sink;
+    sink.context = runner;
+    sink.stop = [](void *context) { return static_cast<StreamRunner *>(context)->StopRequested(); };
+    sink.open = [](void *context, const iptv_stream_format_t *format)
+    { return static_cast<StreamRunner *>(context)->OpenMedia(*format); };
+    sink.video =
+        [](void *context, const std::uint8_t *data, std::size_t bytes, std::uint64_t pts_us)
+    { return static_cast<StreamRunner *>(context)->PushMediaVideo(data, bytes, pts_us); };
+    sink.audio =
+        [](void *context, const std::uint8_t *data, std::size_t bytes, std::uint64_t pts_us)
+    { return static_cast<StreamRunner *>(context)->PushMediaAudio(data, bytes, pts_us); };
+    sink.presented = [](void *context)
+    { return static_cast<StreamRunner *>(context)->PresentedFrames(); };
+    sink.command = [](void *context)
+    { return static_cast<StreamRunner *>(context)->TakeCommand(); };
+    sink.status = [](void *context, const iptv::media::Status *status)
+    { static_cast<StreamRunner *>(context)->SetMediaStatus(*status); };
+    sink.pause = [](void *context, bool paused)
+    { return static_cast<StreamRunner *>(context)->PauseMedia(paused); };
+    sink.seek_reset = [](void *context, std::uint32_t audio_stream_type)
+    { return static_cast<StreamRunner *>(context)->SeekReset(audio_stream_type); };
+    sink.position = [](void *context, std::uint32_t *generation)
+    { return static_cast<StreamRunner *>(context)->PresentedPosition(generation); };
+    sink.generation = [](void *context)
+    { return static_cast<StreamRunner *>(context)->DecoderGeneration(); };
+
+    iptv::media::Source source;
+    source.request = request;
+    source.url = url;
+    source.accept = accept;
+    source.headers = headers;
+    source.prefix = prefix;
+    source.prefix_bytes = prefix_bytes;
+    source.container = container;
+    source.start_position_us = gPlaybackInfo.start_position_us;
+
+    char error[IPTV_STREAM_ERROR_TEXT_BYTES * 2u] = {};
+    runner->ShowControls();
+    const int result = iptv::media::Play(source, sink, error, sizeof(error));
+    gLastPositionUs = runner->MediaStatus().position_us;
+    gLastDurationUs = runner->MediaStatus().duration_us;
+    iptv_osd_hide();
+    if (result == 1)
+        return 1;
+    if (result < 0)
+    {
+        SetLastPlaybackError("%s", error[0] ? error : "The file could not be played.");
+        return -1;
+    }
+    // The end of the file: let the decoder play out what it holds.
+    if (runner->Finish() != IPTV_STREAM_OK && !runner->HasPresentedVideo())
+    {
+        const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
+        SetLastPlaybackError("%s", telemetry && telemetry->last_error[0]
+                                       ? telemetry->last_error
+                                       : "The file could not be played.");
+        return -1;
+    }
+    return runner->HasPresentedVideo() ? 0 : -1;
+}
+
 bool WaitForRefresh(StreamRunner *runner, std::uint32_t milliseconds)
 {
     std::uint32_t remaining = milliseconds;
@@ -1800,6 +2113,9 @@ int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buff
     return result;
 }
 
+constexpr char kDirectAccept[] = "video/mp2t, video/webm, video/x-matroska, video/mp4, "
+                                 "application/vnd.apple.mpegurl, */*";
+
 int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, char *playlist_data,
               const iptv::http::RequestHeaders *headers, bool reconnect_live)
 {
@@ -1813,8 +2129,7 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
     {
         ++gDirectDiagnostics.open_attempts;
         iptv::http::StreamRequest request{};
-        const auto status = iptv::http::OpenStream(
-            url, "video/mp2t, video/webm, application/vnd.apple.mpegurl, */*", &request, headers);
+        const auto status = iptv::http::OpenStream(url, kDirectAccept, &request, headers);
         if (status != iptv::http::Status::ok)
         {
             if (++attempt == 3u)
@@ -1865,6 +2180,25 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         {
             iptv::http::CloseStream(&request);
             return RunHls(request.effective_url, runner, read_buffer, playlist_data, headers);
+        }
+        // MKV and MP4 files go to FFmpeg; WebM (VP9) keeps its own reader. The first bytes
+        // decide, since some servers send MPEG-TS whatever the URL's extension says.
+        const iptv::media::Container container =
+            iptv::media::SniffContainer(read_buffer, static_cast<std::size_t>(first));
+        if (container == iptv::media::Container::mp4 ||
+            (container == iptv::media::Container::matroska &&
+             !UrlLooksLikeWebm(request.effective_url)))
+        {
+            if (!runner->IsMedia() && !runner->StartMedia())
+            {
+                iptv::http::CloseStream(&request);
+                SetLastPlaybackError("The video decoder could not start for this file.");
+                return -1;
+            }
+            const int media = RunMedia(&request, runner, url, kDirectAccept, read_buffer,
+                                       static_cast<std::size_t>(first), container, headers);
+            iptv::http::CloseStream(&request);
+            return media;
         }
         if (UrlLooksLikeWebm(request.effective_url) ||
             BufferLooksLikeWebm(read_buffer, static_cast<std::size_t>(first)))
@@ -2000,6 +2334,9 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 {
     const std::uint64_t playback_started_us = MonotonicUsec();
     SetLastPlaybackError(nullptr);
+    gLastPositionUs = -1;
+    gLastDurationUs = -1;
+    iptv_osd_hide();
     gDirectDiagnostics = {};
 #if IPTV_PROBE
     std::remove("/download0/iptv-attempt-receipt.txt");
@@ -2050,7 +2387,10 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 #endif
         if (runner->PlaybackStopRequested())
             result = 1;
-        else if (!(UrlLooksLikeWebm(url) ? runner->StartWebm() : runner->Start()))
+        else if (!(UrlLooksLikeWebm(url) ? runner->StartWebm()
+                   : iptv::media::ContainerFromUrl(url) != iptv::media::Container::none
+                       ? runner->StartMedia()
+                       : runner->Start()))
         {
             SetLastPlaybackError("The hardware decoder session could not be initialized.");
             Notify("IPTV: decoder session initialization failed");
@@ -2133,6 +2473,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
                         runner->PlayerCleanupResult());
         }
     }
+    iptv_osd_hide();
     (void)iptv_native_agc_present_shutdown();
     delete runner;
     delete[] playlist_data;
@@ -2145,7 +2486,44 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 int iptv_player_run_with_headers(const char *url, const char *channel_name, const char *user_agent,
                                  const char *referrer, int reconnect_live)
 {
+    gPlaybackInfo = {};
+    std::snprintf(gPlaybackInfo.title, sizeof(gPlaybackInfo.title), "%s",
+                  channel_name ? channel_name : "");
+    gPlaybackInfo.live = reconnect_live != 0;
     return RunPlayer(url, channel_name, user_agent, referrer, 0, reconnect_live != 0);
+}
+
+int iptv_player_run_options(const iptv_player_options_t *options)
+{
+    if (!options)
+        return -1;
+    gPlaybackInfo = {};
+    std::snprintf(gPlaybackInfo.title, sizeof(gPlaybackInfo.title), "%s",
+                  options->channel_name ? options->channel_name : "");
+    std::snprintf(gPlaybackInfo.subtitle, sizeof(gPlaybackInfo.subtitle), "%s",
+                  options->subtitle ? options->subtitle : "");
+    std::snprintf(gPlaybackInfo.now, sizeof(gPlaybackInfo.now), "%s",
+                  options->info_now ? options->info_now : "");
+    gPlaybackInfo.now_start_unix = options->info_start_unix;
+    gPlaybackInfo.now_end_unix = options->info_end_unix;
+    std::snprintf(gPlaybackInfo.next, sizeof(gPlaybackInfo.next), "%s",
+                  options->info_next ? options->info_next : "");
+    gPlaybackInfo.vod = options->vod != 0;
+    gPlaybackInfo.live = options->vod == 0;
+    gPlaybackInfo.start_position_us =
+        options->vod && options->start_position_us > 0 ? options->start_position_us : 0;
+    return RunPlayer(options->url, options->channel_name, options->user_agent, options->referrer, 0,
+                     options->reconnect_live != 0);
+}
+
+long long iptv_player_last_position_us(void)
+{
+    return gLastPositionUs;
+}
+
+long long iptv_player_last_duration_us(void)
+{
+    return gLastDurationUs;
 }
 
 const char *iptv_player_last_error(void)
@@ -2160,5 +2538,6 @@ int iptv_player_run(const char *url, const char *channel_name)
 
 int iptv_player_run_controlled(const char *url, const char *channel_name, unsigned stop_after_ms)
 {
+    gPlaybackInfo = {};
     return RunPlayer(url, channel_name, nullptr, nullptr, stop_after_ms, false);
 }
