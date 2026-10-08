@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tv/model.hpp"
+#include "tv/category_path.hpp"
 
 #include "iptv_ime.h"
 #include "iptv_store.h"
@@ -24,7 +25,6 @@ namespace
 
 constexpr char kCatalogUrl[] = "https://iptv-org.github.io/iptv/index.m3u";
 constexpr std::uint64_t kBuiltInSourceId = UINT64_C(0x495054562d4f5247);
-constexpr std::uint64_t kCatalogRefreshSeconds = UINT64_C(12) * 60u * 60u;
 constexpr std::size_t kCatalogThreadStackBytes = 4u * 1024u * 1024u;
 // An address that is not a playlist can send anything for as long as it likes:
 // this much with not one channel in it, and the download is given up.
@@ -44,6 +44,8 @@ const char *source_name(iptv::SourceKind source)
         return "your playlist";
     case iptv::SourceKind::Xtream:
         return "your Xtream account";
+    case iptv::SourceKind::Portal:
+        return "your MAC-code portal";
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -174,12 +176,17 @@ std::string Model::path(const char *name) const
 
 std::string Model::cache_path(iptv::SourceKind source) const
 {
+    if (selected_source_id_ > 3)
+        return cache_dir_ + "/prosperotv-source-" + std::to_string(selected_source_id_) +
+               ".sqlite3";
     switch (source)
     {
     case iptv::SourceKind::Custom:
         return cache_dir_ + "/prosperotv-custom-catalog.sqlite3";
     case iptv::SourceKind::Xtream:
         return cache_dir_ + "/prosperotv-xtream-catalog.sqlite3";
+    case iptv::SourceKind::Portal:
+        return cache_dir_ + "/prosperotv-source-4.sqlite3";
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -194,6 +201,8 @@ std::uint64_t Model::source_id(iptv::SourceKind source) const
         return iptv::CustomSourceId(custom_url_);
     case iptv::SourceKind::Xtream:
         return iptv::XtreamSourceId(xtream_);
+    case iptv::SourceKind::Portal:
+        return portal_source_id(portal_);
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -225,6 +234,8 @@ bool Model::is_set_up(iptv::SourceKind source) const
         return !custom_url_.empty();
     case iptv::SourceKind::Xtream:
         return xtream_ready();
+    case iptv::SourceKind::Portal:
+        return !portal_.url.empty() && !portal_.mac.empty();
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -307,6 +318,7 @@ bool Model::open()
 
         (void)iptv::LoadUserState(path("iptv-favorites-v1.bin"), path("iptv-history-v1.bin"),
                                   &user_);
+        load_library();
         load_cache();
     }
     else if (catalog_loaded_)
@@ -315,6 +327,7 @@ bool Model::open()
         // is read again.
         (void)iptv::LoadPlaybackResults(path("prosperotv-playback-history.sqlite3"),
                                         catalog_.source_id, &catalog_);
+        mark_visibility();
         mark_lists();
         recount_groups();
         rebuild_visible();
@@ -326,9 +339,7 @@ bool Model::open()
 
     keyboard_ready_ = iptv_ime_init();
 
-    const std::uint64_t now = platform::unix_time();
-    const bool fresh = catalog_loaded_ && now != 0 && saved_unix_ != 0 && now >= saved_unix_ &&
-                       now - saved_unix_ < kCatalogRefreshSeconds;
+    const bool fresh = !refresh_needed();
     if (catalog_loaded_)
     {
         set_status("Saved copy", Level::ready);
@@ -349,6 +360,8 @@ bool Model::open()
 
 void Model::close()
 {
+    vod_.stop();
+    stop_guide();
     stop_requested_.store(true, std::memory_order_release);
     if (keyboard_ready_)
     {
@@ -381,12 +394,28 @@ void Model::poll()
         iptv_ime_poll();
     continue_account_form();
     consume_refresh();
+    if (vod_.requested() && !refreshing())
+        stop_guide();
+    vod_.poll(!refreshing() && !guide_thread_);
+    if (!vod_.busy() && !vod_.requested())
+        poll_guide();
+    const auto now = platform::unix_time();
+    if (catalog_loaded_ && !refreshing() && !vod_.busy() && now >= next_schedule_check_)
+    {
+        // A failed scheduled refresh retries in an hour, not on every frame.
+        next_schedule_check_ = now + 3600;
+        if (refresh_needed())
+            refresh();
+    }
 }
 
 // ---- the catalog ------------------------------------------------------------
 
 void Model::load_cache()
 {
+    stop_guide();
+    guide_ = {};
+    next_guide_check_ = 0;
     const std::uint64_t wanted = source_id(active_source_);
     iptv::Catalog cached;
     iptv::StoreReport report;
@@ -404,12 +433,21 @@ void Model::load_cache()
                                                      : own           ? SourceHealth::saved
                                                                      : SourceHealth::empty;
     index_.build(catalog_);
+    if (catalog_loaded_)
+        (void)guide_.load(guide_path(), catalog_.source_id);
     adopt_catalog();
 }
 
 // The catalog and its index are new: everything counted from them follows.
 void Model::adopt_catalog()
 {
+    hidden_categories_ = library_.hidden_categories(source_id(active_source_));
+    folder_channels_ = library_.folder_channels(folder_);
+    if (!provider_category_.empty() &&
+        std::none_of(index_.provider_categories.begin(), index_.provider_categories.end(),
+                     [this](const Facet &facet)
+                     { return category_belongs(facet.value, provider_category_); }))
+        provider_category_.clear();
     // A filter the new catalog has no word for cannot stay on.
     const auto kept = [](std::span<const Facet> facets, const std::string &selected)
     {
@@ -447,6 +485,7 @@ void Model::mark_lists()
     };
     mark(user_.favorite_ids, kFavoriteMark);
     mark(user_.recent_channel_ids, kRecentMark);
+    mark_visibility();
 }
 
 void Model::recount_groups()
@@ -458,17 +497,21 @@ void Model::recount_groups()
     unsigned news = 0;
     unsigned sports = 0;
     unsigned kids = 0;
+    unsigned shown = 0;
     for (std::size_t index = 0; index < count; ++index)
     {
         const std::uint8_t trait = index_.traits[index];
         const std::uint8_t mark = marks_[index];
+        if ((mark & 4u) != 0)
+            continue;
+        ++shown;
         favorites += (mark & kFavoriteMark) != 0 ? 1u : 0u;
         recent += (mark & kRecentMark) != 0 ? 1u : 0u;
         news += (trait & CatalogIndex::kNews) != 0 ? 1u : 0u;
         sports += (trait & CatalogIndex::kSports) != 0 ? 1u : 0u;
         kids += (trait & CatalogIndex::kKids) != 0 ? 1u : 0u;
     }
-    group_sizes_[static_cast<unsigned>(Group::all)] = static_cast<unsigned>(count);
+    group_sizes_[static_cast<unsigned>(Group::all)] = shown;
     group_sizes_[static_cast<unsigned>(Group::favorites)] = favorites;
     group_sizes_[static_cast<unsigned>(Group::recent)] = recent;
     group_sizes_[static_cast<unsigned>(Group::news)] = news;
@@ -510,11 +553,26 @@ void Model::rebuild_visible()
     }
     const bool by_word =
         !query_.empty() || !country_.empty() || !category_.empty() || !language_.empty();
+    const auto guide_time = static_cast<std::int64_t>(platform::unix_time());
 
     visible_.clear();
     letter_starts_.fill(-1);
     for (const std::uint32_t index : index_.order)
     {
+        if ((marks_[index] & 4u) != 0)
+            continue;
+        if (!provider_category_.empty())
+        {
+            const auto channel = catalog_[index];
+            bool matches = category_belongs(channel.group_title, provider_category_);
+            for (const auto category : channel.alternate_group_titles)
+                matches = matches || category_belongs(category, provider_category_);
+            if (!matches)
+                continue;
+        }
+        if (group_ == Group::favorites && !folder_.empty() &&
+            !folder_channels_.contains(std::string(catalog_[index].id)))
+            continue;
         const std::uint8_t trait = index_.traits[index];
         if ((trait & trait_wanted) != trait_wanted || (marks_[index] & mark_wanted) != mark_wanted)
             continue;
@@ -525,7 +583,8 @@ void Model::rebuild_visible()
         {
             const iptv::ChannelView channel = catalog_[index];
             if (!matches_filters(channel, country_, category_, language_) ||
-                !matches_query(channel, query_, quality))
+                (!matches_query(channel, query_, quality) &&
+                 !guide_.matches_now(channel.id, query_, guide_time)))
                 continue;
         }
         int &start = letter_starts_[index_.letters[index]];
@@ -562,7 +621,12 @@ std::optional<iptv::ChannelView> Model::find(std::string_view channel_id) const
 {
     const std::size_t index = catalog_.Find(channel_id);
     if (index == iptv::Catalog::npos)
-        return std::nullopt;
+    {
+        const auto media = vod_.catalog().Find(channel_id);
+        return media == iptv::Catalog::npos
+                   ? std::nullopt
+                   : std::optional<iptv::ChannelView>(vod_.catalog()[media]);
+    }
     return catalog_[index];
 }
 
@@ -623,8 +687,8 @@ void Model::set_quality(unsigned quality)
 
 bool Model::filtering() const
 {
-    return !query_.empty() || !country_.empty() || !category_.empty() || !language_.empty() ||
-           quality_ != kQualityAny;
+    return !provider_category_.empty() || !query_.empty() || !country_.empty() ||
+           !category_.empty() || !language_.empty() || quality_ != kQualityAny;
 }
 
 void Model::clear_filters()
@@ -633,6 +697,7 @@ void Model::clear_filters()
         return;
     iptv_ime_cancel();
     query_.clear();
+    provider_category_.clear();
     country_.clear();
     category_.clear();
     language_.clear();
@@ -648,7 +713,9 @@ bool Model::ask_query()
                "Close ProsperoTV and open it again.");
         return false;
     }
-    iptv_ime_request(query_.c_str(), &Model::on_query, this);
+    iptv_ime_request_prompt(query_.c_str(), "Search channels or programmes on now",
+                            "Channel or programme title", IPTV_IME_BUFFER_CHARACTERS,
+                            &Model::on_query, this);
     return true;
 }
 
@@ -662,11 +729,17 @@ void Model::on_query(const char *text, void *self)
 
 bool Model::is_favorite(const iptv::ChannelView &channel) const
 {
+    const auto index = catalog_.Find(channel.id);
+    if (index < marks_.size())
+        return (marks_[index] & kFavoriteMark) != 0;
     return iptv::IsFavorite(user_, channel.id);
 }
 
 bool Model::is_recent(const iptv::ChannelView &channel) const
 {
+    const auto index = catalog_.Find(channel.id);
+    if (index < marks_.size())
+        return (marks_[index] & kRecentMark) != 0;
     return iptv::IsRecentChannel(user_, channel.id);
 }
 
@@ -676,6 +749,8 @@ Model::Starred Model::toggle_favorite(unsigned catalog_index)
         return Starred::failed;
     const std::vector<std::string> previous = user_.favorite_ids;
     const bool favorite = iptv::ToggleFavorite(&user_, catalog_[catalog_index].id);
+    if (user_.favorite_ids == previous)
+        return Starred::failed;
     if (iptv::SaveUserState(path("iptv-favorites-v1.bin"), path("iptv-history-v1.bin"), user_) !=
         iptv::UserStateStatus::ok)
     {
@@ -695,6 +770,33 @@ Model::Starred Model::toggle_favorite(unsigned catalog_index)
 
 // ---- playback -----------------------------------------------------------------------
 
+std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) const
+{
+    const auto index = catalog_.Find(channel_id);
+    if (index >= catalog_.size())
+        return {};
+    const auto channel = catalog_[index];
+    PlayRequest request;
+    request.channel_id = channel.id;
+    request.channel_name = channel.name;
+    request.source_id = channel.source_id;
+    if (!channel.url.empty())
+        request.urls.emplace_back(channel.url);
+    for (const auto url : channel.alternate_urls)
+        if (!url.empty())
+            request.urls.emplace_back(url);
+    request.user_agent = channel.http_user_agent;
+    request.referrer = channel.http_referrer;
+    request.record_channel_result = false;
+    if (active_source_ == iptv::SourceKind::Portal)
+    {
+        request.portal = portal_;
+        request.portal_command = channel.portal_command;
+    }
+    return request.urls.empty() && request.portal_command.empty() ? std::nullopt
+                                                                  : std::optional{request};
+}
+
 bool Model::play(unsigned catalog_index)
 {
     if (catalog_index >= channel_count())
@@ -711,6 +813,13 @@ bool Model::play(unsigned catalog_index)
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
     play_request_.source_id = channel.source_id;
+    if (active_source_ == iptv::SourceKind::Portal)
+    {
+        play_request_.portal = portal_;
+        play_request_.portal_command = channel.portal_command;
+        if (channel.portal_command.empty())
+            return false;
+    }
     play_request_.reconnect_live = active_source_ == iptv::SourceKind::Xtream;
     play_requested_ = !play_request_.urls.empty();
     diag::event("play asked: \"%s\" id=%s addresses=%zu source=%d own user agent=%s referrer=%s",
@@ -727,6 +836,9 @@ bool Model::play(unsigned catalog_index)
     if (iptv::SaveUserState(path("iptv-favorites-v1.bin"), path("iptv-history-v1.bin"), user_) !=
         iptv::UserStateStatus::ok)
         user_.recent_channel_ids = previous;
+    if (library_.ready() && !library_.remember_channel(selected_source_id_, channel.id))
+        notify(Level::warning, "The last channel could not be saved");
+    mark_lists();
     return true;
 }
 
@@ -743,7 +855,8 @@ bool Model::take_play_request(PlayRequest *request)
 void Model::report_playback_failure(const char *channel_id, const char *channel_name, int result,
                                     unsigned attempts, const char *detail)
 {
-    diag::event("playback failed: \"%s\" id=%s result=%d", channel_name != nullptr ? channel_name : "",
+    diag::event("playback failed: \"%s\" id=%s result=%d",
+                channel_name != nullptr ? channel_name : "",
                 channel_id != nullptr ? channel_id : "", result);
     if (result >= 0)
         return;
@@ -780,6 +893,11 @@ bool Model::retry_failure()
 
 void Model::use_source(iptv::SourceKind source)
 {
+    if (library_.ready())
+    {
+        use_saved_source(static_cast<int>(source) + 1);
+        return;
+    }
     diag::event("source chosen: %d (set up=%d, an update running=%d)", static_cast<int>(source),
                 is_set_up(source) ? 1 : 0, refresh_thread_ != nullptr ? 1 : 0);
     if (refresh_thread_ != nullptr)
@@ -830,6 +948,14 @@ void Model::edit_source(iptv::SourceKind source)
                "Close ProsperoTV and open it again.");
         return;
     }
+    editing_source_id_ = static_cast<int>(source) + 1;
+    if (source == iptv::SourceKind::Portal)
+    {
+        portal_form_ = portal_;
+        account_step_ = AccountStep::portal_address;
+        account_prompt_pending_ = true;
+        return;
+    }
     if (source == iptv::SourceKind::Custom)
     {
         iptv_ime_request_prompt(custom_url_.c_str(), "Playlist address",
@@ -861,21 +987,8 @@ void Model::apply_custom_url(const char *url)
                "It must start with http:// or https:// and have no spaces.");
         return;
     }
-    const bool changed = custom_url_ != url;
-    const iptv::SourceStateStatus saved =
-        iptv::SaveCustomSourceUrl(path("iptv-custom-source-v1.txt"), url);
-    if (saved != iptv::SourceStateStatus::ok)
-    {
-        notify(Level::error, "The address could not be saved",
-               saved == iptv::SourceStateStatus::too_large ? "It is longer than 1,020 characters."
-                                                           : "The console's storage refused it.");
-        return;
-    }
-    custom_url_ = url;
-    health_[kCustom] = SourceHealth::saved;
-    if (changed && active_source_ == iptv::SourceKind::Custom)
-        load_cache();
-    use_source(iptv::SourceKind::Custom);
+    if (save_source_form(url, nullptr) && editing_source_id_ == 2)
+        (void)iptv::SaveCustomSourceUrl(path("iptv-custom-source-v1.txt"), url);
 }
 
 void Model::continue_account_form()
@@ -898,6 +1011,15 @@ void Model::continue_account_form()
     case AccountStep::password:
         iptv_ime_request_password("Xtream password (3 of 3)", "Password",
                                   IPTV_IME_BUFFER_CHARACTERS, &Model::on_account_password, this);
+        break;
+    case AccountStep::portal_address:
+        iptv_ime_request_prompt(portal_form_.url.c_str(), "Portal address (1 of 2)",
+                                "http(s)://provider.example/stalker_portal/c/",
+                                IPTV_IME_BUFFER_CHARACTERS, &Model::on_portal_address, this);
+        break;
+    case AccountStep::portal_mac:
+        iptv_ime_request_prompt(portal_form_.mac.c_str(), "Portal MAC code (2 of 2)",
+                                "00:1A:79:12:34:56", 17, &Model::on_portal_mac, this);
         break;
     case AccountStep::none:
         break;
@@ -965,28 +1087,18 @@ void Model::apply_account_password(const char *password)
                "Check the server address, the user name and the password.");
         return;
     }
-    const bool changed =
-        !xtream_ready() || iptv::XtreamSourceId(xtream_) != iptv::XtreamSourceId(account_form_);
-    const iptv::XtreamStatus saved =
-        iptv::SaveXtreamCredentials(path("prosperotv-xtream-v1.txt"), account_form_);
-    if (saved != iptv::XtreamStatus::ok)
-    {
-        notify(Level::error, "The account could not be saved",
-               iptv::XtreamStatusDescription(saved));
-        return;
-    }
-    xtream_ = std::move(account_form_);
+    if (save_source_form(account_form_.server_url, &account_form_) && editing_source_id_ == 3)
+        (void)iptv::SaveXtreamCredentials(path("prosperotv-xtream-v1.txt"), account_form_);
     account_form_ = {};
-    health_[kXtream] = SourceHealth::saved;
-    if (changed && active_source_ == iptv::SourceKind::Xtream)
-        load_cache();
-    use_source(iptv::SourceKind::Xtream);
 }
 
 // ---- the download ---------------------------------------------------------------------
 
 void Model::refresh()
 {
+    vod_.stop();
+    stop_guide();
+    next_schedule_check_ = platform::unix_time() + 3600;
     diag::event("channel list update asked: source=%d set up=%d already running=%d",
                 static_cast<int>(active_source_), is_set_up(active_source_) ? 1 : 0,
                 refresh_thread_ != nullptr ? 1 : 0);
@@ -998,8 +1110,9 @@ void Model::refresh()
     refresh_queued_ = false;
     if (!is_set_up(active_source_))
     {
-        if (active_source_ == iptv::SourceKind::Xtream)
-            edit_source(iptv::SourceKind::Xtream);
+        if (active_source_ == iptv::SourceKind::Xtream ||
+            active_source_ == iptv::SourceKind::Portal)
+            edit_source(active_source_);
         return;
     }
 
@@ -1010,6 +1123,7 @@ void Model::refresh()
     refresh_cache_path_ = cache_path(active_source_);
     refresh_source_id_ = source_id(active_source_);
     refresh_account_ = account ? xtream_ : iptv::XtreamCredentials{};
+    refresh_portal_ = active_source_ == iptv::SourceKind::Portal ? portal_ : PortalCredentials{};
     const SourceHealth before = health_[static_cast<unsigned>(active_source_)];
     health_[static_cast<unsigned>(active_source_)] = SourceHealth::refreshing;
 
@@ -1077,13 +1191,20 @@ void Model::run_refresh()
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
         const iptv::http::RequestControl control{
-            [](void *context)
-            {
+            [](void *context) {
                 return static_cast<const Model *>(context)->stop_requested_.load(
                     std::memory_order_acquire);
             },
             this};
-        if (refresh_source_ == iptv::SourceKind::Xtream)
+        if (refresh_source_ == iptv::SourceKind::Portal)
+        {
+            PortalClient client(refresh_portal_, &control);
+            const bool ok = client.load(&pending_catalog_, &pending_report_, &refresh_count_);
+            pending_fetch_.status =
+                ok ? iptv::http::Status::ok : iptv::http::Status::request_failed;
+            pending_account_message_ = client.error();
+        }
+        else if (refresh_source_ == iptv::SourceKind::Xtream)
         {
             // The sign-in and the categories are small and read whole.
             iptv::http::ListBuffer response =
@@ -1283,14 +1404,15 @@ void Model::consume_refresh()
                          !pending_catalog_.empty() &&
                          pending_index_.size() == pending_catalog_.size();
     const unsigned source = static_cast<unsigned>(refresh_source_);
-    diag::event("channel list update ended: source=%u success=%d network=%d fetch status=%d http=%d "
-                "native=0x%08x bytes=%zu account=%d channels=%zu skipped=%zu more than held=%d saved=%d",
-                source, success ? 1 : 0, static_cast<int>(pending_network_),
-                static_cast<int>(pending_fetch_.status), pending_fetch_.http_status,
-                static_cast<unsigned>(pending_fetch_.native_error), pending_fetch_.bytes,
-                account ? static_cast<int>(pending_account_) : -1, pending_catalog_.size(),
-                static_cast<std::size_t>(pending_report_.skipped), pending_report_.catalog_full ? 1 : 0,
-                pending_saved_ ? 1 : 0);
+    diag::event(
+        "channel list update ended: source=%u success=%d network=%d fetch status=%d http=%d "
+        "native=0x%08x bytes=%zu account=%d channels=%zu skipped=%zu more than held=%d saved=%d",
+        source, success ? 1 : 0, static_cast<int>(pending_network_),
+        static_cast<int>(pending_fetch_.status), pending_fetch_.http_status,
+        static_cast<unsigned>(pending_fetch_.native_error), pending_fetch_.bytes,
+        account ? static_cast<int>(pending_account_) : -1, pending_catalog_.size(),
+        static_cast<std::size_t>(pending_report_.skipped), pending_report_.catalog_full ? 1 : 0,
+        pending_saved_ ? 1 : 0);
     if (success)
     {
         catalog_ = std::move(pending_catalog_);
@@ -1302,6 +1424,7 @@ void Model::consume_refresh()
         (void)iptv::LoadPlaybackResults(path("prosperotv-playback-history.sqlite3"),
                                         catalog_.source_id, &catalog_);
         adopt_catalog();
+        next_guide_check_ = 0;
         if (has_failure_)
             failure_.can_retry = catalog_.Find(failure_.channel_id) != iptv::Catalog::npos;
         health_[source] = pending_saved_ ? SourceHealth::ready : SourceHealth::stale;
@@ -1321,8 +1444,10 @@ void Model::consume_refresh()
     else
     {
         const std::string problem =
-            fetch_problem(pending_network_, pending_fetch_, account, pending_account_,
-                          pending_account_message_, pending_report_.skipped);
+            refresh_source_ == iptv::SourceKind::Portal && !pending_account_message_.empty()
+                ? pending_account_message_
+                : fetch_problem(pending_network_, pending_fetch_, account, pending_account_,
+                                pending_account_message_, pending_report_.skipped);
         if (catalog_loaded_)
         {
             health_[source] = SourceHealth::stale;

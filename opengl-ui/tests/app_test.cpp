@@ -4,6 +4,7 @@
 
 #include "core/save_file.hpp"
 #include "host_platform.hpp"
+#include "host_preview.hpp"
 #include "large_list.hpp"
 #include "tv/app.hpp"
 #include "tv/draw.hpp"
@@ -311,13 +312,15 @@ TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsHome)
     press(Action::page_next);
     EXPECT_EQ(app_->tab(), 3);
     EXPECT_EQ(model_->view.tab, 3);
+    press(Action::page_next); // Settings
+    EXPECT_EQ(app_->tab(), 4);
     press(Action::page_next); // About
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     press(Action::page_next); // the last tab: nothing further
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     // About only reads: nothing on it answers Cross.
     press(Action::confirm);
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     EXPECT_FALSE(frame_.scene.empty());
     press(Action::back);
     EXPECT_EQ(app_->tab(), 0);
@@ -471,7 +474,8 @@ TEST_F(AppTest, SettingsAreChangedAndReported)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    ASSERT_EQ(app_->tab(), 3);
+    press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 4);
     EXPECT_FALSE(app_->take_settings_changed());
     press(Action::confirm); // Reduce motion
     EXPECT_TRUE(app_->settings().reduced_motion);
@@ -496,6 +500,7 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
+    press(Action::page_next);
     for (int i = 0; i < 4; ++i)
         move(Direction::down);
     EXPECT_FALSE(app_->take_pair_phone_requested());
@@ -504,18 +509,18 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     EXPECT_TRUE(app_->take_pair_phone_requested());
     EXPECT_FALSE(app_->take_pair_phone_requested());
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), 4);
     app_->set_pairing_info("http://192.0.2.1:8888", "", 0, 1);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_pair_phone_requested());
     press(Action::back);
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), 4);
     press(Action::confirm);
     EXPECT_TRUE(app_->pairing_open());
     app_->phone_connected();
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), 4);
     move(Direction::down);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_forget_phones_requested());
@@ -543,7 +548,8 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 4);
     EXPECT_TRUE(g_traced.empty());
 
     // The switch is the last row of Settings.
@@ -559,7 +565,8 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     // On: what the viewer does and what the app answers are both there.
     press(Action::page_prev);
     EXPECT_TRUE(traced("input L1 on Settings"));
-    EXPECT_TRUE(traced("tab Sources"));
+    EXPECT_TRUE(traced("tab On demand"));
+    press(Action::page_prev);
     press(Action::page_prev);
     press(Action::page_prev);
     EXPECT_EQ(app_->tab(), 0);
@@ -573,6 +580,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
 
     // And off again, with its own last line.
     g_traced.clear();
+    press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
@@ -593,6 +601,7 @@ TEST_F(AppTest, PhoneVolumeUpdatesTheSliderWithoutOverwritingOtherSettings)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
+    press(Action::page_next);
     press(Action::confirm); // reduce motion
     app_->take_settings_changed();
     app_->set_volume(30);
@@ -610,12 +619,146 @@ TEST_F(AppTest, VolumeSettingsPersistAndClamp)
     EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
     ptv::Settings settings;
     settings.volume = 35;
+    settings.live_preview = false;
     ASSERT_TRUE(ptv::save_settings(dir_, settings));
     EXPECT_EQ(ptv::load_settings(dir_).volume, 35);
+    EXPECT_FALSE(ptv::load_settings(dir_).live_preview);
     std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=-20\n";
     EXPECT_EQ(ptv::load_settings(dir_).volume, 0);
     std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=200\n";
     EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
+}
+
+TEST_F(AppTest, PreviewStopsForSheetsAndCanBeTurnedOff)
+{
+    host::set_preview(true);
+    app_->configure_preview([](std::uint32_t, const ptv::ImagePixels &) { return 20u; },
+                            [](std::uint32_t) {});
+    idle(90);
+    for (int i = 0; i < 100 && host::preview_starts() == 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT_EQ(host::preview_starts(), 1u);
+    EXPECT_EQ(model_->group_size(ptv::Group::recent), 0u);
+    press(Action::north);
+    ASSERT_TRUE(app_->searching());
+    for (int i = 0; i < 100 && host::preview_stops() == 0; ++i)
+    {
+        idle(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_EQ(host::preview_stops(), 1u);
+    press(Action::back);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    for (int i = 0; i < 14; ++i)
+        move(Direction::down);
+    move(Direction::up); // Live previews, above Diagnostic log.
+    press(Action::confirm);
+    EXPECT_FALSE(app_->settings().live_preview);
+    const auto started = host::preview_starts();
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_prev);
+    idle(180);
+    EXPECT_EQ(host::preview_starts(), started);
+    app_->stop_preview();
+    host::set_preview(false);
+}
+
+TEST_F(AppTest, ProviderCategoriesAreBrowsableAndCanBeHiddenFromTheController)
+{
+    const auto count = model_->visible_count();
+    ASSERT_FALSE(model_->provider_categories().empty());
+    const auto category = model_->provider_categories().front().value;
+    press(Action::touch);
+    EXPECT_FALSE(app_->accepts_remote_search());
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 0);
+    move(Direction::down);
+    press(Action::west);
+    EXPECT_TRUE(model_->category_hidden(category));
+    EXPECT_LT(model_->visible_count(), count);
+    press(Action::west);
+    EXPECT_FALSE(model_->category_hidden(category));
+    press(Action::confirm);
+    EXPECT_EQ(model_->provider_category(), category);
+    EXPECT_TRUE(app_->accepts_remote_search());
+    press(Action::back);
+    EXPECT_TRUE(model_->provider_category().empty());
+}
+
+TEST_F(AppTest, FavoriteFoldersCanBeCreatedAndAssignedFromTheController)
+{
+    press(Action::west);
+    press(Action::page_next);
+    ASSERT_EQ(model_->visible_count(), 1u);
+    press(Action::touch);
+    press(Action::north);
+    EXPECT_EQ(host::keyboard_title(), "New favorite folder");
+    host::set_keyboard_text("Football");
+    idle(4);
+    ASSERT_EQ(model_->folders(), std::vector<std::string>{"Football"});
+    move(Direction::down);
+    press(Action::west);
+    press(Action::confirm);
+    EXPECT_EQ(model_->folder(), "Football");
+    EXPECT_EQ(model_->visible_count(), 1u);
+    EXPECT_TRUE(app_->accepts_remote_search());
+}
+
+TEST_F(AppTest, SubcategoriesOpenAndParentVisibilityAppliesToTheirChildren)
+{
+    use_playlist(
+        "#EXTM3U\n#EXTINF:-1 group-title=\"US / News\",One\nhttps://example.invalid/1\n"
+        "#EXTINF:-1 group-title=\"US / Sports / Football\",Two\nhttps://example.invalid/2\n"
+        "#EXTINF:-1 group-title=\"US / Sports / Tennis\",Three\nhttps://example.invalid/3\n"
+        "#EXTINF:-1 group-title=\"USA / Sports\",Four\nhttps://example.invalid/4\n");
+    press(Action::touch);
+    move(Direction::down);
+    press(Action::confirm); // US
+    move(Direction::down);
+    move(Direction::down);
+    press(Action::confirm); // Sports
+    EXPECT_FALSE(app_->accepts_remote_search());
+    press(Action::confirm); // Browse all in US / Sports
+    EXPECT_EQ(model_->provider_category(), "US / Sports");
+    EXPECT_EQ(model_->visible_count(), 2u);
+    EXPECT_TRUE(app_->accepts_remote_search());
+    press(Action::touch);
+    move(Direction::down);
+    press(Action::confirm);
+    move(Direction::down);
+    move(Direction::down);
+    press(Action::confirm);
+    press(Action::west); // Hide this whole branch from the first row.
+    EXPECT_EQ(model_->visible_count(), 0u);
+    EXPECT_TRUE(model_->category_hidden("US / Sports / Football"));
+    press(Action::back); // Up to US
+    EXPECT_FALSE(app_->accepts_remote_search());
+    press(Action::back); // Up to root
+    EXPECT_FALSE(app_->accepts_remote_search());
+    press(Action::back); // Close
+    model_->clear_filters();
+    EXPECT_EQ(model_->visible_count(), 2u);
+}
+
+TEST_F(AppTest, GuideCapturesControllerNavigationAndCanOpenAChannel)
+{
+    press(Action::r3);
+    EXPECT_TRUE(app_->guide_open());
+    EXPECT_FALSE(app_->accepts_remote_search());
+    EXPECT_FALSE(frame_.overlay.empty());
+    press(Action::page_next); // Tomorrow, not the next app tab.
+    EXPECT_EQ(app_->tab(), 0);
+    press(Action::west); // Now
+    move(Direction::down);
+    press(Action::confirm);
+    EXPECT_FALSE(app_->guide_open());
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, model_->channel(model_->visible(1)).id);
+    press(Action::r3);
+    press(Action::back);
+    EXPECT_FALSE(app_->guide_open());
 }
 
 TEST_F(AppTest, OptionsStartsAnUpdateOnce)
@@ -904,28 +1047,28 @@ TEST_F(AppTest, ANewerVersionIsOfferedAndLaterLeavesEverythingAlone)
 const char *release_notes()
 {
     return "Highlights\n"
-        "- The alphabet beside every list: Right from the last column, then up and down.\n"
-        "- Hold L2 or R2 and the pages keep turning.\n"
-        "- A tuning screen from Cross to the channel's first picture.\n"
-        "\n"
+           "- The alphabet beside every list: Right from the last column, then up and down.\n"
+           "- Hold L2 or R2 and the pages keep turning.\n"
+           "- A tuning screen from Cross to the channel's first picture.\n"
+           "\n"
            "Warning: this version moves your sources and favorites to /data/prosperotv the first "
            "time it starts.\n"
-        "\n"
-        "Fixes\n"
-        "- Channels play again after the menu has been drawn with OpenGL.\n"
-        "- Greek channel names read as written.\n"
-        "- The launch picture stays until the menu is there.\n"
-        "- The player's messages no longer appear as notifications.\n"
-        "\n"
-        "Note: the update keeps everything you saved.\n"
-        "\n"
-        "Thanks\n"
+           "\n"
+           "Fixes\n"
+           "- Channels play again after the menu has been drawn with OpenGL.\n"
+           "- Greek channel names read as written.\n"
+           "- The launch picture stays until the menu is there.\n"
+           "- The player's messages no longer appear as notifications.\n"
+           "\n"
+           "Note: the update keeps everything you saved.\n"
+           "\n"
+           "Thanks\n"
            "To everyone who tested the new interface on their console and wrote back with what "
            "they saw, "
-        "and to the maintainers of the public channel list.\n"
-        "- More languages for channel names are next.\n"
-        "- So is a way to sort a list by country.\n"
-        "- And the guide, where a source provides one.";
+           "and to the maintainers of the public channel list.\n"
+           "- More languages for channel names are next.\n"
+           "- So is a way to sort a list by country.\n"
+           "- And the guide, where a source provides one.";
 }
 
 TEST_F(AppTest, AReleaseWithNotesOffersWhatsNewAndTheNotesScroll)
@@ -1145,11 +1288,11 @@ TEST(ShownNames, AreWrittenInTheScriptsTheFontsHold)
 TEST(ShownNames, ChineseJapaneseAndKoreanAreWrittenAsTheyAre)
 {
     const hui::ui::Fonts &fonts = font_set().fonts;
-    const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93";     // 中文频道
-    const char *mixed = "CCTV-5 \xE9\xAB\x98\xE6\xB8\x85";                              // CCTV-5 高清
+    const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93"; // 中文频道
+    const char *mixed = "CCTV-5 \xE9\xAB\x98\xE6\xB8\x85";                    // CCTV-5 高清
     const char *japanese =
         "\xE3\x83\x86\xE3\x83\xAC\xE3\x83\x93\xE6\x9C\x9D\xE6\x97\xA5";        // テレビ朝日
-    const char *korean = "\xEC\x97\xB0\xED\x95\xA9\xEB\x89\xB4\xEC\x8A\xA4TV";         // 연합뉴스TV
+    const char *korean = "\xEC\x97\xB0\xED\x95\xA9\xEB\x89\xB4\xEC\x8A\xA4TV"; // 연합뉴스TV
     EXPECT_EQ(ptv::shown_name(fonts, written(chinese, "CCTV4.cn@SD")), chinese);
     EXPECT_EQ(ptv::shown_name(fonts, written(mixed, "CCTV5.cn")), mixed);
     EXPECT_EQ(ptv::shown_name(fonts, written(japanese)), japanese);
@@ -1181,7 +1324,7 @@ TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
     // Most of a mixed name survives: it is kept without the letters that cannot be drawn.
     EXPECT_EQ(
         ptv::shown_name(fonts, written((std::string("Thai PBS ") + thai).c_str(), "ThaiPBS.th")),
-              "Thai PBS");
+        "Thai PBS");
     // Nothing survives: the playlist's own id for the channel stands in.
     EXPECT_EQ(ptv::shown_name(fonts, written(thai, "Channel3.th@SD")), "Channel3");
     // And without an id the tile still says something.
@@ -1200,9 +1343,10 @@ TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
 TEST_F(AppTest, RandomInputNeverBreaksIt)
 {
     std::mt19937 random(20261002u);
-    static constexpr Action actions[] = {
-        Action::confirm,   Action::back,      Action::north,     Action::west, Action::page_prev,
-        Action::page_next, Action::jump_prev, Action::jump_next, Action::menu, Action::touch};
+    static constexpr Action actions[] = {Action::confirm,   Action::back,      Action::north,
+                                         Action::west,      Action::page_prev, Action::page_next,
+                                         Action::jump_prev, Action::jump_next, Action::menu,
+                                         Action::touch,     Action::r3};
     static constexpr Direction directions[] = {Direction::up, Direction::down, Direction::left,
                                                Direction::right};
     for (int step = 0; step < 4000; ++step)

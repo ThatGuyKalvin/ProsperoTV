@@ -5,13 +5,88 @@
 #include "iptv_http.h"
 
 #include <atomic>
+#include <charconv>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <time.h>
 
 namespace iptv::http
 {
+bool ParseStreamRange(std::string_view headers, int status, std::int64_t offset, std::int64_t *size)
+{
+    if (!size || headers.size() > 65536 || offset < -1)
+        return false;
+    *size = -1;
+    std::int64_t length = -1;
+    std::string_view range;
+    bool have_length = false, have_range = false;
+    const auto number = [](std::string_view value, std::int64_t *out)
+    {
+        if (value.empty())
+            return false;
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), *out);
+        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && *out >= 0;
+    };
+    while (!headers.empty())
+    {
+        const auto end = headers.find('\n');
+        auto line = headers.substr(0, end);
+        headers = end == std::string_view::npos ? std::string_view{} : headers.substr(end + 1);
+        if (!line.empty() && line.back() == '\r')
+            line.remove_suffix(1);
+        const auto colon = line.find(':');
+        if (colon == std::string_view::npos)
+            continue;
+        std::string key(line.substr(0, colon));
+        for (auto &c : key)
+            if (c >= 'A' && c <= 'Z')
+                c += 'a' - 'A';
+        auto value = line.substr(colon + 1);
+        while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+            value.remove_prefix(1);
+        while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
+            value.remove_suffix(1);
+        if (key == "content-length")
+        {
+            if (have_length || !number(value, &length))
+                return false;
+            have_length = true;
+        }
+        if (key == "content-range")
+        {
+            if (have_range)
+                return false;
+            have_range = true;
+            range = value;
+        }
+    }
+    if (status == 200 && offset <= 0 && !have_range)
+    {
+        *size = length;
+        return true;
+    }
+    if (status != 206 || !range.starts_with("bytes "))
+        return false;
+    range.remove_prefix(6);
+    const auto dash = range.find('-'), slash = range.find('/');
+    if (dash == std::string_view::npos || slash == std::string_view::npos || dash >= slash)
+        return false;
+    std::int64_t first = 0, last = 0, total = -1;
+    if (!number(range.substr(0, dash), &first) ||
+        !number(range.substr(dash + 1, slash - dash - 1), &last) ||
+        first != (offset < 0 ? 0 : offset) || last < first ||
+        (length >= 0 && (length == 0 || last - first != length - 1)))
+        return false;
+    if (range.substr(slash + 1) != "*" &&
+        (!number(range.substr(slash + 1), &total) || last >= total))
+        return false;
+    *size = total;
+    return true;
+}
+
 namespace
 {
 
@@ -417,6 +492,33 @@ bool BuildRedirectCandidate(const char *base_url, const char *location, char *ca
 bool IsSupportedPlaylistUrl(const char *url)
 {
     return IsSupportedUrl(url);
+}
+
+RequestHeaders HeadersForUrl(const char *original, const char *target,
+                             const RequestHeaders &headers)
+{
+    const auto origin = [](const char *url) -> std::string
+    {
+        if (!IsSupportedUrl(url))
+            return {};
+        const std::string_view value(url);
+        const auto start = value.find("://") + 3;
+        auto authority = std::string(value.substr(0, value.find_first_of("/?#", start)));
+        for (char &c : authority)
+            c = LowerAscii(c);
+        const std::string_view port = authority.starts_with("https:") ? ":443" : ":80";
+        if (authority.ends_with(port))
+            authority.resize(authority.size() - port.size());
+        return authority;
+    };
+    RequestHeaders result = headers;
+    const auto from = origin(original);
+    if (from.empty() || from != origin(target))
+    {
+        result.cookie = nullptr;
+        result.authorization = nullptr;
+    }
+    return result;
 }
 
 Status ResolveRedirectUrl(const char *base_url, const char *location, char *resolved_url,
@@ -839,6 +941,24 @@ int ConfigureRequest(int request, const char *accept, std::uint32_t receive_time
             return -1;
         result = sceHttpAddRequestHeader(request, "Referer", headers->referrer, kHeaderOverwrite);
     }
+    if (result >= 0 && headers && headers->cookie && *headers->cookie)
+    {
+        if (!SafeHeaderValue(headers->cookie))
+            return -1;
+        result = sceHttpAddRequestHeader(request, "Cookie", headers->cookie, kHeaderOverwrite);
+    }
+    if (result >= 0 && headers && headers->authorization && *headers->authorization)
+    {
+        if (!SafeHeaderValue(headers->authorization))
+            return -1;
+        result = sceHttpAddRequestHeader(request, "Authorization", headers->authorization,
+                                         kHeaderOverwrite);
+    }
+    if (result >= 0 && headers && headers->byte_offset >= 0)
+    {
+        const std::string range = "bytes=" + std::to_string(headers->byte_offset) + "-";
+        result = sceHttpAddRequestHeader(request, "Range", range.c_str(), kHeaderOverwrite);
+    }
     return result;
 }
 
@@ -873,10 +993,12 @@ FetchResult OpenListRequest(RedirectHistory *history, const RequestHeaders *head
             CloseRequest(*connection, *request);
             return Failure(Status::cancelled);
         }
+        const auto scoped = headers ? HeadersForUrl(history->urls[0], history->Current(), *headers)
+                                    : RequestHeaders{};
         int result = ConfigureRequest(*request,
                                       "application/vnd.apple.mpegurl, application/x-mpegURL, "
                                       "audio/mpegurl, text/plain, */*",
-                                      kReceiveTimeoutUsec, headers);
+                                      kReceiveTimeoutUsec, &scoped);
         if (result >= 0)
             result = sceHttpSendRequest(*request, nullptr, 0);
         if (result >= 0)
@@ -1199,8 +1321,10 @@ Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
             CloseStream(stream);
             return Status::request_failed;
         }
+        const auto scoped =
+            headers ? HeadersForUrl(url, history.Current(), *headers) : RequestHeaders{};
         int result =
-            ConfigureRequest(stream->request, accepted, kStreamReceiveTimeoutUsec, headers);
+            ConfigureRequest(stream->request, accepted, kStreamReceiveTimeoutUsec, &scoped);
         if (result >= 0)
             result = sceHttpSendRequest(stream->request, nullptr, 0);
         if (result >= 0)
@@ -1217,6 +1341,18 @@ Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
             {
                 ReadErrorResponse(stream->request, stream->error_response,
                                   sizeof(stream->error_response));
+                CloseStream(stream);
+                return Status::http_status_error;
+            }
+            char *response = nullptr;
+            std::size_t response_bytes = 0;
+            const bool have_headers =
+                sceHttpGetAllResponseHeaders(stream->request, &response, &response_bytes) >= 0 &&
+                response;
+            if (!ParseStreamRange(have_headers ? std::string_view(response, response_bytes)
+                                               : std::string_view{},
+                                  stream->http_status, scoped.byte_offset, &stream->size))
+            {
                 CloseStream(stream);
                 return Status::http_status_error;
             }

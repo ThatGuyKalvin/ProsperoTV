@@ -14,6 +14,7 @@
 #include "gfx/gl_program.hpp"
 #include "gfx/renderer.hpp"
 #include "host_platform.hpp"
+#include "host_preview.hpp"
 #include "tv/app.hpp"
 
 #include <EGL/egl.h>
@@ -27,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -115,12 +117,18 @@ Step change(void (*before)(), float wait = 0.5f, const char *capture = nullptr)
 }
 
 std::string g_playlist;
+std::string g_roadmap_playlist, g_roadmap_guide, g_roadmap_logo;
 ptv::Model *g_model = nullptr;
 
 const Step kWalk[] = {
     // ---- the first launch: nothing saved yet ----
     look(0.5f, "01-first-download"),
     look(1.4f, "02-live-tv"),
+    press(Action::touch, 0.6f, "42-provider-categories"),
+    move(Direction::down),
+    press(Action::west, 0.5f, "43-category-hidden"),
+    press(Action::west),
+    press(Action::back),
     // ---- Live TV ----
     move(Direction::right, 0.16f, "03-live-tv-moving"),
     look(0.7f, "04-live-tv-focus"),
@@ -185,6 +193,14 @@ const Step kWalk[] = {
     press(Action::back, 1.0f, "16-search-cleared"),
     // ---- Favorites ----
     press(Action::page_next, 1.1f, "17-favorites"),
+    change(
+        []()
+        {
+            g_model->create_folder("Football");
+            g_model->create_folder("Kids");
+        }),
+    press(Action::touch, 0.6f, "44-favorite-folders"),
+    press(Action::back),
     press(Action::west, 0.4f),
     press(Action::west, 1.0f, "18-favorites-empty"),
     // ---- Sources ----
@@ -197,6 +213,7 @@ const Step kWalk[] = {
     press(Action::menu, 1.0f, "22-sources-updating"),
     look(2.6f, "23-sources-updated"),
     // ---- Settings ----
+    press(Action::page_next, 0.7f, "53-vod-no-account"),
     press(Action::page_next, 1.1f, "24-settings"),
     press(Action::confirm, 0.5f),
     move(Direction::down, 0.25f),
@@ -214,6 +231,9 @@ const Step kWalk[] = {
     move(Direction::down, 0.15f),
     move(Direction::down, 0.15f),
     move(Direction::down, 0.7f, "25a-settings-diagnostic-log"),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.7f, "45-settings-playback"),
+    move(Direction::down, 0.7f, "62-settings-live-preview"),
     // Turned on: the page says so at the bottom, and so does every other one.
     press(Action::confirm, 0.7f, "25b-settings-diagnostic-log-on"),
     press(Action::confirm, 0.4f),
@@ -242,6 +262,53 @@ const Step kWalk[] = {
     change([]() { host::set_network(false, "", 400); }, 0.1f),
     press(Action::menu, 1.6f, "27-update-failed"),
     look(4.0f, nullptr),
+    change(
+        []()
+        {
+            host::set_unix_time(
+                static_cast<std::uint64_t>(ptv::xmltv_time("20261008163000 +0000")));
+            host::set_network(true, g_roadmap_playlist, 100);
+            host::set_network_response("https://guide.example.invalid/demo.xml", g_roadmap_guide);
+            host::set_network_response("https://logos.example.invalid/demo.png", g_roadmap_logo);
+            g_model->refresh();
+        },
+        2.0f, "46-now-next"),
+    press(Action::touch, 0.6f, "47-category-countries"),
+    move(Direction::down),
+    press(Action::confirm, 0.6f, "48-category-children"),
+    move(Direction::down),
+    move(Direction::down),
+    press(Action::confirm, 0.6f, "49-category-grandchildren"),
+    press(Action::back),
+    press(Action::back),
+    press(Action::back),
+    press(Action::r3, 0.6f, "50-programme-guide"),
+    move(Direction::left, 0.6f, "51-catch-up-guide"),
+    press(Action::back),
+    look(2.0f, "52-channel-logos"),
+    change([]() { g_model->edit_saved_source(3); }, 0.2f),
+    change([]() { host::set_keyboard_text("https://provider.example.invalid"); }, 0.2f),
+    change([]() { host::set_keyboard_text("viewer"); }, 0.2f),
+    change([]() { host::set_keyboard_text("demo"); }, 2.0f),
+    press(Action::page_next),
+    press(Action::page_next, 0.7f, "54-sources-with-portals"),
+    press(Action::page_next, 0.7f, "55-vod-home"),
+    press(Action::confirm, 2.0f, "56-vod-categories"),
+    move(Direction::down),
+    press(Action::confirm, 0.5f, "57-vod-child-categories"),
+    press(Action::confirm, 1.2f, "58-vod-movies"),
+    press(Action::back),
+    press(Action::back),
+    press(Action::back),
+    move(Direction::down),
+    press(Action::confirm, 1.2f),
+    press(Action::confirm, 1.2f, "59-vod-shows"),
+    press(Action::confirm, 1.2f, "60-vod-seasons"),
+    move(Direction::down),
+    press(Action::confirm),
+    press(Action::confirm, 0.8f, "61-vod-episodes"),
+    change([]() { g_model->use_saved_source(1); }, 0.7f),
+    press(Action::back, 0.7f),
 };
 
 } // namespace
@@ -287,7 +354,8 @@ int main(int argc, char **argv)
     // names need.
     fonts.pixel = fonts.mono;
     fonts.hand = fonts.regular;
-    (void)load_font(renderer, fonts_dir + "/noto-sans-east-asian.huifont", &east_asian, &fonts.hand);
+    (void)load_font(renderer, fonts_dir + "/noto-sans-east-asian.huifont", &east_asian,
+                    &fonts.hand);
     (void)load_font(renderer, fonts_dir + "/noto-sans-korean.huifont", &korean, &fonts.pixel);
 
     GLuint framebuffer = 0;
@@ -311,14 +379,104 @@ int main(int argc, char **argv)
           "iptv-favorites-v1.bin", "iptv-history-v1.bin", "iptv-custom-source-v1.txt",
           "iptv-active-source-v1.txt", "prosperotv-xtream-v1.txt", "prosperotv-interface-v1.txt"})
         std::remove((data_dir + "/" + name).c_str());
+    std::remove((data_dir + "/prosperotv-library.sqlite3").c_str());
+    std::remove((data_dir + "/prosperotv-catalog.sqlite3.guide.sqlite3").c_str());
+    g_roadmap_playlist = output + "/roadmap.m3u";
+    g_roadmap_guide = output + "/roadmap.xml";
+    g_roadmap_logo = output + "/test-logo.png";
+    {
+        std::ofstream playlist(g_roadmap_playlist), xml(g_roadmap_guide);
+        playlist << "#EXTM3U x-tvg-url=\"https://guide.example.invalid/demo.xml\" "
+                    "catchup=\"default\" catchup-days=\"7\"\n";
+        xml << "<tv>";
+        constexpr const char *shows[] = {"Football: Afternoon match",
+                                         "Around the world",
+                                         "The big interview",
+                                         "Basketball tonight",
+                                         "Family favourites",
+                                         "Evening report",
+                                         "At the movies"};
+        for (int i = 0; i < 14; ++i)
+        {
+            playlist
+                << "#EXTINF:-1 tvg-logo=\"https://logos.example.invalid/demo.png\" tvg-id=\"demo"
+                << i << "\" group-title=\"US / "
+                << (i == 13 ? "News"
+                    : i % 2 ? "Sports / Basketball"
+                            : "Sports / Football")
+                << "\" catchup-source=\"https://archive.example.invalid/" << i
+                << "?start={utc}&end={utcend}\",Channel " << (i < 10 ? "0" : "") << i
+                << "\nhttps://stream.example.invalid/" << i << ".ts\n";
+            for (int hour = 14; hour < 22; ++hour)
+                xml << "<programme channel=\"demo" << i << "\" start=\"20261008" << hour
+                    << "0000 +0000\" stop=\"20261008" << hour + 1 << "0000 +0000\"><title>"
+                    << shows[(i + hour) % 7]
+                    << "</title><desc>Coverage, interviews and highlights from today's "
+                       "events.</desc></programme>";
+        }
+        xml << "</tv>";
+    }
 
     host::reset();
     host::set_network(true, g_playlist, 600);
+    {
+        const iptv::XtreamCredentials account{"https://provider.example.invalid", "viewer", "demo"};
+        int number = 0;
+        const auto reply = [&](const std::string &url, std::string_view body)
+        {
+            const auto file = output + "/vod-fixture-" + std::to_string(number++) + ".json";
+            std::ofstream(file) << body;
+            host::set_network_response(url, file);
+        };
+        const auto response = [&](std::string_view action, std::string_view body)
+        {
+            std::string url;
+            iptv::BuildXtreamApiUrl(account, action, &url);
+            reply(url, body);
+        };
+        response("", R"({"user_info":{"auth":1,"status":"Active"}})");
+        response("get_live_categories", R"([{"category_id":1,"category_name":"US / News"}])");
+        response(
+            "get_live_streams",
+            R"([{"stream_id":1,"name":"Channel 1","category_id":1},{"stream_id":2,"name":"Channel 2","category_id":1},{"stream_id":3,"name":"Channel 3","category_id":1}])");
+        response(
+            "get_vod_categories",
+            R"([{"category_id":1,"category_name":"US"},{"category_id":2,"category_name":"Drama","parent_id":1},{"category_id":3,"category_name":"Family","parent_id":1}])");
+        response(
+            "get_vod_streams",
+            R"([{"stream_id":10,"name":"A journey through the valley","container_extension":"mp4","category_id":2,"stream_icon":"https://logos.example.invalid/demo.png"},{"stream_id":11,"name":"Midnight on the coast","container_extension":"mkv","category_id":2},{"stream_id":12,"name":"The little astronomer","container_extension":"mp4","category_id":3}])");
+        response("get_series_categories", R"([{"category_id":4,"category_name":"Documentaries"}])");
+        response(
+            "get_series",
+            R"([{"series_id":20,"name":"Our changing planet","category_id":4,"cover":"https://logos.example.invalid/demo.png"}])");
+        std::string series;
+        iptv::BuildXtreamSeriesUrl(account, "20", &series);
+        reply(
+            series,
+            R"({"episodes":{"1":[{"id":200,"title":"The world beneath our feet","episode_num":1,"container_extension":"mp4"},{"id":201,"title":"Ocean currents","episode_num":2,"container_extension":"mp4"},{"id":202,"title":"Following the seasons","episode_num":3,"container_extension":"mp4"}],"2":[{"id":210,"title":"A new chapter","episode_num":1,"container_extension":"mp4"}]}})");
+    }
     ptv::Model model(data_dir);
     g_model = &model;
     model.open();
     ptv::App app(model, fonts, renderer.glass_texture(), ptv::load_settings(data_dir),
                  "host build");
+    app.configure_images(
+        [&renderer](const ptv::ImagePixels &pixels) {
+            return renderer.batch().create_texture(pixels.width, pixels.height, pixels.rgba.data());
+        },
+        [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
+    app.configure_preview(
+        [&renderer](std::uint32_t texture, const ptv::ImagePixels &pixels)
+        {
+            if (!texture)
+                return renderer.batch().create_texture(pixels.width, pixels.height,
+                                                       pixels.rgba.data());
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pixels.width, pixels.height, GL_RGBA,
+                            GL_UNSIGNED_BYTE, pixels.rgba.data());
+            return texture;
+        },
+        [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
 
     ptv::Frame frame;
     std::vector<unsigned char> pixels(static_cast<std::size_t>(width * height * 4));
@@ -383,11 +541,23 @@ int main(int argc, char **argv)
         if (step.capture != nullptr)
             render(step.capture);
     }
+    // A synthetic moving picture exercises the same preview texture path.
+    host::set_preview(true);
+    app.stop_preview();
+    for (int i = 0; i < 120; ++i)
+    {
+        hui::InputFrame input;
+        app.update(input, kDt, feedback);
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    render("63-live-preview");
+    app.stop_preview();
+    host::set_preview(false);
     {
         // The opening, at six of its moments.
         const std::pair<float, const char *> moments[] = {
-            {0.50f, "00a-intro-set"},   {0.80f, "00b-intro-line"}, {1.08f, "00c-intro-opening"},
-            {2.00f, "00d-intro-on"},    {2.72f, "00e-intro-into"}, {2.98f, "00f-intro-through"}};
+            {0.50f, "00a-intro-set"}, {0.80f, "00b-intro-line"}, {1.08f, "00c-intro-opening"},
+            {2.00f, "00d-intro-on"},  {2.72f, "00e-intro-into"}, {2.98f, "00f-intro-through"}};
         for (const auto &[seconds, name] : moments)
         {
             app.set_intro_time(seconds);
@@ -406,8 +576,8 @@ int main(int argc, char **argv)
     }
     // The update: offered, downloading, unpacking, ready to close, and failed.
     {
-        const auto run = [&](int count, std::uint32_t press = 0,
-                             hui::Direction nav = hui::Direction::none)
+        const auto run =
+            [&](int count, std::uint32_t press = 0, hui::Direction nav = hui::Direction::none)
         {
             for (int i = 0; i < count; ++i)
             {
@@ -441,27 +611,30 @@ int main(int argc, char **argv)
         offer.installed = "01.000.015";
         offer.available = "01.000.020";
         offer.size = 41u * 1024u * 1024u;
-        offer.notes = "Highlights\n"
-        "- The alphabet beside every list: Right from the last column, then up and down.\n"
-        "- Hold L2 or R2 and the pages keep turning.\n"
-        "- A tuning screen from Cross to the channel's first picture.\n"
-        "\n"
-        "Warning: this version moves your sources and favorites to /data/prosperotv the first time it starts.\n"
-        "\n"
-        "Fixes\n"
-        "- Channels play again after the menu has been drawn with OpenGL.\n"
-        "- Greek channel names read as written.\n"
-        "- The launch picture stays until the menu is there.\n"
-        "- The player's messages no longer appear as notifications.\n"
-        "\n"
-        "Note: the update keeps everything you saved.\n"
-        "\n"
-        "Thanks\n"
-        "To everyone who tested the new interface on their console and wrote back with what they saw, "
-        "and to the maintainers of the public channel list.\n"
-        "- More languages for channel names are next.\n"
-        "- So is a way to sort a list by country.\n"
-        "- And the guide, where a source provides one.";
+        offer.notes =
+            "Highlights\n"
+            "- The alphabet beside every list: Right from the last column, then up and down.\n"
+            "- Hold L2 or R2 and the pages keep turning.\n"
+            "- A tuning screen from Cross to the channel's first picture.\n"
+            "\n"
+            "Warning: this version moves your sources and favorites to /data/prosperotv the first "
+            "time it starts.\n"
+            "\n"
+            "Fixes\n"
+            "- Channels play again after the menu has been drawn with OpenGL.\n"
+            "- Greek channel names read as written.\n"
+            "- The launch picture stays until the menu is there.\n"
+            "- The player's messages no longer appear as notifications.\n"
+            "\n"
+            "Note: the update keeps everything you saved.\n"
+            "\n"
+            "Thanks\n"
+            "To everyone who tested the new interface on their console and wrote back with what "
+            "they saw, "
+            "and to the maintainers of the public channel list.\n"
+            "- More languages for channel names are next.\n"
+            "- So is a way to sort a list by country.\n"
+            "- And the guide, where a source provides one.";
         offer.notes_truncated = true;
         host::offer_update(offer);
         run(8);

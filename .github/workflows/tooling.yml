@@ -45,7 +45,7 @@ jobs:
       - name: Install native toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 clang-format-18 lld-18 libsqlite3-dev libavcodec-dev libswresample-dev make pkg-config tar unzip wget
+          sudo apt-get install --yes clang-18 clang-format-18 lld-18 libsqlite3-dev libavcodec-dev libswresample-dev ffmpeg make pkg-config tar unzip wget
 
       - name: Read app identity and version
         shell: bash
@@ -87,6 +87,9 @@ jobs:
 
       - name: Run host integration tests
         run: make test-integration
+
+      - name: Test MP4 and Matroska playback
+        run: HOST_CXX=clang++-18 make test-media
 
       - name: Reproduce clean-room runtime shim
         run: make libc
@@ -155,7 +158,7 @@ jobs:
       - name: Install the toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build ccache libsqlite3-dev make pkg-config curl tar unzip wget xz-utils
+          sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build ccache cmake libsqlite3-dev libpng-dev libjpeg-dev zlib1g-dev make pkg-config curl tar unzip wget xz-utils
 
       - name: Read app identity and version
         id: identity

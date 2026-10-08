@@ -52,7 +52,7 @@ APP_CXXFLAGS += -frtti -Os
 APP_INCLUDE_PATHS += include src vendor/ps5/sdl/include vendor/ps5/sdl/include/SDL2 vendor/ps5/rmlui/include
 APP_INCLUDE_PATHS += .deps/ffmpeg-audio/root/include
 APP_STATIC_ARCHIVES += vendor/ps5/sdl/lib/libSDL2.a vendor/ps5/rmlui/lib/librmlui.a vendor/ps5/freetype/lib/libfreetype.a vendor/ps5/sdk/lib/libunwind.a vendor/ps5/sdk/lib/libcxx.a vendor/ps5/sdk/lib/libcxxabi.a
-APP_STATIC_ARCHIVES += .deps/ffmpeg-audio/root/lib/libavcodec.a .deps/ffmpeg-audio/root/lib/libswresample.a .deps/ffmpeg-audio/root/lib/libavutil.a
+APP_STATIC_ARCHIVES += .deps/ffmpeg-audio/root/lib/libavformat.a .deps/ffmpeg-audio/root/lib/libavcodec.a .deps/ffmpeg-audio/root/lib/libswresample.a .deps/ffmpeg-audio/root/lib/libavutil.a
 PACBREW_INCLUDE_PATHS += include
 PACBREW_STATIC_ARCHIVES += lib/libsqlite3.a
 HOST_UNIT_TEST := build/tests/iptv_core_tests
@@ -71,7 +71,11 @@ doctor:
 	@printf '%s\n' '==> [doctor] Checking the Linux/WSL host without changing it'
 	@bash tools/doctor.sh
 
-test: test-unit test-integration
+test: test-unit test-integration test-media
+
+.PHONY: test-media
+test-media:
+	@bash tools/run-media-tests.sh
 
 test-deps:
 	@printf '%s\n' '==> [test-deps] Fetching the pinned host-only GoogleTest source'
@@ -101,7 +105,7 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 		src/iptv_stream.cpp src/iptv_webm.cpp src/iptv_xtream.cpp \
 		include/iptv_vp9_packet.h include/iptv_catalog.h \
 		include/iptv_hls.h include/iptv_http.h include/iptv_source_state.h include/iptv_store.h \
-		include/iptv_stream.h include/iptv_mp2.h include/iptv_audio_frame.h include/iptv_webm.h include/iptv_xtream.h \
+		include/iptv_stream.h include/iptv_mp2.h include/iptv_audio_frame.h include/iptv_webm.h include/iptv_xtream.h include/iptv_json.h \
 		tools/setup-test-dependencies.sh | test-deps
 	@printf '%s\n' '==> [test-unit] Compiling the host-native GoogleTest binary'
 	@mkdir -p -- $(@D)

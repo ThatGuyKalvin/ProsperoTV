@@ -177,7 +177,8 @@ swap("src/iptv_native_backend.c",
      "    started = monotonic_us();\n"
      "    state->telemetry.last_present_source = (uintptr_t)output->buffer;\n",
      "    /* The tuning screen leaves before the first picture is shown. */\n"
-     "    iptv_native_agc_loading_finish();\n"
+     "    if (!state->config.picture)\n"
+     "        iptv_native_agc_loading_finish();\n"
      "    started = monotonic_us();\n"
      "    state->telemetry.last_present_source = (uintptr_t)output->buffer;\n")
 swap("src/iptv_player.cpp",
@@ -324,7 +325,7 @@ http_names = {
     "sceHttpCreateRequestWithURL": ("tv_http_create_request", 3),
     "sceHttpAbortRequest": ("tv_http_abort", 2),
     "sceHttpDeleteRequest": ("tv_http_delete_request", 2),
-    "sceHttpAddRequestHeader": ("tv_http_add_header", 4),
+    "sceHttpAddRequestHeader": ("tv_http_add_header", 7),
     "sceHttpSetAutoRedirect": ("tv_http_set_redirect", 3),
     "sceHttpSetConnectTimeOut": ("tv_http_set_connect_timeout", 3),
     "sceHttpSetRecvTimeOut": ("tv_http_set_receive_timeout", 3),
@@ -333,7 +334,7 @@ http_names = {
     "sceHttpSetResolveTimeOut": ("tv_http_set_resolve_timeout", 3),
     "sceHttpSendRequest": ("tv_http_send", 3),
     "sceHttpGetStatusCode": ("tv_http_status", 3),
-    "sceHttpGetAllResponseHeaders": ("tv_http_headers", 2),
+    "sceHttpGetAllResponseHeaders": ("tv_http_headers", 3),
     "sceHttpReadData": ("tv_http_read", 6),
 }
 http_file = tree / "src/iptv_http.cpp"

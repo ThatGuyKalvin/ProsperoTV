@@ -42,6 +42,7 @@ constexpr Name kButtons[] = {
     {"l1", hui::pad_bits::kL1},           {"r1", hui::pad_bits::kR1},
     {"l2", hui::pad_bits::kL2},           {"r2", hui::pad_bits::kR2},
     {"options", hui::pad_bits::kOptions}, {"touchpad", hui::pad_bits::kTouchpad},
+    {"r3", hui::pad_bits::kR3},
 };
 
 std::uint32_t button(const std::string &name)
@@ -52,7 +53,7 @@ std::uint32_t button(const std::string &name)
     return 0;
 }
 
-const char *kTabNames[] = {"live", "favorites", "sources", "settings", "about"};
+const char *kTabNames[] = {"live", "favorites", "sources", "vod", "settings", "about"};
 
 } // namespace
 
@@ -233,7 +234,7 @@ void Script::status_line(const ptv::Model &model, const ptv::App &app)
     const int tab = app.tab();
     note("status tab=%s channels=%u visible=%u position=%d focused=\"%s\" letters=%d search=%d "
          "query=\"%s\" refreshing=%d level=%d frames=%d avg=%.2fms worst=%.2fms slow=%d",
-         tab >= 0 && tab < 5 ? kTabNames[tab] : "?", model.channel_count(), model.visible_count(),
+         tab >= 0 && tab < 6 ? kTabNames[tab] : "?", model.channel_count(), model.visible_count(),
          position + 1, focused.c_str(), app.on_letters() ? 1 : 0, app.searching() ? 1 : 0,
          model.query().c_str(), model.refreshing() ? 1 : 0, static_cast<int>(model.level()),
          frames_, frames_ > 0 ? static_cast<double>(frame_sum_ / frames_ * 1000.0f) : 0.0,
@@ -275,9 +276,8 @@ std::uint32_t Script::step(float dt, ptv::Model &model, const ptv::App &app)
         case Kind::until:
         {
             clock_ += dt;
-            const bool so = step.text == "catalog"
-                                ? model.has_catalog() && !model.refreshing()
-                                : session_ > step_session_;
+            const bool so = step.text == "catalog" ? model.has_catalog() && !model.refreshing()
+                                                   : session_ > step_session_;
             const bool hopeless =
                 step.text == "catalog" && model.catalog_failed() && !model.refreshing();
             if (!so && clock_ < step.seconds && !hopeless)

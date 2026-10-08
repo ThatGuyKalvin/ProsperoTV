@@ -7,6 +7,7 @@
 #include "tv/channel_text.hpp"
 
 #include <algorithm>
+#include <map>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -68,8 +69,8 @@ class Tally
                           return left.second > right.second;
                       return left.first < right.first;
                   });
-        *count = static_cast<unsigned>(
-            std::min<std::size_t>(entries_.size(), CatalogIndex::kFacetMax));
+        *count =
+            static_cast<unsigned>(std::min<std::size_t>(entries_.size(), CatalogIndex::kFacetMax));
         for (unsigned index = 0; index < *count; ++index)
         {
             (*facets)[index].value = entries_[index].first;
@@ -99,6 +100,8 @@ bool in_named_group(const iptv::ChannelView &channel, std::string_view term)
     return false;
 }
 
+} // namespace
+
 // Every character of these scripts is three bytes of UTF-8.
 void note_scripts(std::string_view text, bool *east_asian, bool *korean)
 {
@@ -122,8 +125,6 @@ void note_scripts(std::string_view text, bool *east_asian, bool *korean)
     }
 }
 
-} // namespace
-
 void CatalogIndex::clear()
 {
     *this = {};
@@ -145,6 +146,7 @@ void CatalogIndex::build(const iptv::Catalog &catalog)
     Tally country_tally;
     Tally category_tally;
     Tally language_tally;
+    std::map<std::string_view, unsigned> provider_tally;
     for (std::uint32_t index = 0; index < count; ++index)
     {
         const iptv::ChannelView channel = catalog[index];
@@ -165,9 +167,15 @@ void CatalogIndex::build(const iptv::Catalog &catalog)
 
         country_tally.add(channel.tvg_country);
         category_tally.add(channel.group_title);
+        if (!channel.group_title.empty())
+            ++provider_tally[channel.group_title];
         language_tally.add(channel.tvg_language);
         for (const std::string_view category : channel.alternate_group_titles)
+        {
             category_tally.add(category);
+            if (!category.empty() && category != channel.group_title)
+                ++provider_tally[category];
+        }
 
         if (!east_asian || !korean)
         {
@@ -188,6 +196,8 @@ void CatalogIndex::build(const iptv::Catalog &catalog)
     country_tally.store(&countries, &country_count);
     category_tally.store(&categories, &category_count);
     language_tally.store(&languages, &language_count);
+    for (const auto &[name, size] : provider_tally)
+        provider_categories.push_back({std::string(name), size});
 }
 
 } // namespace ptv

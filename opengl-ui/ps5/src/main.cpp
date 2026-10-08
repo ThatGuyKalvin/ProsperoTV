@@ -20,7 +20,6 @@
 #include "iptv_native_backend.h"
 #include "iptv_player.h"
 #include "iptv_remote.h"
-#include "iptv_native_backend.h"
 #include "iptv_store.h"
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
@@ -41,6 +40,7 @@
 
 #include <GL/glcorearb.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -130,7 +130,7 @@ void log_heap(const char *when)
     std::size_t failures = 0;
     hui_heap_stats(&live, &peak, &blocks, &failures);
     say("[TV] heap %s live=%zu peak=%zu blocks=%zu failures=%zu", when, live, peak, blocks,
-             failures);
+        failures);
 }
 
 // Pictures of a scripted run: half size is enough to read every label.
@@ -281,7 +281,7 @@ void hand_over_to_channel(const ptv::App &app, gfx::Renderer &renderer, ps5::Dis
         tv_tuning_clear();
     }
     say("[TV] tuning picture %s in %lld ms", taken ? "taken" : "not available",
-             static_cast<long long>((sys::monotonic_us() - started) / 1000));
+        static_cast<long long>((sys::monotonic_us() - started) / 1000));
 }
 
 // What the last channel left behind for the menu to say.
@@ -349,7 +349,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             const bool ok =
                 load_font(renderer, "noto-sans-east-asian.huifont", &east_asian, &fonts.hand);
             say("[TV] Chinese and Japanese face loaded=%d in %lld ms", ok ? 1 : 0,
-                     static_cast<long long>((sys::monotonic_us() - began) / 1000));
+                static_cast<long long>((sys::monotonic_us() - began) / 1000));
         }
         if (!korean_loaded && model.uses_korean())
         {
@@ -357,7 +357,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             const std::int64_t began = sys::monotonic_us();
             const bool ok = load_font(renderer, "noto-sans-korean.huifont", &korean, &fonts.pixel);
             say("[TV] Korean face loaded=%d in %lld ms", ok ? 1 : 0,
-                     static_cast<long long>((sys::monotonic_us() - began) / 1000));
+                static_cast<long long>((sys::monotonic_us() - began) / 1000));
         }
     };
 
@@ -378,10 +378,10 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         model.report_playback_failure(last.channel_id.c_str(), last.channel_name.c_str(),
                                       last.result, last.attempts, iptv_player_last_error());
     say("[TV] menu ready display=%dx%d pad=%d audio=%d sounds=%d keyboard=%d model=%d "
-             "catalog=%u in %lld ms",
-             display.width(), display.height(), pad_ready ? 1 : 0, audio_ready ? 1 : 0, bank.files,
-             model.keyboard_ready() ? 1 : 0, model_ready ? 1 : 0, model.channel_count(),
-             static_cast<long long>((sys::monotonic_us() - opened) / 1000));
+        "catalog=%u in %lld ms",
+        display.width(), display.height(), pad_ready ? 1 : 0, audio_ready ? 1 : 0, bank.files,
+        model.keyboard_ready() ? 1 : 0, model_ready ? 1 : 0, model.channel_count(),
+        static_cast<long long>((sys::monotonic_us() - opened) / 1000));
 
     const std::string version = read_content_version(tv::storage::app_file("sce_sys/param.json"));
     script.menu_opened(g_menu_sessions);
@@ -393,7 +393,25 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                        (version.empty() ? std::string("unknown") : version) +
                                            (TV_DEBUG_TRACE != 0 ? " debug trace" : ""));
         ptv::App &app = *owned;
+        app.configure_images(
+            [&renderer](const ptv::ImagePixels &pixels) {
+                return renderer.batch().create_texture(pixels.width, pixels.height,
+                                                       pixels.rgba.data());
+            },
+            [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
         app.set_remote_hint(iptv_remote_hint());
+        app.configure_preview(
+            [&renderer](std::uint32_t texture, const ptv::ImagePixels &pixels)
+            {
+                if (!texture)
+                    return renderer.batch().create_texture(pixels.width, pixels.height,
+                                                           pixels.rgba.data());
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pixels.width, pixels.height, GL_RGBA,
+                                GL_UNSIGNED_BYTE, pixels.rgba.data());
+                return texture;
+            },
+            [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
         if (g_menu_sessions == 1)
             app.play_intro();
         InputTracker tracker;
@@ -405,6 +423,9 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         std::uint64_t frames = 0;
         std::int64_t previous = sys::monotonic_us();
         std::int64_t last_frame_start = previous;
+        ptv::PortalResolveJob portal_link;
+        bool resolving_portal = false;
+        float portal_age = 0;
         while (!chosen)
         {
             load_wide_faces(); // two flags a frame; a list in another script arrives at any time
@@ -430,8 +451,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 count = 1;
             }
             InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
-                                                    static_cast<std::uint64_t>(now));
-            iptv_remote_enable_search(app.accepts_remote_search());
+                                              static_cast<std::uint64_t>(now));
+            iptv_remote_enable_search(!resolving_portal && app.accepts_remote_search());
             iptv_remote_poll();
             if (iptv_remote_take_connected())
                 app.phone_connected();
@@ -454,22 +475,24 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 input.focus_lost = false;
             }
             char remote_query[IPTV_IME_MAX_TEXT_BYTES];
-            if (iptv_remote_search(remote_query))
+            if (iptv_remote_search(remote_query) && !resolving_portal)
                 app.remote_search(remote_query);
             if (count > 0)
                 g_cross_held = samples[count - 1].connected &&
                                (samples[count - 1].buttons & pad_bits::kCross) != 0;
 
             feedback.clear();
-            app.update(input, dt, feedback);
+            if (!resolving_portal)
+                app.update(input, dt, feedback);
             if (app.take_pair_phone_requested())
                 if (!iptv_remote_begin_pairing())
                     app.remote_notice("Phone pairing is unavailable");
             if (!app.pairing_open())
                 iptv_remote_cancel_pairing();
             if (app.take_forget_phones_requested())
-                app.remote_notice(iptv_remote_forget_phones() ? "Paired phones forgotten"
-                                                           : "Could not forget phones. Try again.");
+                app.remote_notice(iptv_remote_forget_phones()
+                                      ? "Paired phones forgotten"
+                                      : "Could not forget phones. Try again.");
             app.set_pairing_info(iptv_remote_url(), iptv_remote_pairing_code(),
                                  iptv_remote_pairing_seconds(), iptv_remote_paired_count());
             for (const audio::CueEvent &event : feedback.cues)
@@ -496,9 +519,55 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     iptv_remote_set_volume(static_cast<unsigned>(settings->volume));
                 }
             }
-            chosen = model.take_play_request(request);
+            chosen = !resolving_portal && model.take_play_request(request);
+            if (chosen)
+                app.stop_preview();
+            if (chosen && !request->portal_command.empty())
+            {
+                // Leave the menu's picture and controller alive while the
+                // authenticated portal turns its command into a current URL.
+                model.close();
+                chosen = false;
+                portal_age = 0;
+                resolving_portal = portal_link.start(request->portal, request->portal_command);
+                if (!resolving_portal)
+                {
+                    model.open();
+                    model.report_playback_failure(request->channel_id.c_str(),
+                                                  request->channel_name.c_str(), -1, 0,
+                                                  "The portal connection could not start.");
+                }
+            }
+            if (resolving_portal)
+            {
+                portal_age += dt;
+                const bool cancelled =
+                    input.is_pressed(Action::back) || input.is_pressed(Action::menu);
+                if (cancelled || portal_link.done())
+                {
+                    portal_link.cancel();
+                    resolving_portal = false;
+                    if (!cancelled && portal_link.succeeded())
+                    {
+                        request->urls = {portal_link.url()};
+                        chosen = true;
+                    }
+                    else
+                    {
+                        model.open();
+                        if (!cancelled)
+                            model.report_playback_failure(request->channel_id.c_str(),
+                                                          request->channel_name.c_str(), -1, 1,
+                                                          portal_link.error().c_str());
+                        *request = {};
+                    }
+                }
+            }
 
-            app.draw(frame);
+            if (resolving_portal)
+                app.draw_tuning(frame, request->channel_id, std::min(1.0f, portal_age / 0.3f));
+            else
+                app.draw(frame);
             renderer.begin();
             renderer.backdrop(frame.backdrop);
             renderer.draw(frame.scene);
@@ -528,14 +597,14 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 const bool saved = save_picture(capture_path, kCaptureWidth, kCaptureHeight);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 if (!script.capture().empty())
-                script.capture_done(saved);
+                    script.capture_done(saved);
                 last_frame_start = sys::monotonic_us(); // saving is slow; the frame was not
             }
             if (!display.swap())
             {
                 say("[TV] fatal: swap failed frame=%llu error=%s",
-                         static_cast<unsigned long long>(frames),
-                         ps5::egl_error_name(display.last_error()));
+                    static_cast<unsigned long long>(frames),
+                    ps5::egl_error_name(display.last_error()));
                 notify_failure("display swap");
                 sys::park();
             }
@@ -544,7 +613,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             if (frames == 1)
             {
                 say("[TV] first-swap ok shapes=%zu draws=%zu", renderer.last_instances(),
-                         renderer.last_draw_calls());
+                    renderer.last_draw_calls());
                 if (!g_splash_hidden)
                 {
                     g_splash_hidden = true;
@@ -562,7 +631,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 char summary[160];
                 stats.format(summary, sizeof(summary));
                 say("[TV] %s draws=%zu shapes=%zu", summary, renderer.last_draw_calls(),
-                         renderer.last_instances());
+                    renderer.last_instances());
                 stats.reset();
             }
             if (app.wants_quit())
@@ -572,6 +641,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 // close it, and its files are replaced behind it.
                 say("[TV] closing: the update is staged");
                 script.closing("the update is staged");
+                app.stop_preview();
                 model.close();
                 audio_out.stop();
                 pad.close();
@@ -582,6 +652,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 // A scripted run ends the app itself, the way the system
                 // would close it: nothing is killed.
                 say("[TV] closing: the test script ended");
+                app.stop_preview();
                 model.close();
                 audio_out.stop();
                 pad.close();
@@ -593,8 +664,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             hand_over_to_channel(app, renderer, display, frame, request->channel_id,
                                  settings->reduced_motion);
         say("[TV] menu closing frames=%llu channel=%s addresses=%zu",
-                 static_cast<unsigned long long>(frames), request->channel_id.c_str(),
-                 request->urls.size());
+            static_cast<unsigned long long>(frames), request->channel_id.c_str(),
+            request->urls.size());
     }
     // Let the sound of the choice end before its port closes.
     for (int wait = 0; audio_ready && wait < 40 && mixer.active_voices() > 0; ++wait)
@@ -749,12 +820,13 @@ void trace_playback(const ptv::PlayRequest &request, const PlaybackOutcome &outc
         {
             const iptv::http::FetchResult fetched = ptv::platform::fetch(
                 request.urls[i].c_str(), head.data(), head.size(), 4096, nullptr);
-            event("first bytes of address %zu: fetch status=%d http=%d native=0x%08x bytes=%zu -> %s",
-                  i + 1, static_cast<int>(fetched.status), fetched.http_status,
-                  static_cast<unsigned>(fetched.native_error), fetched.bytes,
-                  ptv::describe_bytes(reinterpret_cast<const unsigned char *>(head.data()),
-                                      fetched.bytes)
-                      .c_str());
+            event(
+                "first bytes of address %zu: fetch status=%d http=%d native=0x%08x bytes=%zu -> %s",
+                i + 1, static_cast<int>(fetched.status), fetched.http_status,
+                static_cast<unsigned>(fetched.native_error), fetched.bytes,
+                ptv::describe_bytes(reinterpret_cast<const unsigned char *>(head.data()),
+                                    fetched.bytes)
+                    .c_str());
         }
         if (network == iptv::http::Status::ok)
             ptv::platform::network_shutdown();
@@ -792,8 +864,8 @@ void trace_header()
     event("######## ProsperoTV diagnostic log: version %s, title %s, built %s %s ########",
           read_content_version(tv::storage::app_file("sce_sys/param.json")).c_str(), TV_TITLE_ID,
           __DATE__, __TIME__);
-    event("unix time %lld; forced by the build=%d",
-          static_cast<long long>(std::time(nullptr)), TV_DEBUG_TRACE != 0 ? 1 : 0);
+    event("unix time %lld; forced by the build=%d", static_cast<long long>(std::time(nullptr)),
+          TV_DEBUG_TRACE != 0 ? 1 : 0);
     event("filesystem access: granted=%d status=%d route=%s", tv::storage::elevated() ? 1 : 0,
           tv::storage::status(), tv::storage::route());
     event("folders: app=%s config=%s cache=%s logs=%s", tv::storage::app_dir().c_str(),
@@ -962,17 +1034,28 @@ int main()
     iptv_remote_start(8888);
     // Said after it: the log moved with the app's data.
     say("[TV] modules videodec2=0x%08x compute=0x%08x h264=0x%08x hevc=0x%08x vp9=0x%08x "
-             "audiodec=0x%08x dialogs=0x%08x keyboard=0x%08x",
-             static_cast<unsigned>(decoders[0]), static_cast<unsigned>(decoders[1]),
-             static_cast<unsigned>(decoders[2]), static_cast<unsigned>(decoders[3]),
-             static_cast<unsigned>(decoders[4]), static_cast<unsigned>(decoders[5]),
-             static_cast<unsigned>(dialogs), static_cast<unsigned>(keyboard));
+        "audiodec=0x%08x dialogs=0x%08x keyboard=0x%08x",
+        static_cast<unsigned>(decoders[0]), static_cast<unsigned>(decoders[1]),
+        static_cast<unsigned>(decoders[2]), static_cast<unsigned>(decoders[3]),
+        static_cast<unsigned>(decoders[4]), static_cast<unsigned>(decoders[5]),
+        static_cast<unsigned>(dialogs), static_cast<unsigned>(keyboard));
 
     // Acceptance fixtures are opt-in test builds. Production must ignore a
     // stale iptv-autotest.txt left in an already-mounted development folder.
     if (IPTV_AUTOTEST_ENABLED != 0)
         (void)run_autotest_if_present();
 
+    // A disposable, sandboxed test title can start with a fixture library.
+    // Seed only once, so later launches exercise its real persisted state.
+    if (TV_DEV_SCRIPTS != 0 && !tv::storage::elevated())
+    {
+        const auto library = tv::storage::config_dir() + "/prosperotv-library.sqlite3";
+        std::string bytes;
+        if (!save::read_file(library, &bytes, 4u * 1024u * 1024u) &&
+            save::read_file(tv::storage::app_file("dev/library.sqlite3"), &bytes,
+                            4u * 1024u * 1024u))
+            (void)save::write_atomic(library, bytes);
+    }
     static ptv::Model model(tv::storage::config_dir(), tv::storage::cache_dir());
     ptv::Settings settings = ptv::load_settings(tv::storage::config_dir());
     // The diagnostic log: the viewer's switch in Settings, a debug build, or
@@ -980,9 +1063,10 @@ int main()
     tv::diag::start(tv::storage::logs_dir());
     {
         std::string unused;
-        ptv::diag::set_forced(TV_DEBUG_TRACE != 0 ||
-                              (TV_DEV_SCRIPTS != 0 &&
-                               save::read_file(tv::storage::app_file("dev/diagnostics.txt"), &unused, 64)));
+        ptv::diag::set_forced(
+            TV_DEBUG_TRACE != 0 ||
+            (TV_DEV_SCRIPTS != 0 &&
+             save::read_file(tv::storage::app_file("dev/diagnostics.txt"), &unused, 64)));
     }
     ptv::diag::set_enabled(settings.diagnostics);
     if (ptv::diag::enabled())
@@ -1000,7 +1084,8 @@ int main()
             current = next;
             iptv_native_set_volume(volume);
             return true;
-        }, &settings);
+        },
+        &settings);
     // A request a PC left beside the test title turns this launch into a
     // scripted run (see tv_dev.hpp). Release builds never read one.
     static tv_dev::Script script;
@@ -1048,8 +1133,9 @@ int main()
             {
                 auto &current = *static_cast<PlaybackFavorite *>(context);
                 const auto result = current.model.toggle_favorite(current.index);
-                return result == ptv::Model::Starred::failed ? -1
-                       : result == ptv::Model::Starred::added ? 1 : 0;
+                return result == ptv::Model::Starred::failed  ? -1
+                       : result == ptv::Model::Starred::added ? 1
+                                                              : 0;
             },
             &favorite);
         // A scripted run plays each channel for a set time; the player stops it.
@@ -1059,11 +1145,11 @@ int main()
         const long long seconds = (sys::monotonic_us() - started) / 1000000;
         // 1: the viewer stopped it; 0: it ended; below 0: it did not play, and why.
         const char *reason = outcome.result < 0 ? iptv_player_last_error() : nullptr;
-        say("[TV] playback result=%d attempts=%u selected=%u seconds=%lld%s%s%s",
-                 outcome.result, outcome.attempts, outcome.selected, seconds,
-                 reason != nullptr && reason[0] != '\0' ? " reason=\"" : "",
-                 reason != nullptr && reason[0] != '\0' ? reason : "",
-                 reason != nullptr && reason[0] != '\0' ? "\"" : "");
+        say("[TV] playback result=%d attempts=%u selected=%u seconds=%lld%s%s%s", outcome.result,
+            outcome.attempts, outcome.selected, seconds,
+            reason != nullptr && reason[0] != '\0' ? " reason=\"" : "",
+            reason != nullptr && reason[0] != '\0' ? reason : "",
+            reason != nullptr && reason[0] != '\0' ? "\"" : "");
         if (ptv::diag::enabled())
             trace_playback(request, outcome, seconds);
         if (script.active())
@@ -1093,16 +1179,19 @@ int main()
         }
         tv_tuning_clear();
         const iptv::StoreStatus history =
-            iptv::RecordPlaybackResult(iptv::kDefaultPlaybackHistoryPath, request.source_id,
-                                       request.channel_id, outcome.result >= 0, outcome.result);
+            request.record_channel_result
+                ? iptv::RecordPlaybackResult(iptv::kDefaultPlaybackHistoryPath, request.source_id,
+                                             request.channel_id, outcome.result >= 0,
+                                             outcome.result)
+                : iptv::StoreStatus::ok;
         if (history != iptv::StoreStatus::ok)
             say("[TV] history channel=%s result=%d store=%u", request.channel_id.c_str(),
-                     outcome.result, static_cast<unsigned>(history));
+                outcome.result, static_cast<unsigned>(history));
         last = {};
         last.result = outcome.result;
         if (outcome.result < 0)
         {
-            last.channel_id = request.channel_id;
+            last.channel_id = request.record_channel_result ? request.channel_id : std::string();
             last.channel_name = request.channel_name;
             last.attempts = outcome.attempts;
         }

@@ -9,6 +9,9 @@
 #include "tv/shared.hpp"
 #include "tv/sources_screen.hpp"
 #include "tv/update_sheet.hpp"
+#include "tv/library_sheet.hpp"
+#include "tv/guide_sheet.hpp"
+#include "tv/vod_screen.hpp"
 #include "ui/components/dialog.hpp"
 #include "ui/components/form.hpp"
 #include "ui/components/tabs.hpp"
@@ -33,14 +36,39 @@ class App
         std::string version);
 
     void update(const InputFrame &input, float dt, ui::Feedback &feedback);
+    void configure_images(ImageCache::Upload upload, ImageCache::Release release)
+    {
+        shared_.images.configure(std::move(upload), std::move(release));
+    }
+    void release_images()
+    {
+        shared_.images.clear();
+    }
+    void configure_preview(LivePreview::Upload upload, ImageCache::Release release)
+    {
+        shared_.preview.configure(std::move(upload), std::move(release));
+    }
+    void stop_preview()
+    {
+        shared_.preview.clear();
+    }
     bool accepts_remote_search() const;
     bool remote_search(const char *query);
     void set_volume(int volume);
     void set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones);
-    bool pairing_open() const { return pairing_open_; }
+    bool pairing_open() const
+    {
+        return pairing_open_;
+    }
     void phone_connected();
-    bool take_pair_phone_requested() { return std::exchange(pair_requested_, false); }
-    bool take_forget_phones_requested() { return std::exchange(forget_requested_, false); }
+    bool take_pair_phone_requested()
+    {
+        return std::exchange(pair_requested_, false);
+    }
+    bool take_forget_phones_requested()
+    {
+        return std::exchange(forget_requested_, false);
+    }
     void remote_notice(const char *message);
     void set_remote_hint(std::string hint)
     {
@@ -70,9 +98,9 @@ class App
                      float preview_fill = 0.0f) const;
     struct TuningBar
     {
-        Rect rect;      // in the 1920 x 1080 picture
-        Color fill;     // what the player fills it with
-        float start;    // how full it is when the player takes over
+        Rect rect;   // in the 1920 x 1080 picture
+        Color fill;  // what the player fills it with
+        float start; // how full it is when the player takes over
     };
     static TuningBar tuning_bar();
 
@@ -102,6 +130,10 @@ class App
     {
         return failure_.is_open();
     }
+    bool guide_open() const
+    {
+        return guide_sheet_.is_open();
+    }
     const UpdateSheet &update_sheet() const
     {
         return update_;
@@ -117,6 +149,7 @@ class App
         kLive,
         kFavorites,
         kSources,
+        kVod,
         kSettings,
         kAbout,
         kTabCount,
@@ -146,7 +179,10 @@ class App
     Shared shared_;
     BrowseScreen browse_;
     SourcesScreen sources_;
+    VodScreen vod_;
     SearchSheet search_;
+    LibrarySheet library_sheet_;
+    GuideSheet guide_sheet_;
     ui::TabBar tabs_;
     ui::Form form_;
     ui::Dialog failure_;
