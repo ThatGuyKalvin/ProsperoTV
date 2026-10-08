@@ -6,6 +6,7 @@
 
 #include "tv/platform.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -25,8 +26,12 @@ void set_keyboard_available(bool available);
 // The stand-in network: every download answers with this file, after this
 // long, or fails when `reachable` is false.
 void set_network(bool reachable, const std::string &playlist_path, unsigned delay_ms = 0);
+// The size of the pieces a list arrives in (0: as on the console).
+void set_network_piece(std::size_t bytes);
 // How many downloads were asked for.
 int fetch_count();
+// How many bytes of lists were handed over, all downloads together.
+std::size_t delivered_bytes();
 
 // The clock the logic sees (seconds since 1970); 0 is the PC's own clock.
 void set_unix_time(std::uint64_t seconds);

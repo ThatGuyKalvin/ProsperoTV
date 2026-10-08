@@ -4,6 +4,8 @@
 
 #include "tv/channel_text.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -38,13 +40,52 @@ std::string_view trimmed(std::string_view text)
     return text;
 }
 
-// The name, the playlist's own name and the address: where a size or a codec
-// is written when it is written anywhere.
-bool mentions(const iptv::Channel &channel, std::string_view needle)
+// ASCII capitals as small letters; every other byte as it is.
+constexpr std::array<unsigned char, 256> kLower = []
 {
-    return contains_nocase(channel.name, needle) || contains_nocase(channel.tvg_name, needle) ||
-           contains_nocase(channel.url, needle);
-}
+    std::array<unsigned char, 256> table{};
+    for (unsigned value = 0; value < 256; ++value)
+        table[value] = static_cast<unsigned char>(value >= 'A' && value <= 'Z' ? value + 32 : value);
+    return table;
+}();
+
+// The name, the playlist's own name and the address: where a size or a codec
+// is written when it is written anywhere. They are put in small letters once,
+// and then searched as many times as there are words to look for: a catalog
+// of a quarter of a million channels asks this of every one of them.
+class Mentions
+{
+  public:
+    explicit Mentions(const iptv::ChannelView &channel)
+    {
+        add(channel.name);
+        if (channel.tvg_name != channel.name)
+            add(channel.tvg_name);
+        add(channel.url);
+    }
+
+    // `needle` in small letters.
+    bool operator()(std::string_view needle) const
+    {
+        return std::string_view(text_.data(), size_).find(needle) != std::string_view::npos;
+    }
+
+  private:
+    void add(std::string_view text)
+    {
+        // A line break keeps a word from matching across two fields.
+        if (size_ != 0 && size_ < text_.size())
+            text_[size_++] = '\n';
+        const std::size_t count = std::min(text.size(), text_.size() - size_);
+        for (std::size_t index = 0; index < count; ++index)
+            text_[size_ + index] = static_cast<char>(kLower[static_cast<unsigned char>(text[index])]);
+        size_ += count;
+    }
+
+    // Longer than any name and address a playlist is allowed to give.
+    std::array<char, 2 * 4096 + 2 * 2048 + 2> text_;
+    std::size_t size_ = 0;
+};
 
 // "1080p", "576i", "2160p": digits and one letter, as a playlist note.
 bool is_size_note(std::string_view note)
@@ -68,10 +109,15 @@ bool contains_nocase(std::string_view text, std::string_view needle)
         return true;
     if (needle.size() > text.size())
         return false;
-    for (std::size_t start = 0; start + needle.size() <= text.size(); ++start)
+    const auto fold = [](char value) { return kLower[static_cast<unsigned char>(value)]; };
+    const unsigned char first = fold(needle.front());
+    const std::size_t last = text.size() - needle.size();
+    for (std::size_t start = 0; start <= last; ++start)
     {
-        std::size_t at = 0;
-        while (at < needle.size() && lower(text[start + at]) == lower(needle[at]))
+        if (fold(text[start]) != first)
+            continue;
+        std::size_t at = 1;
+        while (at < needle.size() && fold(text[start + at]) == fold(needle[at]))
             ++at;
         if (at == needle.size())
             return true;
@@ -116,17 +162,17 @@ std::string first_value(std::string_view field)
     return std::string(trimmed(field.substr(0, end)));
 }
 
-unsigned quality_of(const iptv::Channel &channel)
+unsigned quality_of(const iptv::ChannelView &channel)
 {
-    if (mentions(channel, "2160p") || mentions(channel, "3840x2160") || mentions(channel, " 4k") ||
-        mentions(channel, "uhd"))
+    const Mentions mentions(channel);
+    if (mentions("2160p") || mentions("3840x2160") || mentions(" 4k") || mentions("uhd"))
         return kQualityUhd;
-    if (mentions(channel, "1080p") || mentions(channel, "1920x1080") || mentions(channel, "fhd"))
+    if (mentions("1080p") || mentions("1920x1080") || mentions("fhd"))
         return kQualityFullHd;
-    if (mentions(channel, "720p") || mentions(channel, "1280x720") || mentions(channel, " hd"))
+    if (mentions("720p") || mentions("1280x720") || mentions(" hd"))
         return kQualityHd;
-    if (mentions(channel, "576p") || mentions(channel, "480p") || mentions(channel, "360p") ||
-        mentions(channel, "240p") || mentions(channel, " sd"))
+    if (mentions("576p") || mentions("480p") || mentions("360p") || mentions("240p") ||
+        mentions(" sd"))
         return kQualitySd;
     return kQualityAny;
 }
@@ -138,7 +184,7 @@ const char *quality_filter_name(unsigned quality)
     return quality < kQualityCount ? names[quality] : names[0];
 }
 
-std::string resolution_label(const iptv::Channel &channel)
+std::string resolution_label(const iptv::ChannelView &channel)
 {
     static constexpr struct
     {
@@ -149,24 +195,26 @@ std::string resolution_label(const iptv::Channel &channel)
                  {"1280x720", "720p"}, {"720p", "720p"},       {"720x576", "576p"},
                  {"576p", "576p"},     {"720x480", "480p"},    {"480p", "480p"},
                  {"360p", "360p"},     {"270p", "270p"},       {"240p", "240p"}};
+    const Mentions mentions(channel);
     for (const auto &size : sizes)
-        if (mentions(channel, size.needle))
+        if (mentions(size.needle))
             return size.label;
     return {};
 }
 
-const char *codec_label(const iptv::Channel &channel)
+const char *codec_label(const iptv::ChannelView &channel)
 {
-    if (mentions(channel, ".webm") || mentions(channel, "vp9"))
+    const Mentions mentions(channel);
+    if (mentions(".webm") || mentions("vp9"))
         return "VP9";
-    if (mentions(channel, "hevc") || mentions(channel, "h265") || mentions(channel, "h.265"))
+    if (mentions("hevc") || mentions("h265") || mentions("h.265"))
         return "HEVC";
-    if (mentions(channel, "h264") || mentions(channel, "h.264") || mentions(channel, "avc"))
+    if (mentions("h264") || mentions("h.264") || mentions("avc"))
         return "H.264";
     return "";
 }
 
-std::string display_name(const iptv::Channel &channel, std::vector<std::string> *notes)
+std::string display_name(const iptv::ChannelView &channel, std::vector<std::string> *notes)
 {
     std::string_view rest = trimmed(channel.name);
     // Notes sit at the end, each in its own brackets: peel them off from the right.
@@ -196,11 +244,11 @@ std::string display_name(const iptv::Channel &channel, std::vector<std::string> 
     return std::string(rest);
 }
 
-std::string monogram(const iptv::Channel &channel)
+std::string monogram(const iptv::ChannelView &channel)
 {
-    const std::string &source = !channel.tvg_name.empty() ? channel.tvg_name
-                                : !channel.tvg_id.empty() ? channel.tvg_id
-                                                          : channel.name;
+    const std::string_view source = !channel.tvg_name.empty() ? channel.tvg_name
+                                    : !channel.tvg_id.empty() ? channel.tvg_id
+                                                              : channel.name;
     std::string letters;
     bool word_start = true;
     for (const char raw : source)
@@ -230,16 +278,28 @@ std::string monogram(const iptv::Channel &channel)
                 break;
         }
     }
-    return letters.empty() ? "TV" : letters;
+    if (!letters.empty())
+        return letters;
+    // No Latin letter at all (a Chinese, Japanese or Korean name): its first
+    // character says more than "TV".
+    for (std::size_t index = 0; index < source.size();)
+    {
+        const unsigned char lead = static_cast<unsigned char>(source[index]);
+        const std::size_t length = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+        if (lead >= 0xe0 && index + length <= source.size())
+            return std::string(source.substr(index, length));
+        index += length;
+    }
+    return "TV";
 }
 
-std::string category_of(const iptv::Channel &channel)
+std::string category_of(const iptv::ChannelView &channel)
 {
     const std::string first = first_value(channel.group_title);
     return first.empty() ? "Uncategorized" : first;
 }
 
-std::string place_line(const iptv::Channel &channel)
+std::string place_line(const iptv::ChannelView &channel)
 {
     std::string line = first_value(channel.tvg_country);
     if (line.empty())
@@ -305,7 +365,7 @@ char latin_base(std::uint32_t code)
 
 } // namespace
 
-std::string sort_key(const iptv::Channel &channel)
+std::string sort_key(const iptv::ChannelView &channel)
 {
     const std::string name = display_name(channel);
     std::string folded;

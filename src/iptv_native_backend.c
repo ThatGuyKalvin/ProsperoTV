@@ -22,6 +22,18 @@
 #include <string.h>
 #include <time.h>
 
+static atomic_uint master_volume = 100;
+
+void iptv_native_set_volume(unsigned percent)
+{
+    atomic_store_explicit(&master_volume, percent > 100 ? 100 : percent, memory_order_relaxed);
+}
+
+unsigned iptv_native_get_volume(void)
+{
+    return atomic_load_explicit(&master_volume, memory_order_relaxed);
+}
+
 #define BACKEND_MAGIC UINT32_C(0x49505456)
 #define PIPELINE_BUFFER_COUNT 3u
 #define PENDING_PTS_CAPACITY 32u
@@ -198,6 +210,11 @@ static const native_video_mode_t video_modes[] = {
     {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1920, 1088},
     {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 150, 2560, 1440},
     {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 153, 3840, 2176},
+    /* Broadcast 4K (Chinese satellite channels: Main10, 50 frames a second)
+     * is often signalled as level 6 or above though the picture is within
+     * what 5.1 allows. initialize_video() asks the decoder for this level and
+     * falls back to 5.1 when it refuses the number. */
+    {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 186, 3840, 2176},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
      IPTV_NATIVE_VP9_PROFILE_0, 41, 1920, 1080},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
@@ -229,6 +246,7 @@ _Static_assert(VIDEO_DRAIN_FLUSH_LIMIT >= PENDING_PTS_CAPACITY,
 typedef struct audio_sink
 {
     int32_t handle;
+    int applied_volume;
     uint32_t input_rate;
     uint32_t channels;
     uint64_t input_index;
@@ -566,6 +584,30 @@ static int pending_pts_take_first(pending_pts_t *pending, uint64_t *pts_us, int 
     return 1;
 }
 
+/* An interlaced picture is submitted as two access units, one per field, and
+ * comes out as one frame. After the frame took its timestamp (the smallest),
+ * the other field's entry goes too: one without a timestamp when there is one
+ * (a second field often carries none), otherwise the next smallest. */
+static int pending_pts_drop_second_field(pending_pts_t *pending)
+{
+    uint32_t index;
+    uint64_t pts_us;
+    int displayable;
+
+    if (!pending || pending->count == 0)
+        return 0;
+    for (index = 0; index < pending->count; ++index)
+    {
+        if (pending->values[index].pts_us == UINT64_MAX)
+        {
+            --pending->count;
+            pending->values[index] = pending->values[pending->count];
+            return 1;
+        }
+    }
+    return pending_pts_take_smallest(pending, &pts_us, &displayable);
+}
+
 static int state_pending_push(backend_state_t *state, uint64_t pts_us, int displayable)
 {
     if (!pending_pts_push(&state->pending_pts, pts_us, displayable))
@@ -590,6 +632,43 @@ static void discard_pending_video(backend_state_t *state)
     state->telemetry.dropped_delayed_frames += state->pending_pts.count;
     state->pending_pts.count = 0;
     state->telemetry.pending_video_timestamps = 0;
+}
+
+/* Development: treat every 8-bit picture as interlaced, to time the blend
+ * below on a console with an ordinary channel. */
+static int g_force_field_blend;
+
+void iptv_native_backend_force_field_blend(int enabled)
+{
+    g_force_field_blend = enabled != 0;
+}
+
+/* An interlaced picture holds two moments, 1/50 s apart, on alternate lines:
+ * anything that moves shows as a comb. Each line becomes the mean of itself
+ * and the one under it, which merges the two fields; the price is a slightly
+ * softer picture. Done in place, on the copy the decoder handed out. */
+static void blend_rows(uint8_t *plane, uint32_t pitch, uint32_t rows, uint32_t bytes_per_row)
+{
+    uint32_t y;
+    uint32_t x;
+
+    for (y = 0; y + 1u < rows; ++y)
+    {
+        uint8_t *row = plane + (size_t)y * pitch;
+        const uint8_t *below = row + pitch;
+        for (x = 0; x < bytes_per_row; ++x)
+            row[x] = (uint8_t)((row[x] + below[x] + 1u) >> 1);
+    }
+}
+
+static void blend_fields(const videodec2_output_t *output)
+{
+    uint8_t *luma = (uint8_t *)output->buffer;
+
+    blend_rows(luma, output->pitch, output->height, output->width);
+    /* The colour plane: half the lines, pairs of bytes, the same width. */
+    blend_rows(luma + (size_t)output->pitch * output->height, output->pitch,
+               (output->height + 1u) / 2u, output->width);
 }
 
 static int frame_is_in_pool(const backend_state_t *state, const void *frame)
@@ -712,11 +791,23 @@ static uint32_t pcm_rate_from_pts(uint32_t pcm_bytes, uint32_t channels, uint64_
     return nearest && nearest_difference * 100u <= (uint64_t)nearest * 3u ? nearest : fallback_rate;
 }
 
+static int32_t audio_sink_volume(audio_sink_t *sink)
+{
+    const unsigned percent = iptv_native_get_volume();
+    if (sink->applied_volume == (int)percent)
+        return 0;
+    int volumes[8];
+    for (unsigned index = 0; index < 8; ++index)
+        volumes[index] = (int)(AUDIO_OUT_VOLUME_0DB * percent / 100u);
+    const int result = sceAudioOutSetVolume(sink->handle, 3, volumes);
+    if (result >= 0)
+        sink->applied_volume = (int)percent;
+    return result;
+}
+
 static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint32_t channels)
 {
     int32_t result;
-    int volumes[8];
-    uint32_t index;
 
     if (input_rate < 8000u || input_rate > 192000u || channels == 0 || channels > 2)
         return IPTV_NATIVE_E_AUDIO_FRAME;
@@ -729,9 +820,8 @@ static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint
         return state->audio_sink.handle;
     state->audio_sink.input_rate = input_rate;
     state->audio_sink.channels = channels;
-    for (index = 0; index < 8; ++index)
-        volumes[index] = AUDIO_OUT_VOLUME_0DB;
-    result = sceAudioOutSetVolume(state->audio_sink.handle, 3, volumes);
+    state->audio_sink.applied_volume = -1;
+    result = audio_sink_volume(&state->audio_sink);
     return result < 0 ? result : 0;
 }
 
@@ -747,6 +837,9 @@ static int32_t audio_output_frame(backend_state_t *state, int16_t left, int16_t 
     if (sink->pending != AUDIO_OUT_GRAIN * 2u)
         return 0;
     started = monotonic_us();
+    result = audio_sink_volume(sink);
+    if (result < 0)
+        return result;
     result = sceAudioOutOutput(sink->handle, sink->block);
     elapsed = monotonic_us() - started;
     state->telemetry.audio_output_total_us += elapsed;
@@ -1097,6 +1190,16 @@ static int32_t initialize_video(backend_state_t *state)
 
     state->decoder_memory.size = sizeof(state->decoder_memory);
     result = sceVideodec2QueryDecoderMemoryInfo(&decoder_config, &state->decoder_memory);
+    if (result != 0 && state->config.codec == IPTV_NATIVE_CODEC_HEVC &&
+        decoder_config.max_level > 153)
+    {
+        /* The decoder does not take a level above 5.1 as its limit: open it
+         * at 5.1 and let it judge the pictures themselves. */
+        decoder_config.max_level = 153;
+        memset(&state->decoder_memory, 0, sizeof(state->decoder_memory));
+        state->decoder_memory.size = sizeof(state->decoder_memory);
+        result = sceVideodec2QueryDecoderMemoryInfo(&decoder_config, &state->decoder_memory);
+    }
     if (result != 0)
         return result;
 
@@ -1379,7 +1482,11 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         reject_flags |= 1u << 1;
     if (require_accepted && !frame->accepted)
         reject_flags |= 1u << 2;
-    if (output->picture_count != 1)
+    /* An interlaced H.264 picture (broadcast 1080i) comes out as its two
+     * fields woven into one frame of the full height: picture_count is 2 and
+     * the buffer is laid out like a progressive frame's. */
+    if (output->picture_count != 1 &&
+        !(state->config.codec == IPTV_NATIVE_CODEC_H264 && output->picture_count == 2))
         reject_flags |= 1u << 3;
     if (output->codec != state->mode->decoder_codec)
         reject_flags |= 1u << 4;
@@ -1420,6 +1527,12 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         return IPTV_NATIVE_E_DECODER_OUTPUT;
     }
 
+    if (output->picture_count == 2)
+    {
+        (void)pending_pts_drop_second_field(&state->pending_pts);
+        state->telemetry.pending_video_timestamps = state->pending_pts.count;
+    }
+
     ++state->telemetry.decoded_frames;
     state->telemetry.last_decoder_output = (uintptr_t)output->buffer;
     state->telemetry.output_pitch = output->pitch;
@@ -1441,6 +1554,16 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     if (result != 0)
         goto failed;
 
+    /* Before the clock below starts: the new interface's build places its
+     * own line between that clock and the next statement. */
+    if (state->config.bit_depth == 8 && (output->picture_count == 2 || g_force_field_blend))
+    {
+        const uint64_t blend_started = monotonic_us();
+        blend_fields(output);
+        elapsed = monotonic_us() - blend_started;
+        if (elapsed > state->telemetry.decode_max_us)
+            state->telemetry.decode_max_us = elapsed;
+    }
     started = monotonic_us();
     state->telemetry.last_present_source = (uintptr_t)output->buffer;
     state->telemetry.zero_copy_pointer_match =
@@ -2546,8 +2669,33 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 }
 
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
+static int test_volume_calls, test_volume_left, test_volume_right;
+int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
+{
+    assert(handle == 7 && flags == 3);
+    ++test_volume_calls;
+    test_volume_left = volumes[0];
+    test_volume_right = volumes[1];
+    return 0;
+}
+
 int main(void)
 {
+    audio_sink_t volume_sink = {0};
+    volume_sink.handle = 7;
+    volume_sink.applied_volume = -1;
+    iptv_native_set_volume(100);
+    assert(audio_sink_volume(&volume_sink) == 0);
+    assert(test_volume_left == AUDIO_OUT_VOLUME_0DB && test_volume_right == AUDIO_OUT_VOLUME_0DB);
+    iptv_native_set_volume(25);
+    assert(audio_sink_volume(&volume_sink) == 0);
+    assert(test_volume_left == AUDIO_OUT_VOLUME_0DB / 4 && test_volume_right == test_volume_left);
+    iptv_native_set_volume(0);
+    assert(audio_sink_volume(&volume_sink) == 0);
+    assert(test_volume_left == 0 && test_volume_right == 0);
+    assert(audio_sink_volume(&volume_sink) == 0 && test_volume_calls == 3);
+    iptv_native_set_volume(200);
+    assert(iptv_native_get_volume() == 100);
     assert(!media_span_ready(1, 0, 2000000));
     assert(!media_span_ready(60, 0, 1000000));
     assert(media_span_ready(121, 0, 2000000));
@@ -2602,6 +2750,44 @@ int main(void)
     assert(pending_pts_push(&pending, UINT64_MAX, 1));
     assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == UINT64_MAX);
     assert(!pending_pts_take_smallest(&pending, &pts_us, &displayable));
+
+    /* Interlaced: two fields in, one frame out. The second field's entry
+     * leaves with the frame, whether it carried a timestamp or not. */
+    assert(pending_pts_push(&pending, 0, 1));
+    assert(pending_pts_push(&pending, UINT64_MAX, 1));
+    assert(pending_pts_push(&pending, 40000, 1));
+    assert(pending_pts_push(&pending, UINT64_MAX, 1));
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 0);
+    assert(pending_pts_drop_second_field(&pending) && pending.count == 2);
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 40000);
+    assert(pending_pts_drop_second_field(&pending) && pending.count == 0);
+    assert(!pending_pts_drop_second_field(&pending));
+    assert(pending_pts_push(&pending, 0, 1));
+    assert(pending_pts_push(&pending, 20000, 1));
+    assert(pending_pts_push(&pending, 40000, 1));
+    assert(pending_pts_push(&pending, 60000, 1));
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 0);
+    assert(pending_pts_drop_second_field(&pending));
+    assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 40000);
+    assert(pending_pts_drop_second_field(&pending) && pending.count == 0);
+
+    {
+        /* A comb: lines of 0 and 200 alternate. Blended, every line but the
+         * last is their mean; bytes past the width are left alone. */
+        uint8_t picture[4 * 6 + 2 * 6];
+        videodec2_output_t comb = {0};
+        for (index = 0; index < sizeof(picture); ++index)
+            picture[index] = (index / 6u) % 2u ? 200u : 0u;
+        comb.buffer = picture;
+        comb.pitch = 6;
+        comb.width = 4;
+        comb.height = 4;
+        blend_fields(&comb);
+        assert(picture[0] == 100 && picture[3] == 100 && picture[6] == 100 && picture[12] == 100);
+        assert(picture[18] == 200);                    /* the last line has none under it */
+        assert(picture[4] == 0 && picture[10] == 200); /* padding untouched */
+        assert(picture[24] == 100 && picture[27] == 100 && picture[30] == 200);
+    }
 
     for (index = 0; index < PENDING_PTS_CAPACITY; ++index)
         assert(pending_pts_push(&pending, index, 1));

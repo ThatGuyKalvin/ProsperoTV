@@ -20,9 +20,14 @@ std::string readable(const ui::FontRef &font, std::string_view text);
 // A channel's name for the screen. display_name() when the fonts can write
 // it; otherwise what is left of it, then the playlist's own id for the
 // channel, then the word "Channel". `notes` as display_name() fills them.
-std::string shown_name(const ui::Fonts &fonts, const iptv::Channel &channel,
+std::string shown_name(const ui::Fonts &fonts, const iptv::ChannelView &channel,
                        std::vector<std::string> *notes = nullptr);
-// The display face when it holds every letter of the text, else the semibold one.
+// The face a text is written with: `usual` when it holds every letter of it;
+// otherwise the one of the usual face, the Chinese and Japanese face
+// (fonts.hand) and the Korean face (fonts.pixel) that holds the most of it.
+const ui::FontRef &face_for(const ui::Fonts &fonts, const ui::FontRef &usual,
+                            std::string_view text);
+// The display face when it holds every letter of the text, else face_for() the semibold one.
 const ui::FontRef &title_face(const ui::Fonts &fonts, std::string_view text);
 
 // A channel without a picture gets a ground of its own and its initials.
@@ -33,8 +38,20 @@ struct ArtColors
     Color accent; // the light it gives off when focused
 };
 ArtColors art_colors(std::string_view channel_id);
+// The channel's picture as a television set standing in r: antenna on top,
+// the shell with its screen and knobs. tv_body() is the shell's
+// place in r, for whoever puts a shadow or a light behind it.
+Rect tv_body(const Rect &r);
 void draw_channel_art(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
-                      const iptv::Channel &channel);
+                      const iptv::ChannelView &channel);
+// The set without a picture: rods, shell, knobs. Returns where its screen is
+// (the corner radius of a screen is 0.13 of its height).
+Rect draw_tv_shell(gfx::DrawList &list, const Rect &r, float radius, const ArtColors &colors);
+// Only the screen: the channel's ground and initials behind curved glass.
+void draw_channel_screen(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
+                         const iptv::ChannelView &channel);
+// The pair of rods of a set whose top edge is at base_y.
+void draw_antenna(gfx::DrawList &list, float cx, float base_y, float height, Color color);
 
 // The app's mark: a sun setting behind a horizon.
 void draw_mark(gfx::DrawList &list, float cx, float cy, float size);
@@ -54,7 +71,7 @@ float draw_status_chip(ui::Canvas &canvas, const ui::Theme &theme, float x, floa
 
 // One channel of a grid. focus is 0..1.
 void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cell,
-                       const iptv::Channel &channel, float focus);
+                       const iptv::ChannelView &channel, float focus);
 // The shape of a tile that has nothing to show yet.
 void draw_tile_placeholder(ui::Canvas &canvas, const Shared &shared, const Rect &cell);
 

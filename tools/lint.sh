@@ -11,7 +11,9 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 bash tools/setup-native-dependencies.sh >/dev/null
 bash tools/run_clang_format.sh --check
-bash tools/run_clang_tidy.sh
+# GitHub Actions sets LINT_SKIP_TIDY=1: static analysis stays a local check
+# (make lint, make tidy) and does not run on the hosted runner.
+[[ ${LINT_SKIP_TIDY:-0} == 1 ]] || bash tools/run_clang_tidy.sh
 
 mapfile -t repository_files < <(git ls-files --cached --others --exclude-standard)
 checked=0

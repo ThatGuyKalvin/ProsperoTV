@@ -68,6 +68,29 @@ identity, name, URL, logo URL, group, country, language, alternate URLs and
 groups, and `#EXTVLCOPT` user-agent/referrer values. Duplicate records are
 merged within bounded limits.
 
+A source may list a quarter of a million channels, so neither the download nor
+the catalog is ever held as a whole or as objects:
+
+- **The list is read as it arrives.** `iptv::http::GetList` hands each piece of
+  the download to a sink. `iptv::M3uParser` cuts it into lines and
+  `iptv::XtreamStreamsParser` into the elements of the account's JSON list;
+  both put each channel into the catalog as it completes and keep nothing
+  else. A download stops when the catalog is full (250,000 channels), or when
+  a megabyte has gone by with no channel in it.
+- **The catalog is text in blocks.** `iptv::Catalog` copies every text once
+  into 1 MiB blocks that never move, stores once the values many channels
+  share (category, country, language), and keeps 80 bytes of places and
+  lengths per channel: about 300 bytes a channel for a typical provider,
+  against more than 800 as one `std::string` per field. Channels are read
+  through `iptv::ChannelView`, which borrows the text and is not kept.
+  `Catalog::Find` locates a channel by its id through an open hash table.
+- **What a list is browsed by is worked out once**, on the download thread
+  (`ptv::CatalogIndex` in the OpenGL interface): the order of the alphabet,
+  each channel's letter, its picture size and the lists it belongs to as one
+  byte, the most common countries, categories and languages. The frame loop
+  then narrows a list of any size by comparing bytes; only a search by word
+  reads the channels themselves.
+
 Startup is cache-first:
 
 1. Read the selected source and its last good SQLite cache.
@@ -85,11 +108,13 @@ The built-in and custom caches are deliberately separate:
 | iptv-org | `/download0/prosperotv-catalog.sqlite3` |
 | Custom M3U/M3U8 | `/download0/prosperotv-custom-catalog.sqlite3` |
 
-The schema has metadata, channels, alternate URL, and alternate group tables,
-plus lookup indexes. SQLite uses an in-memory journal and temporary store for
-cache generation. The database is a persistence and validation boundary; the
-current UI loads its rows into an in-memory catalog and performs filtering
-there.
+The schema has metadata, channels, alternate URL, and alternate group tables.
+A channel's row is its place in the list, so the rows are written and read in
+order with no index beside them (schema version 2; files of version 1, keyed
+by channel id with five lookup indexes, are still read). SQLite uses an
+in-memory journal and temporary store for cache generation. The database is a
+persistence and validation boundary; the UI loads its rows into the in-memory
+catalog and performs filtering there.
 
 Favorites, recent channels, custom-source configuration, source selection,
 and playback receipts use separate versioned files under `/download0`.

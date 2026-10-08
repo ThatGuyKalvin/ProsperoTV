@@ -6,19 +6,22 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <limits>
+#include <new>
 #include <unordered_map>
+#include <utility>
 
 namespace iptv
 {
 namespace
 {
 
-constexpr std::size_t kHardMaxPlaylistBytes = 16u * 1024u * 1024u;
+constexpr std::size_t kHardMaxPlaylistBytes = 1024u * 1024u * 1024u;
 constexpr std::size_t kHardMaxRecordBytes = 64u * 1024u;
 constexpr std::size_t kHardMaxUrlBytes = 8192u;
 constexpr std::size_t kHardMaxFieldBytes = 4096u;
-constexpr std::size_t kHardMaxChannels = 65536u;
+constexpr std::size_t kHardMaxChannels = 1000000u;
 constexpr std::size_t kHardMaxAlternateUrls = 8u;
 constexpr std::size_t kHardMaxAlternateGroups = 8u;
 constexpr std::size_t kHardMaxDiagnostics = 512u;
@@ -290,6 +293,611 @@ bool CanonicalizeStreamUrl(std::string_view raw, std::string *canonical)
 {
     return CanonicalizeUrl(raw, canonical) == UrlError::none;
 }
+
+// ---- the catalog --------------------------------------------------------------
+
+namespace
+{
+
+constexpr std::uint32_t kNone = 0xffffffffu;
+constexpr std::size_t kFieldCount = static_cast<std::size_t>(Catalog::Field::count);
+constexpr std::size_t kNameField = static_cast<std::size_t>(Catalog::Field::name);
+constexpr std::size_t kGuideNameField = static_cast<std::size_t>(Catalog::Field::tvg_name);
+// From here on a field's values repeat from channel to channel.
+constexpr std::size_t kFirstSharedField = static_cast<std::size_t>(Catalog::Field::group_title);
+// Text lives in blocks of 1 MiB: a place is a block and an offset in 32 bits.
+constexpr unsigned kBlockShift = 20u;
+constexpr std::size_t kBlockBytes = std::size_t{1} << kBlockShift;
+constexpr std::size_t kMaxBlocks = std::size_t{1} << (32u - kBlockShift);
+constexpr std::size_t kRecordsPerChunk = 4096u;
+constexpr std::size_t kMaxTextBytes = 0xffffu;
+// A list where every channel has a category of its own shares nothing: past
+// this many different values the rest are stored like any other text.
+constexpr std::size_t kMaxSharedTexts = 32768u;
+constexpr char kEmptyText[1] = {'\0'};
+
+struct Record
+{
+    std::uint32_t at[kFieldCount];
+    std::uint16_t bytes[kFieldCount];
+    std::uint8_t playback;
+    std::uint8_t reserved;
+    std::uint32_t source_line;
+    std::uint32_t urls;   // its first other address, or kNone
+    std::uint32_t groups; // its first other category, or kNone
+};
+
+struct Alternate
+{
+    std::uint32_t at;
+    std::uint32_t next;
+    std::uint16_t bytes;
+};
+
+struct Played
+{
+    int result = 0;
+    std::uint64_t checked_unix = 0;
+};
+
+std::uint64_t KeyOf(std::string_view text)
+{
+    // FNV-1a, then stirred so that its low bits can pick a slot.
+    std::uint64_t key = Fnv1a(text);
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdull;
+    key ^= key >> 33;
+    key *= 0xc4ceb9fe1a85ec53ull;
+    key ^= key >> 33;
+    return key;
+}
+
+// Where a key's channel is: an open table of 64-bit keys, twelve bytes a slot.
+class KeyTable
+{
+  public:
+    // A key may be added more than once. False: there was no memory for it.
+    bool Add(std::uint64_t key, std::uint32_t value)
+    {
+        if ((size_ + 1u) * 10u > capacity_ * 7u && !Grow())
+            return false;
+        Place(keys_.get(), values_.get(), capacity_, key, value);
+        ++size_;
+        return true;
+    }
+
+    // Adds the key unless it is there: its first channel keeps it.
+    bool AddOnce(std::uint64_t key, std::uint32_t value)
+    {
+        return Find(key) != kNone || Add(key, value);
+    }
+
+    template <typename Accept> std::uint32_t Find(std::uint64_t key, Accept accept) const
+    {
+        if (capacity_ == 0)
+            return kNone;
+        const std::size_t mask = capacity_ - 1u;
+        for (std::size_t slot = static_cast<std::size_t>(key) & mask;; slot = (slot + 1u) & mask)
+        {
+            if (values_[slot] == kNone)
+                return kNone;
+            if (keys_[slot] == key && accept(values_[slot]))
+                return values_[slot];
+        }
+    }
+
+    std::uint32_t Find(std::uint64_t key) const
+    {
+        return Find(key, [](std::uint32_t) { return true; });
+    }
+
+    std::size_t Bytes() const
+    {
+        return capacity_ * (sizeof(std::uint64_t) + sizeof(std::uint32_t));
+    }
+
+  private:
+    static void Place(std::uint64_t *keys, std::uint32_t *values, std::size_t capacity,
+                      std::uint64_t key, std::uint32_t value)
+    {
+        const std::size_t mask = capacity - 1u;
+        std::size_t slot = static_cast<std::size_t>(key) & mask;
+        while (values[slot] != kNone)
+            slot = (slot + 1u) & mask;
+        keys[slot] = key;
+        values[slot] = value;
+    }
+
+    bool Grow()
+    {
+        const std::size_t capacity = capacity_ == 0 ? 1024u : capacity_ * 2u;
+        std::unique_ptr<std::uint64_t[]> keys(new (std::nothrow) std::uint64_t[capacity]);
+        std::unique_ptr<std::uint32_t[]> values(new (std::nothrow) std::uint32_t[capacity]);
+        if (!keys || !values)
+            return false;
+        std::fill_n(values.get(), capacity, kNone);
+        for (std::size_t slot = 0; slot < capacity_; ++slot)
+            if (values_[slot] != kNone)
+                Place(keys.get(), values.get(), capacity, keys_[slot], values_[slot]);
+        keys_ = std::move(keys);
+        values_ = std::move(values);
+        capacity_ = capacity;
+        return true;
+    }
+
+    std::unique_ptr<std::uint64_t[]> keys_;
+    std::unique_ptr<std::uint32_t[]> values_;
+    std::size_t capacity_ = 0;
+    std::size_t size_ = 0;
+};
+
+} // namespace
+
+struct Catalog::Storage
+{
+    std::vector<std::unique_ptr<char[]>> blocks;
+    std::size_t block_used = kBlockBytes;
+    std::vector<std::unique_ptr<Record[]>> chunks;
+    std::size_t count = 0;
+    std::vector<Alternate> alternates;
+    std::unordered_map<std::string_view, std::uint32_t> shared;
+    std::unordered_map<std::uint32_t, Played> played;
+    KeyTable ids;
+
+    const char *Text(std::uint32_t at) const
+    {
+        return blocks[at >> kBlockShift].get() + (at & (kBlockBytes - 1u));
+    }
+
+    std::string_view View(std::uint32_t at, std::size_t bytes) const
+    {
+        return bytes == 0 ? std::string_view(kEmptyText, 0) : std::string_view(Text(at), bytes);
+    }
+
+    Record &At(std::size_t index)
+    {
+        return chunks[index / kRecordsPerChunk][index % kRecordsPerChunk];
+    }
+
+    const Record &At(std::size_t index) const
+    {
+        return chunks[index / kRecordsPerChunk][index % kRecordsPerChunk];
+    }
+
+    // Copies a text, and the NUL after it, into the blocks.
+    bool Store(std::string_view text, std::uint32_t *at)
+    {
+        *at = 0;
+        if (text.empty())
+            return true;
+        if (text.size() > kMaxTextBytes)
+            return false;
+        const std::size_t needed = text.size() + 1u;
+        if (block_used + needed > kBlockBytes)
+        {
+            if (blocks.size() >= kMaxBlocks)
+                return false;
+            std::unique_ptr<char[]> block(new (std::nothrow) char[kBlockBytes]);
+            if (!block)
+                return false;
+            blocks.push_back(std::move(block));
+            block_used = 0;
+        }
+        char *to = blocks.back().get() + block_used;
+        std::memcpy(to, text.data(), text.size());
+        to[text.size()] = '\0';
+        *at = static_cast<std::uint32_t>(((blocks.size() - 1u) << kBlockShift) | block_used);
+        block_used += needed;
+        return true;
+    }
+
+    // The same, for a value other channels are likely to have too.
+    bool StoreShared(std::string_view text, std::uint32_t *at)
+    {
+        *at = 0;
+        if (text.empty())
+            return true;
+        const auto found = shared.find(text);
+        if (found != shared.end())
+        {
+            *at = found->second;
+            return true;
+        }
+        if (!Store(text, at))
+            return false;
+        if (shared.size() < kMaxSharedTexts)
+            shared.emplace(std::string_view(Text(*at), text.size()), *at);
+        return true;
+    }
+
+    bool AddAlternate(std::uint32_t *first, std::string_view text, bool share)
+    {
+        std::uint32_t at = 0;
+        if (text.empty() || alternates.size() >= kNone ||
+            !(share ? StoreShared(text, &at) : Store(text, &at)))
+            return false;
+        const std::uint32_t node = static_cast<std::uint32_t>(alternates.size());
+        alternates.push_back({at, kNone, static_cast<std::uint16_t>(text.size())});
+        // A channel has a handful: the end of its chain is a short walk.
+        std::uint32_t *link = first;
+        while (*link != kNone)
+            link = &alternates[*link].next;
+        *link = node;
+        return true;
+    }
+};
+
+Catalog::Catalog() = default;
+Catalog::~Catalog() = default;
+
+Catalog::Catalog(Catalog &&other) noexcept
+    : source_id(other.source_id), storage_(std::move(other.storage_))
+{
+    other.source_id = 0;
+}
+
+Catalog &Catalog::operator=(Catalog &&other) noexcept
+{
+    if (this != &other)
+    {
+        source_id = other.source_id;
+        storage_ = std::move(other.storage_);
+        other.source_id = 0;
+    }
+    return *this;
+}
+
+Catalog::Catalog(const Catalog &other) : source_id(other.source_id)
+{
+    for (std::size_t index = 0; index < other.size(); ++index)
+        (void)Add(other[index]);
+}
+
+Catalog &Catalog::operator=(const Catalog &other)
+{
+    if (this != &other)
+    {
+        Catalog copy(other);
+        *this = std::move(copy);
+    }
+    return *this;
+}
+
+std::size_t Catalog::size() const
+{
+    return storage_ ? storage_->count : 0u;
+}
+
+ChannelView Catalog::operator[](std::size_t index) const
+{
+    const Storage &storage = *storage_;
+    const Record &record = storage.At(index);
+    const auto text = [&](Field field)
+    {
+        const std::size_t at = static_cast<std::size_t>(field);
+        return storage.View(record.at[at], record.bytes[at]);
+    };
+    ChannelView view;
+    view.id = text(Field::id);
+    view.source_id = source_id;
+    view.name = text(Field::name);
+    view.url = text(Field::url);
+    view.alternate_urls = TextList(this, record.urls);
+    view.tvg_id = text(Field::tvg_id);
+    view.tvg_name = text(Field::tvg_name);
+    view.tvg_logo = text(Field::tvg_logo);
+    view.group_title = text(Field::group_title);
+    view.alternate_group_titles = TextList(this, record.groups);
+    view.tvg_country = text(Field::tvg_country);
+    view.tvg_language = text(Field::tvg_language);
+    view.http_user_agent = text(Field::http_user_agent);
+    view.http_referrer = text(Field::http_referrer);
+    view.source_line = record.source_line;
+    view.playback_status = static_cast<PlaybackStatus>(record.playback);
+    if (view.playback_status != PlaybackStatus::unknown)
+    {
+        const auto found = storage.played.find(static_cast<std::uint32_t>(index));
+        if (found != storage.played.end())
+        {
+            view.playback_result = found->second.result;
+            view.playback_checked_unix = found->second.checked_unix;
+        }
+    }
+    return view;
+}
+
+Catalog::Iterator Catalog::begin() const
+{
+    Iterator iterator;
+    iterator.catalog_ = this;
+    return iterator;
+}
+
+Catalog::Iterator Catalog::end() const
+{
+    Iterator iterator;
+    iterator.catalog_ = this;
+    iterator.index_ = size();
+    return iterator;
+}
+
+ChannelView Catalog::Iterator::operator*() const
+{
+    return (*catalog_)[index_];
+}
+
+bool Catalog::Add(const ChannelView &channel)
+{
+    const std::string_view texts[kFieldCount] = {
+        channel.id,
+        channel.name,
+        channel.url,
+        channel.tvg_id,
+        channel.tvg_name,
+        channel.tvg_logo,
+        channel.group_title,
+        channel.tvg_country,
+        channel.tvg_language,
+        channel.http_user_agent,
+        channel.http_referrer,
+    };
+    for (const std::string_view text : texts)
+        if (text.size() > kMaxTextBytes)
+            return false;
+    for (const std::string_view text : channel.alternate_urls)
+        if (text.size() > kMaxTextBytes)
+            return false;
+    for (const std::string_view text : channel.alternate_group_titles)
+        if (text.size() > kMaxTextBytes)
+            return false;
+
+    if (!storage_)
+    {
+        storage_.reset(new (std::nothrow) Storage);
+        if (!storage_)
+            return false;
+    }
+    Storage &storage = *storage_;
+    if (storage.count >= kNone)
+        return false;
+    if (storage.count == storage.chunks.size() * kRecordsPerChunk)
+    {
+        std::unique_ptr<Record[]> chunk(new (std::nothrow) Record[kRecordsPerChunk]);
+        if (!chunk)
+            return false;
+        storage.chunks.push_back(std::move(chunk));
+    }
+
+    Record record{};
+    for (std::size_t field = 0; field < kFieldCount; ++field)
+    {
+        std::uint32_t at = 0;
+        // A playlist that names a channel twice says the same thing twice.
+        if (field == kGuideNameField && texts[field] == texts[kNameField])
+            at = record.at[kNameField];
+        else if (!(field >= kFirstSharedField ? storage.StoreShared(texts[field], &at)
+                                              : storage.Store(texts[field], &at)))
+            return false;
+        record.at[field] = at;
+        record.bytes[field] = static_cast<std::uint16_t>(texts[field].size());
+    }
+    record.source_line = channel.source_line;
+    record.urls = kNone;
+    record.groups = kNone;
+    for (const std::string_view url : channel.alternate_urls)
+        if (!storage.AddAlternate(&record.urls, url, false))
+            return false;
+    for (const std::string_view group : channel.alternate_group_titles)
+        if (!storage.AddAlternate(&record.groups, group, true))
+            return false;
+
+    const std::uint32_t index = static_cast<std::uint32_t>(storage.count);
+    if (!storage.ids.Add(KeyOf(channel.id), index))
+        return false;
+    storage.At(index) = record;
+    ++storage.count;
+    if (channel.playback_status != PlaybackStatus::unknown)
+        SetPlayback(index, channel.playback_status, channel.playback_result,
+                    channel.playback_checked_unix);
+    return true;
+}
+
+bool Catalog::AddAlternateUrl(std::size_t index, std::string_view url)
+{
+    return index < size() && url.size() <= kMaxTextBytes &&
+           storage_->AddAlternate(&storage_->At(index).urls, url, false);
+}
+
+bool Catalog::AddAlternateGroup(std::size_t index, std::string_view group)
+{
+    return index < size() && group.size() <= kMaxTextBytes &&
+           storage_->AddAlternate(&storage_->At(index).groups, group, true);
+}
+
+bool Catalog::Set(std::size_t index, Field field, std::string_view value)
+{
+    const std::size_t at = static_cast<std::size_t>(field);
+    if (index >= size() || field == Field::id || at >= kFieldCount || value.size() > kMaxTextBytes)
+        return false;
+    std::uint32_t place = 0;
+    if (!(at >= kFirstSharedField ? storage_->StoreShared(value, &place)
+                                  : storage_->Store(value, &place)))
+        return false;
+    Record &record = storage_->At(index);
+    record.at[at] = place;
+    record.bytes[at] = static_cast<std::uint16_t>(value.size());
+    return true;
+}
+
+void Catalog::SetPlayback(std::size_t index, PlaybackStatus status, int result,
+                          std::uint64_t checked_unix)
+{
+    if (index >= size())
+        return;
+    storage_->At(index).playback = static_cast<std::uint8_t>(status);
+    const std::uint32_t key = static_cast<std::uint32_t>(index);
+    if (status == PlaybackStatus::unknown)
+        storage_->played.erase(key);
+    else
+        storage_->played[key] = {result, checked_unix};
+}
+
+std::size_t Catalog::Find(std::string_view id) const
+{
+    if (!storage_ || id.empty())
+        return npos;
+    const Storage &storage = *storage_;
+    const std::size_t id_field = static_cast<std::size_t>(Field::id);
+    const std::uint32_t found =
+        storage.ids.Find(KeyOf(id),
+                         [&](std::uint32_t index)
+                         {
+                             if (index >= storage.count)
+                                 return false;
+                             const Record &record = storage.At(index);
+                             return storage.View(record.at[id_field], record.bytes[id_field]) == id;
+                         });
+    return found == kNone ? npos : found;
+}
+
+void Catalog::Clear()
+{
+    storage_.reset();
+}
+
+std::size_t Catalog::MemoryBytes() const
+{
+    if (!storage_)
+        return 0;
+    const Storage &storage = *storage_;
+    return storage.blocks.size() * kBlockBytes +
+           storage.chunks.size() * kRecordsPerChunk * sizeof(Record) +
+           storage.alternates.capacity() * sizeof(Alternate) + storage.ids.Bytes() +
+           (storage.shared.size() + storage.played.size()) * 64u;
+}
+
+std::string_view Catalog::AlternateText(std::uint32_t node) const
+{
+    const Alternate &alternate = storage_->alternates[node];
+    return storage_->View(alternate.at, alternate.bytes);
+}
+
+std::uint32_t Catalog::AlternateNext(std::uint32_t node) const
+{
+    return storage_->alternates[node].next;
+}
+
+// ---- a channel's few texts --------------------------------------------------------
+
+bool TextList::empty() const
+{
+    return owned_ != nullptr ? owned_->empty() : first_ == kNone;
+}
+
+std::size_t TextList::size() const
+{
+    if (owned_ != nullptr)
+        return owned_->size();
+    std::size_t count = 0;
+    for (std::uint32_t node = first_; node != kNone; node = catalog_->AlternateNext(node))
+        ++count;
+    return count;
+}
+
+std::string_view TextList::operator[](std::size_t index) const
+{
+    if (owned_ != nullptr)
+        return (*owned_)[index];
+    std::uint32_t node = first_;
+    while (index-- != 0)
+        node = catalog_->AlternateNext(node);
+    return catalog_->AlternateText(node);
+}
+
+TextList::Iterator TextList::begin() const
+{
+    Iterator iterator;
+    iterator.owned_ = owned_;
+    iterator.catalog_ = catalog_;
+    iterator.at_ = owned_ != nullptr ? 0u : first_;
+    return iterator;
+}
+
+TextList::Iterator TextList::end() const
+{
+    Iterator iterator;
+    iterator.owned_ = owned_;
+    iterator.catalog_ = catalog_;
+    iterator.at_ = owned_ != nullptr ? static_cast<std::uint32_t>(owned_->size()) : kNone;
+    return iterator;
+}
+
+std::string_view TextList::Iterator::operator*() const
+{
+    return owned_ != nullptr ? std::string_view((*owned_)[at_]) : catalog_->AlternateText(at_);
+}
+
+TextList::Iterator &TextList::Iterator::operator++()
+{
+    at_ = owned_ != nullptr ? at_ + 1u : catalog_->AlternateNext(at_);
+    return *this;
+}
+
+std::vector<std::string> TextList::Copy() const
+{
+    std::vector<std::string> texts;
+    for (const std::string_view text : *this)
+        texts.emplace_back(text);
+    return texts;
+}
+
+bool operator==(const TextList &left, const TextList &right)
+{
+    return std::equal(left.begin(), left.end(), right.begin(), right.end());
+}
+
+bool operator==(const TextList &left, const std::vector<std::string> &right)
+{
+    return left == TextList(right);
+}
+
+ChannelView::ChannelView(const Channel &channel)
+    : id(channel.id), source_id(channel.source_id), name(channel.name), url(channel.url),
+      alternate_urls(channel.alternate_urls), tvg_id(channel.tvg_id), tvg_name(channel.tvg_name),
+      tvg_logo(channel.tvg_logo), group_title(channel.group_title),
+      alternate_group_titles(channel.alternate_group_titles), tvg_country(channel.tvg_country),
+      tvg_language(channel.tvg_language), http_user_agent(channel.http_user_agent),
+      http_referrer(channel.http_referrer), source_line(channel.source_line),
+      playback_status(channel.playback_status), playback_result(channel.playback_result),
+      playback_checked_unix(channel.playback_checked_unix)
+{
+}
+
+Channel ChannelView::Copy() const
+{
+    Channel channel;
+    channel.id = id;
+    channel.source_id = source_id;
+    channel.name = name;
+    channel.url = url;
+    channel.alternate_urls = alternate_urls.Copy();
+    channel.tvg_id = tvg_id;
+    channel.tvg_name = tvg_name;
+    channel.tvg_logo = tvg_logo;
+    channel.group_title = group_title;
+    channel.alternate_group_titles = alternate_group_titles.Copy();
+    channel.tvg_country = tvg_country;
+    channel.tvg_language = tvg_language;
+    channel.http_user_agent = http_user_agent;
+    channel.http_referrer = http_referrer;
+    channel.source_line = source_line;
+    channel.playback_status = playback_status;
+    channel.playback_result = playback_result;
+    channel.playback_checked_unix = playback_checked_unix;
+    return channel;
+}
+
+// ---- the playlist ---------------------------------------------------------------
 
 namespace
 {
@@ -599,99 +1207,107 @@ bool UrlIssue(std::string_view raw, std::size_t max_url_bytes, std::string *cano
     return false;
 }
 
-bool Contains(std::vector<std::string> const &values, std::string_view value)
+bool Contains(const TextList &values, std::string_view value)
 {
     return std::any_of(values.begin(), values.end(),
-                       [value](const std::string &item) { return item == value; });
+                       [value](std::string_view item) { return item == value; });
 }
 
-void AddBounded(std::vector<std::string> *values, std::string_view value, std::size_t limit)
+// A later entry of the same channel: its address becomes one more to try, and
+// what the first entry left unsaid is taken from it.
+void MergeChannel(Catalog *catalog, std::size_t index, const EntryMetadata &metadata,
+                  std::string_view canonical_url, const EffectiveLimits &limits)
 {
-    if (value.empty() || values->size() >= limit || Contains(*values, value))
+    const ChannelView existing = (*catalog)[index];
+    if (existing.url != canonical_url && !canonical_url.empty() &&
+        !Contains(existing.alternate_urls, canonical_url) &&
+        existing.alternate_urls.size() < limits.max_alternate_urls)
     {
-        return;
+        (void)catalog->AddAlternateUrl(index, canonical_url);
     }
-    values->emplace_back(value);
-}
-
-void MergeChannel(Channel *existing, const EntryMetadata &metadata, std::string_view canonical_url,
-                  std::size_t max_alternate_urls, std::size_t max_alternate_groups)
-{
-    if (existing->url != canonical_url && !Contains(existing->alternate_urls, canonical_url))
+    const auto fill = [&](Catalog::Field field, std::string_view current, const std::string &value)
     {
-        AddBounded(&existing->alternate_urls, canonical_url, max_alternate_urls);
-    }
-    if (existing->name.empty() && !metadata.title.empty())
-    {
-        existing->name = metadata.title;
-    }
-    if (existing->tvg_id.empty())
-        existing->tvg_id = metadata.tvg_id;
-    if (existing->tvg_name.empty())
-        existing->tvg_name = metadata.tvg_name;
-    if (existing->tvg_logo.empty())
-        existing->tvg_logo = metadata.tvg_logo;
-    if (existing->tvg_country.empty())
-        existing->tvg_country = metadata.tvg_country;
-    if (existing->tvg_language.empty())
-        existing->tvg_language = metadata.tvg_language;
-    if (existing->http_user_agent.empty())
-        existing->http_user_agent = metadata.http_user_agent;
-    if (existing->http_referrer.empty())
-        existing->http_referrer = metadata.http_referrer;
+        if (current.empty() && !value.empty())
+            (void)catalog->Set(index, field, value);
+    };
+    fill(Catalog::Field::name, existing.name, metadata.title);
+    fill(Catalog::Field::tvg_id, existing.tvg_id, metadata.tvg_id);
+    fill(Catalog::Field::tvg_name, existing.tvg_name, metadata.tvg_name);
+    fill(Catalog::Field::tvg_logo, existing.tvg_logo, metadata.tvg_logo);
+    fill(Catalog::Field::tvg_country, existing.tvg_country, metadata.tvg_country);
+    fill(Catalog::Field::tvg_language, existing.tvg_language, metadata.tvg_language);
+    fill(Catalog::Field::http_user_agent, existing.http_user_agent, metadata.http_user_agent);
+    fill(Catalog::Field::http_referrer, existing.http_referrer, metadata.http_referrer);
     if (!metadata.group_title.empty())
     {
-        if (existing->group_title.empty())
+        if (existing.group_title.empty())
         {
-            existing->group_title = metadata.group_title;
+            (void)catalog->Set(index, Catalog::Field::group_title, metadata.group_title);
         }
-        else if (existing->group_title != metadata.group_title)
+        else if (existing.group_title != metadata.group_title &&
+                 !Contains(existing.alternate_group_titles, metadata.group_title) &&
+                 existing.alternate_group_titles.size() < limits.max_alternate_groups)
         {
-            AddBounded(&existing->alternate_group_titles, metadata.group_title,
-                       max_alternate_groups);
+            (void)catalog->AddAlternateGroup(index, metadata.group_title);
         }
     }
 }
 
 } // namespace
 
-CatalogState ParseExtendedM3u(std::string_view input, std::uint64_t source_id,
-                              const ParseLimits &limits, ParseReport *report)
+struct M3uParser::State
 {
+    Catalog *catalog = nullptr;
+    std::uint64_t source_id = 0;
+    EffectiveLimits limits{};
     ParseReport local_report;
-    report = report == nullptr ? &local_report : report;
-    *report = ParseReport{};
-    const EffectiveLimits bounded = ClampLimits(limits);
-    CatalogState catalog;
-    catalog.source_id = source_id;
-    if (input.size() > bounded.max_playlist_bytes)
-    {
-        report->input_too_large = true;
-        AddDiagnostic(report, bounded, 0, ParseIssueCode::input_too_large);
-        return catalog;
-    }
-
-    const std::size_t expected_channels = std::min(bounded.max_channels, input.size() / 160u + 1u);
-    catalog.channels.reserve(expected_channels);
-    std::unordered_map<std::string, std::size_t> channels_by_tvg_id;
-    std::unordered_map<std::string, std::size_t> channels_by_url;
-    channels_by_tvg_id.reserve(expected_channels);
-    channels_by_url.reserve(expected_channels);
-
+    ParseReport *report = nullptr;
+    // Which channel a guide id or an address already belongs to.
+    KeyTable by_tvg_id;
+    KeyTable by_url;
     bool pending = false;
     PendingEntry entry;
-    std::size_t position = 0;
     std::size_t line_number = 0;
-    while (position < input.size())
+    std::size_t bytes_seen = 0;
+    // The start of a line whose end has not arrived yet.
+    std::string carry;
+    bool carry_overlong = false;
+    bool full = false;
+    bool rejected = false;
+
+    void Keep(std::string_view piece)
     {
-        const std::size_t line_start = position;
-        const std::size_t newline = input.find('\n', position);
-        const std::size_t line_end = newline == std::string_view::npos ? input.size() : newline;
-        position = newline == std::string_view::npos ? input.size() : newline + 1;
+        if (carry_overlong)
+            return;
+        // Room for the byte-order mark and the carriage return Line() takes off.
+        if (carry.size() + piece.size() > limits.max_record_bytes + 4u)
+        {
+            carry.clear();
+            carry_overlong = true;
+            return;
+        }
+        carry.append(piece);
+    }
+
+    void Overlong()
+    {
         ++line_number;
         ++report->lines_seen;
+        pending = false;
+        AddDiagnostic(report, limits, line_number, ParseIssueCode::overlong_record);
+    }
 
-        std::string_view line = input.substr(line_start, line_end - line_start);
+    void NoRoom()
+    {
+        full = true;
+        report->catalog_full = true;
+        AddDiagnostic(report, limits, line_number, ParseIssueCode::catalog_full);
+    }
+
+    void Line(std::string_view line)
+    {
+        ++line_number;
+        ++report->lines_seen;
         if (!line.empty() && line.back() == '\r')
         {
             line.remove_suffix(1);
@@ -702,16 +1318,16 @@ CatalogState ParseExtendedM3u(std::string_view input, std::uint64_t source_id,
         {
             line.remove_prefix(3);
         }
-        if (line.size() > bounded.max_record_bytes)
+        if (line.size() > limits.max_record_bytes)
         {
             pending = false;
-            AddDiagnostic(report, bounded, line_number, ParseIssueCode::overlong_record);
-            continue;
+            AddDiagnostic(report, limits, line_number, ParseIssueCode::overlong_record);
+            return;
         }
         line = Trim(line);
         if (line.empty())
         {
-            continue;
+            return;
         }
         if (line.front() == '#')
         {
@@ -719,12 +1335,12 @@ CatalogState ParseExtendedM3u(std::string_view input, std::uint64_t source_id,
             {
                 if (pending)
                 {
-                    AddDiagnostic(report, bounded, entry.line, ParseIssueCode::missing_url);
+                    AddDiagnostic(report, limits, entry.line, ParseIssueCode::missing_url);
                     pending = false;
                 }
                 ParseIssueCode error = ParseIssueCode::malformed_extinf;
                 EntryMetadata parsed;
-                if (ParseExtinf(line, bounded.max_field_bytes, &parsed, &error))
+                if (ParseExtinf(line, limits.max_field_bytes, &parsed, &error))
                 {
                     entry.metadata = std::move(parsed);
                     entry.line = static_cast<std::uint32_t>(std::min<std::size_t>(
@@ -733,95 +1349,175 @@ CatalogState ParseExtendedM3u(std::string_view input, std::uint64_t source_id,
                 }
                 else
                 {
-                    AddDiagnostic(report, bounded, line_number, error);
+                    AddDiagnostic(report, limits, line_number, error);
                 }
             }
             else if (pending)
             {
-                (void)SetHttpOption(line, bounded.max_field_bytes, &entry.metadata);
+                (void)SetHttpOption(line, limits.max_field_bytes, &entry.metadata);
             }
-            continue;
+            return;
         }
         if (!pending)
         {
-            AddDiagnostic(report, bounded, line_number, ParseIssueCode::url_without_extinf);
-            continue;
+            AddDiagnostic(report, limits, line_number, ParseIssueCode::url_without_extinf);
+            return;
         }
+        pending = false;
 
         std::string canonical_url;
         ParseIssueCode url_issue = ParseIssueCode::malformed_url;
-        if (!UrlIssue(line, bounded.max_url_bytes, &canonical_url, &url_issue))
+        if (!UrlIssue(line, limits.max_url_bytes, &canonical_url, &url_issue))
         {
-            AddDiagnostic(report, bounded, line_number, url_issue);
-            pending = false;
-            continue;
+            AddDiagnostic(report, limits, line_number, url_issue);
+            return;
         }
 
-        Channel channel;
+        const EntryMetadata &metadata = entry.metadata;
+        const std::string normalized_tvg_id = LowerTrimmed(metadata.tvg_id);
+        const std::uint64_t tvg_key = KeyOf(normalized_tvg_id);
+        const std::uint64_t url_key = KeyOf(canonical_url);
+        std::uint32_t existing = kNone;
+        if (!normalized_tvg_id.empty())
+            existing = by_tvg_id.Find(tvg_key);
+        existing = std::min(existing, by_url.Find(url_key));
+
+        if (existing != kNone)
+        {
+            MergeChannel(catalog, existing, metadata, canonical_url, limits);
+            if (!normalized_tvg_id.empty())
+                (void)by_tvg_id.AddOnce(tvg_key, existing);
+            (void)by_url.AddOnce(url_key, existing);
+            ++report->duplicates;
+            return;
+        }
+        if (catalog->size() >= limits.max_channels)
+        {
+            NoRoom();
+            return;
+        }
+
+        const std::string id =
+            StableId(source_id, normalized_tvg_id.empty() ? "url:" + canonical_url
+                                                          : "tvg:" + normalized_tvg_id);
+        ChannelView channel;
+        channel.id = id;
         channel.source_id = source_id;
         channel.url = canonical_url;
-        channel.tvg_id = entry.metadata.tvg_id;
-        channel.tvg_name = entry.metadata.tvg_name;
-        channel.tvg_logo = entry.metadata.tvg_logo;
-        channel.group_title = entry.metadata.group_title;
-        channel.tvg_country = entry.metadata.tvg_country;
-        channel.tvg_language = entry.metadata.tvg_language;
-        channel.http_user_agent = entry.metadata.http_user_agent;
-        channel.http_referrer = entry.metadata.http_referrer;
-        channel.name = entry.metadata.title.empty() ? channel.tvg_name : entry.metadata.title;
-        if (channel.name.empty())
-        {
-            channel.name = channel.url;
-        }
+        channel.tvg_id = metadata.tvg_id;
+        channel.tvg_name = metadata.tvg_name;
+        channel.tvg_logo = metadata.tvg_logo;
+        channel.group_title = metadata.group_title;
+        channel.tvg_country = metadata.tvg_country;
+        channel.tvg_language = metadata.tvg_language;
+        channel.http_user_agent = metadata.http_user_agent;
+        channel.http_referrer = metadata.http_referrer;
+        channel.name = !metadata.title.empty()      ? std::string_view(metadata.title)
+                       : !metadata.tvg_name.empty() ? std::string_view(metadata.tvg_name)
+                                                    : std::string_view(canonical_url);
         channel.source_line = entry.line;
-
-        const std::string normalized_tvg_id = LowerTrimmed(channel.tvg_id);
-        std::string identity =
-            normalized_tvg_id.empty() ? "url:" + channel.url : "tvg:" + normalized_tvg_id;
-        channel.id = StableId(source_id, identity);
-
-        std::size_t existing_index = catalog.channels.size();
+        const std::uint32_t inserted = static_cast<std::uint32_t>(catalog->size());
+        if (!catalog->Add(channel))
+        {
+            NoRoom();
+            return;
+        }
         if (!normalized_tvg_id.empty())
-        {
-            const auto by_id = channels_by_tvg_id.find(normalized_tvg_id);
-            if (by_id != channels_by_tvg_id.end())
-                existing_index = by_id->second;
-        }
-        const auto by_url = channels_by_url.find(channel.url);
-        if (by_url != channels_by_url.end())
-            existing_index = std::min(existing_index, by_url->second);
+            (void)by_tvg_id.AddOnce(tvg_key, inserted);
+        (void)by_url.AddOnce(url_key, inserted);
+        ++report->accepted;
+    }
+};
 
-        if (existing_index < catalog.channels.size())
-        {
-            Channel &existing = catalog.channels[existing_index];
-            MergeChannel(&existing, entry.metadata, channel.url, bounded.max_alternate_urls,
-                         bounded.max_alternate_groups);
-            if (!normalized_tvg_id.empty())
-                channels_by_tvg_id.emplace(normalized_tvg_id, existing_index);
-            channels_by_url.emplace(channel.url, existing_index);
-            ++report->duplicates;
-        }
-        else
-        {
-            if (catalog.channels.size() >= bounded.max_channels)
-            {
-                AddDiagnostic(report, bounded, line_number, ParseIssueCode::catalog_full);
-                pending = false;
-                continue;
-            }
-            const std::size_t inserted = catalog.channels.size();
-            catalog.channels.push_back(std::move(channel));
-            if (!normalized_tvg_id.empty())
-                channels_by_tvg_id.emplace(normalized_tvg_id, inserted);
-            channels_by_url.emplace(catalog.channels.back().url, inserted);
-            ++report->accepted;
-        }
-        pending = false;
-    }
-    if (pending)
+M3uParser::M3uParser(Catalog *catalog, std::uint64_t source_id, const ParseLimits &limits,
+                     ParseReport *report)
+    : state_(new State)
+{
+    state_->catalog = catalog;
+    state_->source_id = source_id;
+    state_->limits = ClampLimits(limits);
+    state_->report = report == nullptr ? &state_->local_report : report;
+    *state_->report = ParseReport{};
+    catalog->Clear();
+    catalog->source_id = source_id;
+}
+
+M3uParser::~M3uParser() = default;
+
+bool M3uParser::Feed(std::string_view bytes)
+{
+    State &state = *state_;
+    if (state.rejected)
+        return false;
+    state.bytes_seen += bytes.size();
+    if (state.bytes_seen > state.limits.max_playlist_bytes)
     {
-        AddDiagnostic(report, bounded, entry.line, ParseIssueCode::missing_url);
+        state.rejected = true;
+        state.pending = false;
+        state.carry.clear();
+        state.catalog->Clear();
+        state.report->accepted = 0;
+        state.report->input_too_large = true;
+        AddDiagnostic(state.report, state.limits, 0, ParseIssueCode::input_too_large);
+        return false;
     }
+    std::size_t position = 0;
+    while (position < bytes.size())
+    {
+        const std::size_t newline = bytes.find('\n', position);
+        if (newline == std::string_view::npos)
+        {
+            state.Keep(bytes.substr(position));
+            break;
+        }
+        const std::string_view piece = bytes.substr(position, newline - position);
+        position = newline + 1u;
+        if (state.carry.empty() && !state.carry_overlong)
+        {
+            state.Line(piece);
+            continue;
+        }
+        state.Keep(piece);
+        if (state.carry_overlong)
+            state.Overlong();
+        else
+            state.Line(state.carry);
+        state.carry.clear();
+        state.carry_overlong = false;
+    }
+    return true;
+}
+
+void M3uParser::Finish()
+{
+    State &state = *state_;
+    if (state.rejected)
+        return;
+    if (state.carry_overlong)
+        state.Overlong();
+    else if (!state.carry.empty())
+        state.Line(state.carry);
+    state.carry.clear();
+    state.carry_overlong = false;
+    if (state.pending)
+    {
+        AddDiagnostic(state.report, state.limits, state.entry.line, ParseIssueCode::missing_url);
+        state.pending = false;
+    }
+}
+
+bool M3uParser::full() const
+{
+    return state_->full;
+}
+
+Catalog ParseExtendedM3u(std::string_view input, std::uint64_t source_id, const ParseLimits &limits,
+                         ParseReport *report)
+{
+    Catalog catalog;
+    M3uParser parser(&catalog, source_id, limits, report);
+    if (parser.Feed(input))
+        parser.Finish();
     return catalog;
 }
 

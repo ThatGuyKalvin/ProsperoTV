@@ -4,10 +4,14 @@
 
 #include "tv/app.hpp"
 
+#include "tv/diag.hpp"
 #include "tv/draw.hpp"
+#include "iptv_ime.h"
 #include "ui/components/overlay.hpp"
+#include "qrcodegen.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace ptv
@@ -18,6 +22,13 @@ namespace
 
 constexpr Rect kSettingsPanel{kMargin, 250.0f, 1010.0f, 640.0f};
 constexpr Rect kGlancePanel{1144.0f, 250.0f, kWidth - kMargin - 1144.0f, 640.0f};
+// The opening: the set stands in the middle; its moments, in seconds.
+constexpr Rect kIntroSet{(kWidth - 800.0f) * 0.5f, 250.0f, 800.0f, 520.0f};
+constexpr float kIntroArrive = 0.55f; // the set comes out of the dark
+constexpr float kIntroLine = 0.90f;   // a line of light across its screen
+constexpr float kIntroOpen = 1.30f;   // the line opens into a picture
+constexpr float kIntroHold = 2.25f;   // the app's mark on the screen
+constexpr float kIntroEnd = 3.20f;    // through the glass, into the app
 // The tuning screen: the channel's picture in the middle, its bar below.
 constexpr Rect kTuningArt{(kWidth - 640.0f) * 0.5f, 214.0f, 640.0f, 360.0f};
 constexpr Rect kTuningBar{(kWidth - 560.0f) * 0.5f, 858.0f, 560.0f, 8.0f};
@@ -33,7 +44,18 @@ enum FormRow : int
     kRowResolution,
     kRowChannels,
     kRowUpdate,
+    kRowVolume,
+    kRowPair,
+    kRowForgetPhones,
+    kRowPhones,
+    kRowDiagnostics,
 };
+
+constexpr const char *kTabNames[] = {"Live TV", "Favorites", "Sources", "Settings", "About"};
+constexpr const char *kActionNames[] = {"Up",       "Down", "Left", "Right", "Cross", "Circle",
+                                        "Triangle", "Square", "L1",  "R1",    "L2",    "R2",
+                                        "Options",  "Touchpad", "L3", "R3"};
+constexpr const char *kDirectionNames[] = {"none", "up", "down", "left", "right"};
 
 ui::StatusKind toast_kind(Level level)
 {
@@ -117,14 +139,24 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_toggle(kRowMotion, "Reduce motion", settings.reduced_motion).description =
         "Screens fade instead of sliding, and the sky stands still.";
     form_.add_toggle(kRowSounds, "Interface sounds", settings.sounds);
+    form_.add_slider(kRowVolume, "Volume", settings.volume, 0, 100, 5).unit = "%";
     form_
         .add_choice(kRowResolution, "Menu sharpness", {"Best for this TV", "1080p"},
                     settings.resolution)
         .description = "Takes effect the next time the menu opens. Video keeps its own size.";
+    form_.add_header("Phone remote");
+    form_.add_action(kRowPair, "Pair a phone").chevron = true;
+    form_.add_value(kRowPhones, "Remembered phones", "0");
+    form_.add_action(kRowForgetPhones, "Forget paired phones");
     form_.add_header("Channel list");
     form_.add_value(kRowChannels, "Channels", "");
     form_.add_action(kRowUpdate, "Download it again now");
+    form_.add_header("Troubleshooting");
+    form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
+        "Records what the app does in logs/debug-trace.txt, to send with a report.";
     form_.set_bounds(kSettingsPanel.inset(22.0f));
+    // The viewer's switch; a debug build or a scripted run keeps its own.
+    diag::set_enabled(settings.diagnostics);
     form_.focus_row(kRowMotion);
 
     failure_.style.theme = theme;
@@ -142,6 +174,90 @@ bool App::take_settings_changed()
     return std::exchange(settings_changed_, false);
 }
 
+void App::set_volume(int volume)
+{
+    shared_.settings.volume = std::clamp(volume, 0, 100);
+    form_.set_slider(kRowVolume, static_cast<float>(shared_.settings.volume));
+}
+
+void App::remote_notice(const char *message)
+{
+    diag::event("notice \"%s\"", message != nullptr ? message : "");
+    shared_.toasts.push(ui::StatusKind::info, message);
+}
+
+void App::phone_connected()
+{
+    diag::event("phone connected (pairing screen %s)", pairing_open_ ? "open" : "closed");
+    if (std::exchange(pairing_open_, false))
+        remote_notice("Phone connected");
+}
+
+void App::set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones)
+{
+    if (pair_url_ != url)
+    {
+        pair_url_ = std::move(url);
+        pair_qr_.clear();
+        pair_qr_size_ = 0;
+        uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(5)];
+        uint8_t temporary[sizeof(qr)];
+        if (!pair_url_.empty() && qrcodegen_encodeText(pair_url_.c_str(), temporary, qr,
+                qrcodegen_Ecc_MEDIUM, 1, 5, qrcodegen_Mask_AUTO, true))
+        {
+            pair_qr_size_ = qrcodegen_getSize(qr);
+            for (int y = 0; y < pair_qr_size_; ++y)
+                for (int x = 0; x < pair_qr_size_; ++x)
+                    pair_qr_.push_back(qrcodegen_getModule(qr, x, y));
+        }
+    }
+    pair_code_ = std::move(code);
+    pair_seconds_ = seconds;
+    form_.set_value_text(kRowPhones, std::to_string(phones));
+    form_.set_disabled(kRowForgetPhones, phones == 0);
+}
+
+void App::draw_pairing(ui::Canvas &canvas) const
+{
+    auto &list = canvas.list;
+    const auto &fonts = canvas.fonts;
+    const auto &theme = shared_.theme;
+    list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.88f));
+    draw_glass(canvas, theme, {300, 170, 1320, 730}, 28);
+    ui::text(list, fonts.display, "Pair a phone", 380, 255, 54, theme.text);
+    ui::text(list, fonts.regular, "Use the same Wi-Fi as your PS5.", 380, 305, 26, theme.text_muted);
+    if (pair_qr_size_ > 0)
+    {
+        const float cell = std::floor(380.0f / (pair_qr_size_ + 8));
+        const float size = cell * (pair_qr_size_ + 8);
+        const float left = 380.0f, top = 350.0f;
+        list.rounded_rect({left, top, size, size}, 0, Color::rgb(0xffffff));
+        for (int y = 0; y < pair_qr_size_; ++y)
+            for (int x = 0; x < pair_qr_size_; ++x)
+                if (pair_qr_[static_cast<size_t>(y * pair_qr_size_ + x)])
+                    list.rounded_rect({left + (x + 4) * cell, top + (y + 4) * cell, cell, cell},
+                                      0, Color::rgb(0x000000));
+    }
+    ui::text(list, fonts.semibold, "1. Scan to open the remote", 825, 390, 30, theme.text);
+    ui::text(list, fonts.regular, pair_url_.empty() ? "Remote unavailable" : pair_url_,
+             825, 442, 28, theme.text_muted);
+    ui::text(list, fonts.semibold, "2. Enter this code on your phone", 825, 515, 30, theme.text);
+    if (!pair_code_.empty())
+    {
+        ui::text(list, fonts.mono, pair_code_, 825, 620, 78, tone::accent);
+        ui::text(list, fonts.regular, "Expires in " + std::to_string(pair_seconds_) + " seconds",
+                 825, 680, 26, theme.text_muted);
+    }
+    else
+    {
+        ui::text(list, fonts.semibold, "Code expired or unavailable", 825, 602, 28, tone::accent);
+        ui::text(list, fonts.regular, "Press X for a new code", 825, 652, 26, theme.text_muted);
+    }
+    ui::text(list, fonts.regular, "Your browser reconnects automatically on future visits.",
+             380, 800, 26, theme.text_muted);
+    ui::text(list, fonts.semibold, "Circle: Close", 1380, 850, 24, theme.text_muted);
+}
+
 void App::show_tab(int index, bool glide)
 {
     if (index == tabs_.active())
@@ -153,6 +269,7 @@ void App::show_tab(int index, bool glide)
 void App::tab_changed()
 {
     shared_.model.view.tab = tabs_.active();
+    diag::event("tab %s", kTabNames[std::clamp(tabs_.active(), 0, kTabCount - 1)]);
     page_age_ = 0.0f;
     switch (tabs_.active())
     {
@@ -200,6 +317,9 @@ void App::open_failure(ui::Feedback &feedback)
     content.icon = ui::StatusKind::danger;
     content.title = "Couldn't open " + shown_name(shared_.fonts, named);
     content.body = failure->reason;
+    diag::event("failure dialog: \"%s\" attempts=%u retry=%d reason=\"%s\"",
+                failure->channel_name.c_str(), failure->attempts, failure->can_retry ? 1 : 0,
+                failure->reason.c_str());
     if (failure->attempts > 1)
         content.body +=
             "\nAll " + group_digits(failure->attempts) + " of its addresses were tried.";
@@ -215,12 +335,23 @@ void App::apply_settings()
     Settings next = shared_.settings;
     next.reduced_motion = form_.toggle_value(kRowMotion);
     next.sounds = form_.toggle_value(kRowSounds);
+    next.volume = static_cast<int>(form_.slider_value(kRowVolume));
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
+    next.diagnostics = form_.toggle_value(kRowDiagnostics);
     if (next == shared_.settings)
         return;
+    // Said before it goes quiet and after it starts, so both ends are in the log.
+    if (shared_.settings.diagnostics && !next.diagnostics)
+        diag::event("diagnostic log turned off in Settings");
+    diag::set_enabled(next.diagnostics);
+    if (!shared_.settings.diagnostics && next.diagnostics)
+        diag::event("diagnostic log turned on in Settings");
     shared_.settings = next;
     settings_changed_ = true;
+    diag::event("settings: reduce motion=%d sounds=%d volume=%d menu sharpness=%d diagnostics=%d",
+                next.reduced_motion ? 1 : 0, next.sounds ? 1 : 0, next.volume, next.resolution,
+                next.diagnostics ? 1 : 0);
 }
 
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
@@ -287,6 +418,13 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             apply_settings();
         else if (event == ui::Event::activated && form_.changed_id() == kRowUpdate)
             refresh(feedback);
+        else if (event == ui::Event::activated && form_.changed_id() == kRowPair)
+        {
+            pairing_open_ = pair_requested_ = true;
+            diag::event("pairing screen opened");
+        }
+        else if (event == ui::Event::activated && form_.changed_id() == kRowForgetPhones)
+            forget_requested_ = true;
         break;
     }
     default:
@@ -296,14 +434,15 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
 
 void App::follow_channel(float dt)
 {
-    const iptv::Channel *channel = browsing() ? browse_.focused() : nullptr;
-    if (channel != nullptr)
+    const std::optional<iptv::ChannelView> channel =
+        browsing() ? browse_.focused() : std::nullopt;
+    if (channel)
     {
         const ArtColors colors = art_colors(channel->id);
         lean_.target(colors.accent);
         lean_dark_.target(colors.top);
     }
-    lean_amount_.target = channel == nullptr ? 0.0f : 0.15f;
+    lean_amount_.target = channel ? 0.15f : 0.0f;
     lean_.update(dt, 3.5f);
     lean_dark_.update(dt, 3.5f);
     lean_amount_.update(dt, 3.5f);
@@ -311,16 +450,78 @@ void App::follow_channel(float dt)
         drift_ += dt;
 }
 
+void App::play_intro()
+{
+    intro_ = shared_.settings.reduced_motion ? -1.0f : 0.0f;
+}
+
+bool App::accepts_remote_search() const
+{
+    return browsing() && !update_.is_open() && !failure_.is_open();
+}
+
+bool App::remote_search(const char *query)
+{
+    if (!accepts_remote_search() || query == nullptr)
+        return false;
+    iptv_ime_cancel();
+    shared_.model.set_query(query);
+    search_.dismiss();
+    intro_ = -1.0f;
+    return true;
+}
+
 void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
+    if (intro_ < 0.0f)
+    {
+        step(input, dt, feedback);
+        return;
+    }
+    // The opening plays over the app, which keeps loading under it and is
+    // not handed the controller. A button goes straight to its last moment.
+    intro_ += dt;
+    if (input.pressed != 0 && intro_ < kIntroHold)
+        intro_ = kIntroHold;
+    if (intro_ >= kIntroEnd)
+        intro_ = -1.0f;
+    InputFrame none;
+    step(none, dt, feedback);
+}
+
+void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
+{
     Model &model = shared_.model;
+    if (diag::enabled() && (input.pressed != 0 || (input.nav != Direction::none && !input.nav_repeat)))
+    {
+        // What the viewer did, and where the interface was when they did it.
+        std::string buttons;
+        for (unsigned bit = 0; bit < std::size(kActionNames); ++bit)
+            if ((input.pressed & (1u << bit)) != 0)
+                buttons += std::string(buttons.empty() ? "" : "+") + kActionNames[bit];
+        const unsigned direction = static_cast<unsigned>(input.nav);
+        diag::event("input %s%s%s on %s%s%s%s%s", buttons.c_str(),
+                    !buttons.empty() && input.nav != Direction::none ? " " : "",
+                    input.nav != Direction::none && direction < std::size(kDirectionNames)
+                        ? kDirectionNames[direction]
+                        : "",
+                    kTabNames[std::clamp(tabs_.active(), 0, kTabCount - 1)],
+                    search_.is_open() ? " (search open)" : "", failure_.is_open() ? " (failure dialog)" : "",
+                    update_.stage() != UpdateSheet::Stage::closed ? " (update dialog)" : "",
+                    pairing_open_ ? " (pairing screen)" : "");
+    }
     const bool reduced = shared_.settings.reduced_motion;
     shared_.clock += dt;
     page_age_ += dt;
 
+    if (search_.is_open() &&
+        (input.is_pressed(Action::back) || input.is_pressed(Action::north)))
+        iptv_ime_cancel();
     model.poll();
     for (Notice &notice : model.take_notices())
     {
+        diag::event("notice level=%d \"%s\" | %s", static_cast<int>(notice.level),
+                    notice.title.c_str(), notice.body.c_str());
         // A notice with a time of its own is an announcement.
         ui::ToastStack &stack = notice.seconds > 0.0f ? announcements_ : shared_.toasts;
         stack.push(toast_kind(notice.level), std::move(notice.title), std::move(notice.body),
@@ -332,6 +533,11 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
     platform::UpdateOffer offer;
     if (platform::update_take(&offer))
     {
+        diag::event("update offered: %s (installed %s, available %s, %llu bytes, installable=%d, "
+                    "notes %zu bytes)",
+                    offer.version.c_str(), offer.installed.c_str(), offer.available.c_str(),
+                    static_cast<unsigned long long>(offer.size), offer.installable ? 1 : 0,
+                    offer.notes.size());
         if (offer.installable)
         {
             search_.dismiss();
@@ -339,7 +545,8 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
         }
         else
         {
-            announcements_.push(ui::StatusKind::info, "ProsperoTV " + offer.version + " is available",
+            announcements_.push(ui::StatusKind::info,
+                                "ProsperoTV " + offer.version + " is available",
                                 "Get it from homebrew.page.", 10.0f);
         }
     }
@@ -354,7 +561,16 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
     }
 
     // ---- input goes to whatever is on top ----
-    if (update_.is_open())
+    if (pairing_open_)
+    {
+        if (input.is_pressed(Action::back))
+            pairing_open_ = false;
+        else if (input.is_pressed(Action::confirm) && pair_seconds_ == 0)
+        {
+            pair_requested_ = true;
+        }
+    }
+    else if (update_.is_open())
     {
         update_.handle(input, feedback);
     }
@@ -419,6 +635,9 @@ void App::draw_status(ui::Canvas &canvas) const
     {
     case Level::busy:
         text = model.has_catalog() ? "Updating" : "Downloading";
+        // A large list takes a while: say how far it is, in thousands.
+        if (const unsigned so_far = model.refresh_progress() / 1000u * 1000u; so_far != 0)
+            text += "  " + group_digits(so_far);
         dot = tone::wait;
         break;
     case Level::warning:
@@ -502,7 +721,8 @@ void App::draw_settings(ui::Canvas &canvas) const
     const float x = kGlancePanel.x + 40.0f;
     const float right = kGlancePanel.x + kGlancePanel.w - 40.0f;
     float y = kGlancePanel.y + 56.0f;
-    ui::text(list, fonts.semibold, "AT A GLANCE", x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
+    ui::text(list, fonts.semibold, "AT A GLANCE", x, y, 16.0f, tone::accent, gfx::Align::left,
+             3.0f);
     y += 22.0f;
     const auto fact = [&](const char *label, const std::string &value)
     {
@@ -547,8 +767,7 @@ void App::draw_about(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, words, x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
         y += 36.0f;
     };
-    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f)
-    {
+    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
     const auto rule = [&]()
@@ -606,9 +825,8 @@ void App::draw_about(ui::Canvas &canvas) const
     {
         ui::text(list, fonts.semibold, label, x, y, 16.0f, theme.text_muted, gfx::Align::left,
                  2.0f);
-        ui::text(list, fonts.regular,
-                 fonts.regular.font->fit(value, 22.0f, x + width - column), column, y, 22.0f,
-                 theme.text);
+        ui::text(list, fonts.regular, fonts.regular.font->fit(value, 22.0f, x + width - column),
+                 column, y, 22.0f, theme.text);
         y += 46.0f;
     };
     way("BUILT IN", "The iptv-org list, ready at the first launch");
@@ -642,7 +860,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     draw(frame);
     const ui::Theme &theme = shared_.theme;
     const ui::Fonts &fonts = shared_.fonts;
-    const iptv::Channel *channel = shared_.model.find(channel_id);
+    const std::optional<iptv::ChannelView> channel = shared_.model.find(channel_id);
     ui::Canvas over{frame.overlay, fonts, glass_texture_, shared_.clock};
     gfx::DrawList &list = frame.overlay;
     const float in = tween::clamp01(t);
@@ -656,15 +874,15 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     list.rounded_rect({0.0f, 0.0f, kWidth, kHeight}, 0.0f, tone::night.with_alpha(0.64f));
 
     // The channel's picture, lit in its own colour, settling into place.
-    const Color accent = channel != nullptr ? art_colors(channel->id).accent : tone::ember;
+    const Color accent = channel ? art_colors(channel->id).accent : tone::ember;
     const float lift = reduced ? 0.0f : 18.0f * (1.0f - eased);
     const float scale = reduced ? 1.0f : 0.94f + 0.06f * eased;
-    list.glow(kTuningArt.inset(-40.0f), theme.radius_card + 40.0f, 240.0f,
-              accent.with_alpha(0.28f));
+    const Rect set = tv_body(kTuningArt);
+    list.glow(set.inset(-40.0f), theme.radius_card + 40.0f, 240.0f, accent.with_alpha(0.28f));
     list.push_transform(scale, kTuningArt.cx(), kTuningArt.cy(), 0.0f, lift);
-    list.shadow({kTuningArt.x, kTuningArt.y + 28.0f, kTuningArt.w, kTuningArt.h},
-                theme.radius_card, 60.0f, Color::rgb(0x000000, 0.55f));
-    if (channel != nullptr)
+    list.shadow({set.x, set.y + 28.0f, set.w, set.h}, theme.radius_card, 60.0f,
+                Color::rgb(0x000000, 0.55f));
+    if (channel)
         draw_channel_art(list, fonts, kTuningArt, theme.radius_card, *channel);
     list.pop_transform();
 
@@ -672,7 +890,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     const float cx = kWidth * 0.5f;
     ui::text(list, fonts.semibold, "TUNING IN", cx, 662.0f + lift * 0.5f, 18.0f, tone::accent,
              gfx::Align::center, 5.0f);
-    if (channel != nullptr)
+    if (channel)
     {
         const std::string name = shown_name(fonts, *channel);
         const ui::FontRef &face = title_face(fonts, name);
@@ -733,6 +951,20 @@ void App::draw_hints(ui::Canvas &canvas) const
     layout.item_gap = 34.0f;
     ui::draw_hints(canvas.list, canvas.fonts, ui::GlyphStyle::dark(), hints, count,
                    kWidth - kMargin, true, layout);
+    if (!remote_hint_.empty())
+        ui::text(canvas.list, canvas.fonts.regular, remote_hint_, kMargin, 1062.0f, 20.0f,
+                 shared_.theme.text_muted);
+    // While the diagnostic log is on, every screen says so: it is easy to
+    // forget, and whoever looks at a picture of the screen should know too.
+    if (diag::enabled())
+    {
+        constexpr char kSign[] = "Diagnostic log on";
+        const float width = canvas.fonts.semibold.measure(kSign, 20.0f);
+        const float right = kWidth - kMargin;
+        canvas.list.circle(right - width - 16.0f, 1055.0f, 5.0f, tone::ember);
+        ui::text(canvas.list, canvas.fonts.semibold, kSign, right, 1062.0f, 20.0f, tone::accent,
+                 gfx::Align::right);
+    }
 }
 
 void App::draw(Frame &frame) const
@@ -769,7 +1001,77 @@ void App::draw(Frame &frame) const
     search_.draw(over);
     failure_.draw(over);
     update_.draw(over);
+    if (pairing_open_)
+        draw_pairing(over);
     frame.glass = !frame.overlay.empty();
+    if (intro_ >= 0.0f)
+        draw_intro(over);
+}
+
+void App::draw_intro(ui::Canvas &canvas) const
+{
+    gfx::DrawList &list = canvas.list;
+    const float t = intro_;
+    const float arrive = tween::cubic_out(tween::inverse_lerp(0.0f, kIntroArrive, t));
+    const float line = tween::cubic_out(tween::inverse_lerp(kIntroArrive, kIntroLine, t));
+    const float open = tween::cubic_out(tween::inverse_lerp(kIntroLine, kIntroOpen, t));
+    const float mark =
+        tween::smoothstep(tween::inverse_lerp(kIntroOpen - 0.05f, kIntroOpen + 0.4f, t));
+    const float dive = tween::cubic_in_out(tween::inverse_lerp(kIntroHold, kIntroEnd, t));
+
+    // The room is dark until the view is through the glass.
+    const float dark = 1.0f - tween::smoothstep(tween::inverse_lerp(0.35f, 0.9f, dive));
+    list.rounded_rect({-8.0f, -8.0f, kWidth + 16.0f, kHeight + 16.0f}, 0.0f,
+                      Color::rgb(0x070202, dark));
+
+    // Where the screen is before the set is drawn, so the view can aim at it.
+    const Rect body = tv_body(kIntroSet);
+    const float bezel = body.h * 0.075f;
+    const Rect glass{body.x + bezel, body.y + bezel, body.w - 2.0f * bezel - body.w * 0.135f,
+                     body.h - 2.0f * bezel};
+    // Into the screen: it grows until it is the whole view, and gives way.
+    const float full = std::max(kWidth / glass.w, kHeight / glass.h) * 1.12f;
+    const float scale = std::pow(full, dive);
+    const float settle = 0.96f + 0.04f * arrive;
+    list.push_opacity(arrive * (1.0f - tween::smoothstep(tween::inverse_lerp(0.5f, 1.0f, dive))));
+    list.push_transform(scale * settle, glass.cx(), glass.cy(), (kWidth * 0.5f - glass.cx()) * dive,
+                        (kHeight * 0.5f - glass.cy()) * dive + 14.0f * (1.0f - arrive));
+
+    // The light the picture throws on the room.
+    list.glow(body.inset(-30.0f), 60.0f, 260.0f, tone::ember.with_alpha(0.26f * open));
+    list.shadow({body.x, body.y + 30.0f, body.w, body.h}, 40.0f, 70.0f, Color::rgb(0x000000, 0.6f));
+    const ArtColors wood{Color::rgb(0xb4572a), Color::rgb(0x6e2a14),
+                         gfx::mix(tone::ember, Color::rgb(0x3a1410), 1.0f - open)};
+    const Rect screen = draw_tv_shell(list, kIntroSet, 44.0f, wood);
+    const float corner = screen.h * 0.13f;
+
+    // Off: dark glass. Then a line of light across it, which opens.
+    list.rounded_rect(screen, corner, Color::rgb(0x0b0504));
+    if (line > 0.0f)
+    {
+        const float lit_w = screen.w * (open > 0.0f ? 1.0f : 0.06f + 0.94f * line);
+        const float lit_h = tween::lerp(5.0f, screen.h, open);
+        const Rect lit{screen.cx() - lit_w * 0.5f, screen.cy() - lit_h * 0.5f, lit_w, lit_h};
+        list.push_clip(lit);
+        list.gradient_rect(screen, corner, Color::rgb(0xc8431f), tone::wine);
+        // The picture: the app's mark and name, as a station's card.
+        list.push_opacity(mark);
+        list.circle(screen.cx(), screen.cy() - 26.0f, 150.0f, kWhite.with_alpha(0.06f));
+        draw_mark(list, screen.cx(), screen.cy() - 34.0f, 132.0f);
+        ui::text(list, shared_.fonts.display, "ProsperoTV", screen.cx(), screen.cy() + 96.0f, 54.0f,
+                 kWhite.with_alpha(0.96f), gfx::Align::center);
+        list.pop_opacity();
+        // The tube warming up: white first, then the colour comes through.
+        list.rounded_rect(screen, corner, kWhite.with_alpha(0.92f * (1.0f - open)));
+        list.pop_clip();
+        list.glow(lit, std::min(corner, lit.h * 0.5f), 36.0f,
+                  kWhite.with_alpha(0.5f * (1.0f - open) * line));
+    }
+    list.gradient_rect({screen.x, screen.y, screen.w, screen.h * 0.46f}, corner,
+                       kWhite.with_alpha(0.10f), kWhite.with_alpha(0.0f));
+    list.bordered_rect(screen, corner, kClear, 2.0f, kWhite.with_alpha(0.16f));
+    list.pop_transform();
+    list.pop_opacity();
 }
 
 } // namespace ptv

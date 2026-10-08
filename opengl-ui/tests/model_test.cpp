@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "host_platform.hpp"
+#include "large_list.hpp"
 #include "tv/model.hpp"
 
 #include <gtest/gtest.h>
@@ -94,6 +95,22 @@ class ModelTest : public ::testing::Test
         return false;
     }
 
+    // The same for a list that takes its time: three minutes at most, and
+    // the most channels the download said it had read on the way.
+    static bool settle_large(ptv::Model &model, unsigned *most = nullptr)
+    {
+        for (int i = 0; i < 36000; ++i)
+        {
+            model.poll();
+            if (!model.refreshing())
+                return true;
+            if (most != nullptr && model.refresh_progress() > *most)
+                *most = model.refresh_progress();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    }
+
     // A model with the twelve channels loaded and saved.
     void load(ptv::Model &model)
     {
@@ -116,6 +133,38 @@ class ModelTest : public ::testing::Test
     std::string playlist_;
     std::uint64_t now_ = 0;
 };
+
+TEST_F(ModelTest, SaysWhichScriptsAListIsWrittenIn)
+{
+    {
+        ptv::Model model(dir_);
+        load(model);
+        EXPECT_FALSE(model.uses_east_asian());
+        EXPECT_FALSE(model.uses_korean());
+    }
+    // The same list with one Chinese name and one Korean group.
+    std::ofstream(playlist_, std::ios::app)
+        << "#EXTINF:-1 tvg-id=\"z.cn\" group-title=\"News\",CCTV-5 \xE9\xAB\x98\xE6\xB8\x85\n"
+        << "https://streams.example.invalid/cctv5/index.m3u8\n";
+    {
+        fs::remove_all(dir_ + "/cache");
+        ptv::Model model(dir_ + "/second");
+        fs::create_directories(dir_ + "/second");
+        load(model);
+        EXPECT_TRUE(model.uses_east_asian());
+        EXPECT_FALSE(model.uses_korean());
+    }
+    std::ofstream(playlist_, std::ios::app)
+        << "#EXTINF:-1 tvg-id=\"y.kr\" group-title=\"\xEB\x89\xB4\xEC\x8A\xA4\",YTN\n"
+        << "https://streams.example.invalid/ytn/index.m3u8\n";
+    {
+        ptv::Model model(dir_ + "/third");
+        fs::create_directories(dir_ + "/third");
+        load(model);
+        EXPECT_TRUE(model.uses_east_asian());
+        EXPECT_TRUE(model.uses_korean());
+    }
+}
 
 TEST_F(ModelTest, FirstOpenDownloadsSavesAndSaysSo)
 {
@@ -345,7 +394,7 @@ TEST_F(ModelTest, AChannelThatFailedCanBeTriedAgain)
     ptv::Model model(dir_);
     load(model);
     const unsigned fern = index_of(model, "f.fr");
-    const std::string id = model.channel(fern).id;
+    const std::string id(model.channel(fern).id);
     EXPECT_EQ(model.failure(), nullptr);
     model.report_playback_failure(id.c_str(), "Fern 24", -3, 2, "The server refused the stream.");
     ASSERT_NE(model.failure(), nullptr);
@@ -483,6 +532,165 @@ TEST_F(ModelTest, WithoutAKeyboardTheFormsSaySo)
     model.close();
 }
 
+// ---- lists of the size large providers send ------------------------------------
+
+TEST_F(ModelTest, AListOfMoreThanAHundredThousandChannelsIsBrowsedLikeAnyOther)
+{
+    constexpr unsigned kChannels = 120000;
+    std::ofstream(playlist_) << large_list::playlist(kChannels);
+    const std::uintmax_t file_bytes = fs::file_size(playlist_);
+    ASSERT_GT(file_bytes, 24u * 1024u * 1024u);
+    // The download arrives in pieces that end anywhere.
+    host::set_network_piece(8191);
+    {
+        ptv::Model model(dir_);
+        ASSERT_TRUE(model.open());
+        unsigned most = 0;
+        ASSERT_TRUE(settle_large(model, &most));
+        ASSERT_TRUE(model.has_catalog());
+        EXPECT_EQ(model.channel_count(), kChannels);
+        EXPECT_EQ(model.visible_count(), kChannels);
+        // While it ran it said how far it was; and it read the whole list.
+        EXPECT_GT(most, 0u);
+        EXPECT_LE(most, kChannels);
+        EXPECT_EQ(model.refresh_progress(), 0u);
+        EXPECT_EQ(host::delivered_bytes(), file_bytes);
+        EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::ready);
+        const std::vector<ptv::Notice> notices = model.take_notices();
+        ASSERT_EQ(notices.size(), 1u);
+        EXPECT_EQ(notices[0].body, "120,000 channels");
+
+        // The lists and their sizes.
+        EXPECT_EQ(model.group_size(ptv::Group::all), kChannels);
+        EXPECT_EQ(model.group_size(ptv::Group::sports), kChannels / 8);
+        EXPECT_EQ(model.group_size(ptv::Group::news), kChannels / 8);
+        EXPECT_EQ(model.group_size(ptv::Group::kids), kChannels / 8);
+        ASSERT_EQ(model.countries().size(), 4u);
+        EXPECT_EQ(model.countries()[0].count, kChannels / 4);
+        EXPECT_EQ(model.categories().size(), ptv::Model::kFacetMax);
+        EXPECT_EQ(model.categories()[0].count, kChannels / 8);
+
+        // The order of the alphabet, the letters, and where a channel is.
+        EXPECT_EQ(model.channel(model.visible(0)).name, "A-Net 000000 FHD");
+        EXPECT_EQ(model.channel(model.visible(1)).name, "A-Net 000026 HD");
+        EXPECT_EQ(model.channel(model.visible(kChannels - 1)).name, "Z-Net 119989");
+        EXPECT_EQ(model.letter_start(0), -1);
+        EXPECT_EQ(model.letter_start(1), 0);
+        EXPECT_EQ(model.letter_start(2), static_cast<int>(large_list::share(kChannels, 26, 0)));
+        EXPECT_EQ(model.letter_start(26),
+                  static_cast<int>(kChannels - large_list::share(kChannels, 26, 25)));
+        EXPECT_EQ(model.letter_at(kChannels - 1), 26);
+        for (const unsigned position : {0u, 1u, 4616u, 60000u, kChannels - 1})
+        {
+            const unsigned index = model.visible(position);
+            EXPECT_EQ(model.position_of(model.channel(index).id), static_cast<int>(position));
+            EXPECT_EQ(model.number_of(index), position + 1);
+        }
+        EXPECT_EQ(model.position_of("nothing"), -1);
+        ASSERT_TRUE(model.find(model.channel(77777).id).has_value());
+        EXPECT_EQ(model.find(model.channel(77777).id)->tvg_id, "c77777.example");
+        EXPECT_FALSE(model.find("nothing").has_value());
+
+        // A search and the filters narrow it, alone and together.
+        model.set_query("net 077777");
+        ASSERT_EQ(model.visible_count(), 1u);
+        EXPECT_EQ(model.channel(model.visible(0)).tvg_id, "c77777.example");
+        model.set_query("fhd");
+        EXPECT_EQ(model.visible_count(), kChannels / 5);
+        model.set_query("");
+        model.set_quality(ptv::kQualityHd);
+        EXPECT_EQ(model.visible_count(), kChannels / 5);
+        model.set_country("DE");
+        EXPECT_EQ(model.visible_count(), kChannels / 20);
+        model.set_category("News");
+        EXPECT_EQ(model.visible_count(), 0u); // news is index 1 of 8, DE is 2 of 4
+        model.clear_filters();
+        model.set_group(ptv::Group::sports);
+        ASSERT_EQ(model.visible_count(), kChannels / 8);
+        EXPECT_EQ(model.channel(model.visible(0)).name, "A-Net 000000 FHD");
+        const unsigned in_sports = model.visible(9000);
+        EXPECT_EQ(model.position_of(model.channel(in_sports).id), 9000);
+        model.set_group(ptv::Group::all);
+        EXPECT_EQ(model.visible_count(), kChannels);
+
+        // A favorite and a watched channel far down the list.
+        const unsigned starred = model.visible(100000);
+        const std::string starred_id(model.channel(starred).id);
+        EXPECT_EQ(model.toggle_favorite(starred), ptv::Model::Starred::added);
+        EXPECT_EQ(model.group_size(ptv::Group::favorites), 1u);
+        model.set_group(ptv::Group::favorites);
+        ASSERT_EQ(model.visible_count(), 1u);
+        EXPECT_EQ(model.visible(0), starred);
+        EXPECT_EQ(model.position_of(starred_id), 0);
+        model.set_group(ptv::Group::all);
+        ASSERT_TRUE(model.play(model.visible(110000)));
+        ptv::PlayRequest request;
+        ASSERT_TRUE(model.take_play_request(&request));
+        EXPECT_EQ(request.urls.size(), 1u);
+        model.close();
+
+        // The menu reopens after the channel: nothing is read again.
+        const int fetches = host::fetch_count();
+        ASSERT_TRUE(model.open());
+        EXPECT_EQ(model.channel_count(), kChannels);
+        EXPECT_EQ(model.group_size(ptv::Group::recent), 1u);
+        EXPECT_EQ(host::fetch_count(), fetches);
+        model.close();
+    }
+
+    // The next launch opens from the copy saved on the console.
+    const int fetches = host::fetch_count();
+    host::set_unix_time(now_ + 3600);
+    ptv::Model again(dir_);
+    ASSERT_TRUE(again.open());
+    EXPECT_TRUE(again.has_catalog());
+    EXPECT_FALSE(again.refreshing());
+    EXPECT_EQ(host::fetch_count(), fetches);
+    EXPECT_EQ(again.channel_count(), kChannels);
+    EXPECT_EQ(again.group_size(ptv::Group::favorites), 1u);
+    EXPECT_EQ(again.group_size(ptv::Group::recent), 1u);
+    EXPECT_EQ(again.channel(again.visible(kChannels - 1)).name, "Z-Net 119989");
+    again.close();
+}
+
+TEST_F(ModelTest, ASourceWithMoreChannelsThanTheAppHoldsKeepsItsFirstOnesAndSaysSo)
+{
+    const unsigned held = static_cast<unsigned>(iptv::kDefaultMaxChannels);
+    std::ofstream(playlist_) << large_list::playlist(held + 20000);
+    ptv::Model model(dir_);
+    ASSERT_TRUE(model.open());
+    ASSERT_TRUE(settle_large(model));
+    ASSERT_TRUE(model.has_catalog());
+    EXPECT_EQ(model.channel_count(), held);
+    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::ready);
+    // The download stopped where the catalog was full.
+    EXPECT_LT(host::delivered_bytes(), fs::file_size(playlist_));
+    const std::vector<ptv::Notice> notices = model.take_notices();
+    ASSERT_EQ(notices.size(), 2u);
+    EXPECT_EQ(notices[0].body, "250,000 channels");
+    EXPECT_EQ(notices[1].level, ptv::Level::warning);
+    EXPECT_EQ(notices[1].title, "This source has more channels than ProsperoTV holds");
+    EXPECT_EQ(notices[1].body, "Showing its first 250,000.");
+    model.close();
+}
+
+TEST_F(ModelTest, AnAddressThatIsNoPlaylistIsGivenUpEarly)
+{
+    // Four megabytes of something else: a web page, a video.
+    std::string other;
+    while (other.size() < 4u * 1024u * 1024u)
+        other += "<p>This is not a channel list, however long it goes on.</p>\n";
+    std::ofstream(playlist_) << other;
+    ptv::Model model(dir_);
+    ASSERT_TRUE(model.open());
+    ASSERT_TRUE(settle_large(model));
+    EXPECT_FALSE(model.has_catalog());
+    EXPECT_TRUE(model.catalog_failed());
+    EXPECT_NE(model.catalog_error().find("no channels that can be played"), std::string::npos);
+    EXPECT_LT(host::delivered_bytes(), 2u * 1024u * 1024u);
+    model.close();
+}
+
 // ---- the words ------------------------------------------------------------------
 
 iptv::Channel named(const char *name, const char *url = "https://x.example.invalid/a.m3u8")
@@ -583,7 +791,7 @@ TEST(ChannelText, MonogramsPlacesAndNumbers)
 {
     EXPECT_EQ(ptv::monogram(named("Alder News")), "AN");
     EXPECT_EQ(ptv::monogram(named("Kestrel")), "KE");
-    EXPECT_EQ(ptv::monogram(named("\xE4\xB8\xAD\xE6\x96\x87")), "TV");
+    EXPECT_EQ(ptv::monogram(named("\xE4\xB8\xAD\xE6\x96\x87")), "\xE4\xB8\xAD");
     iptv::Channel channel = named("Alder");
     EXPECT_EQ(ptv::place_line(channel), "World");
     EXPECT_EQ(ptv::category_of(channel), "Uncategorized");

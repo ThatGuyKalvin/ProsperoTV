@@ -4,8 +4,11 @@
 
 #include "core/save_file.hpp"
 #include "host_platform.hpp"
+#include "large_list.hpp"
 #include "tv/app.hpp"
 #include "tv/draw.hpp"
+#include "tv/diag.hpp"
+#include "tv/remote_input.hpp"
 
 #include <gtest/gtest.h>
 
@@ -31,7 +34,7 @@ constexpr float kDt = 1.0f / 60.0f;
 // out what the console lays out. KIT_FONTS is set by tools/run-tests.sh.
 struct FontSet
 {
-    hui::gfx::Font regular, semibold, display, mono;
+    hui::gfx::Font regular, semibold, display, mono, east_asian, korean;
     hui::ui::Fonts fonts;
 
     FontSet()
@@ -41,8 +44,8 @@ struct FontSet
         load(dir, "inter-semibold.huifont", &semibold, &fonts.semibold, 0xf0000002u);
         load(dir, "montserrat-medium.huifont", &display, &fonts.display, 0xf0000003u);
         load(dir, "dejavu-sans-mono.huifont", &mono, &fonts.mono, 0xf0000004u);
-        fonts.pixel = fonts.mono;
-        fonts.hand = fonts.regular;
+        load(dir, "noto-sans-east-asian.huifont", &east_asian, &fonts.hand, 0xf0000005u);
+        load(dir, "noto-sans-korean.huifont", &korean, &fonts.pixel, 0xf0000006u);
     }
 
     static void load(const char *dir, const char *name, hui::gfx::Font *font, hui::ui::FontRef *ref,
@@ -50,7 +53,7 @@ struct FontSet
     {
         std::string data;
         const std::string path = std::string(dir != nullptr ? dir : ".") + "/" + name;
-        if (!hui::save::read_file(path, &data) || !font->load(data))
+        if (!hui::save::read_file(path, &data, 64u << 20) || !font->load(data))
         {
             ADD_FAILURE() << "cannot load " << path;
             return;
@@ -176,7 +179,8 @@ class AppTest : public ::testing::Test
         app_.reset();
         std::ofstream(playlist_) << text;
         model_->refresh();
-        for (int i = 0; i < 400 && model_->refreshing(); ++i)
+        // A large list takes its time: three minutes at most.
+        for (int i = 0; i < 36000 && model_->refreshing(); ++i)
         {
             model_->poll();
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -221,6 +225,58 @@ TEST_F(AppTest, CrossQueuesTheChannelInFocus)
     EXPECT_EQ(request.channel_id, model_->channel(6).id);
     EXPECT_EQ(model_->view.focused_channel, request.channel_id);
     EXPECT_GT(cues_, 0);
+}
+
+TEST_F(AppTest, PhoneDirectionsAndEnterSelectTheVisibleChannel)
+{
+    frame(ptv::remote_input(IPTV_INPUT_RIGHT));
+    frame(ptv::remote_input(IPTV_INPUT_DOWN));
+    EXPECT_EQ(position(), 6);
+    frame(ptv::remote_input(IPTV_INPUT_LEFT));
+    frame(ptv::remote_input(IPTV_INPUT_UP));
+    EXPECT_EQ(position(), 0);
+    frame(ptv::remote_input(IPTV_INPUT_CROSS));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, model_->channel(0).id);
+}
+
+TEST_F(AppTest, PhoneTextReplacesOpenKeyboardAndClearKeepsFilters)
+{
+    model_->set_country("US");
+    frame(ptv::remote_input(IPTV_INPUT_TRIANGLE));
+    ASSERT_TRUE(app_->searching());
+    frame(ptv::remote_input(IPTV_INPUT_CROSS));
+    ASSERT_GT(host::keyboard_requests(), 0);
+    host::set_keyboard_text("stale keyboard text");
+    ASSERT_TRUE(app_->remote_search("Channel 10"));
+    idle();
+    EXPECT_FALSE(app_->searching());
+    EXPECT_EQ(model_->query(), "Channel 10");
+    EXPECT_EQ(model_->visible_count(), 1u);
+    ASSERT_TRUE(app_->remote_search(""));
+    idle();
+    EXPECT_EQ(model_->country(), "US");
+    EXPECT_EQ(model_->visible_count(), 30u);
+}
+
+TEST_F(AppTest, PhoneBackDismissesSearchAndShouldersChangeTabs)
+{
+    frame(ptv::remote_input(IPTV_INPUT_TRIANGLE));
+    ASSERT_TRUE(app_->searching());
+    frame(ptv::remote_input(IPTV_INPUT_CROSS));
+    host::set_keyboard_text("cancelled by Back");
+    frame(ptv::remote_input(IPTV_INPUT_CIRCLE));
+    idle();
+    EXPECT_FALSE(app_->searching());
+    EXPECT_TRUE(model_->query().empty());
+    frame(ptv::remote_input(IPTV_INPUT_R1));
+    EXPECT_EQ(app_->tab(), 1);
+    frame(ptv::remote_input(IPTV_INPUT_R1));
+    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_FALSE(app_->remote_search("Channel"));
+    frame(ptv::remote_input(IPTV_INPUT_L1));
+    EXPECT_EQ(app_->tab(), 1);
 }
 
 TEST_F(AppTest, TheMenuComesBackWhereItWas)
@@ -371,7 +427,7 @@ TEST_F(AppTest, SquareInTheDrawerResetsAndCircleClosesIt)
 
 TEST_F(AppTest, AChannelThatFailedIsAskedAboutFirst)
 {
-    const std::string id = model_->channel(4).id;
+    const std::string id(model_->channel(4).id);
     app_.reset();
     model_->close();
     ASSERT_TRUE(model_->open());
@@ -426,9 +482,140 @@ TEST_F(AppTest, SettingsAreChangedAndReported)
     EXPECT_FALSE(app_->settings().sounds);
     cues_ = 0;
     move(Direction::down);
+    move(Direction::left); // Volume
+    EXPECT_EQ(app_->settings().volume, 95);
+    move(Direction::down);
     move(Direction::right); // Menu sharpness
     EXPECT_EQ(app_->settings().resolution, static_cast<int>(ptv::Settings::kFullHd));
     EXPECT_EQ(cues_, 0); // and nothing sounds any more
+}
+
+TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
+{
+    app_->set_pairing_info("http://192.0.2.1:8888", "123456", 120, 1);
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    for (int i = 0; i < 4; ++i)
+        move(Direction::down);
+    EXPECT_FALSE(app_->take_pair_phone_requested());
+    press(Action::confirm);
+    EXPECT_TRUE(app_->pairing_open());
+    EXPECT_TRUE(app_->take_pair_phone_requested());
+    EXPECT_FALSE(app_->take_pair_phone_requested());
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 3);
+    app_->set_pairing_info("http://192.0.2.1:8888", "", 0, 1);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->take_pair_phone_requested());
+    press(Action::back);
+    EXPECT_FALSE(app_->pairing_open());
+    EXPECT_EQ(app_->tab(), 3);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->pairing_open());
+    app_->phone_connected();
+    EXPECT_FALSE(app_->pairing_open());
+    EXPECT_EQ(app_->tab(), 3);
+    move(Direction::down);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->take_forget_phones_requested());
+}
+
+std::vector<std::string> g_traced;
+
+bool traced(const std::string &part)
+{
+    for (const std::string &line : g_traced)
+        if (line.find(part) != std::string::npos)
+            return true;
+    return false;
+}
+
+TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
+{
+    g_traced.clear();
+    ptv::diag::set_forced(false);
+    ptv::diag::set_sink([](const char *line) { g_traced.emplace_back(line); });
+    EXPECT_FALSE(app_->settings().diagnostics);
+    EXPECT_FALSE(ptv::diag::enabled());
+
+    // Off: the viewer moves about and nothing is written.
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_TRUE(g_traced.empty());
+
+    // The switch is the last row of Settings.
+    for (int i = 0; i < 12; ++i)
+        move(Direction::down);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->settings().diagnostics);
+    EXPECT_TRUE(app_->take_settings_changed());
+    EXPECT_TRUE(ptv::diag::enabled());
+    EXPECT_TRUE(traced("diagnostic log turned on in Settings"));
+    EXPECT_TRUE(traced("diagnostics=1"));
+
+    // On: what the viewer does and what the app answers are both there.
+    press(Action::page_prev);
+    EXPECT_TRUE(traced("input L1 on Settings"));
+    EXPECT_TRUE(traced("tab Sources"));
+    press(Action::page_prev);
+    press(Action::page_prev);
+    EXPECT_EQ(app_->tab(), 0);
+    move(Direction::right);
+    EXPECT_TRUE(traced("input right on Live TV"));
+    press(Action::confirm);
+    EXPECT_TRUE(traced("play asked: "));
+    EXPECT_TRUE(traced("  address: https://"));
+    // No address is written whole: the path of the stream stays out of the log.
+    EXPECT_FALSE(traced("index.m3u8"));
+
+    // And off again, with its own last line.
+    g_traced.clear();
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    for (int i = 0; i < 12; ++i)
+        move(Direction::down);
+    press(Action::confirm);
+    EXPECT_FALSE(app_->settings().diagnostics);
+    EXPECT_FALSE(ptv::diag::enabled());
+    EXPECT_TRUE(traced("diagnostic log turned off in Settings"));
+    g_traced.clear();
+    press(Action::page_prev);
+    EXPECT_TRUE(g_traced.empty());
+    ptv::diag::set_sink(nullptr);
+}
+
+TEST_F(AppTest, PhoneVolumeUpdatesTheSliderWithoutOverwritingOtherSettings)
+{
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::confirm); // reduce motion
+    app_->take_settings_changed();
+    app_->set_volume(30);
+    EXPECT_FALSE(app_->take_settings_changed());
+    EXPECT_TRUE(app_->settings().reduced_motion);
+    move(Direction::down);
+    move(Direction::down);
+    move(Direction::left);
+    EXPECT_EQ(app_->settings().volume, 25);
+    EXPECT_TRUE(app_->take_settings_changed());
+}
+
+TEST_F(AppTest, VolumeSettingsPersistAndClamp)
+{
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
+    ptv::Settings settings;
+    settings.volume = 35;
+    ASSERT_TRUE(ptv::save_settings(dir_, settings));
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 35);
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=-20\n";
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 0);
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=200\n";
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
 }
 
 TEST_F(AppTest, OptionsStartsAnUpdateOnce)
@@ -608,6 +795,54 @@ TEST_F(AppTest, AListOpenedDeepShowsItsTilesAtOnce)
     EXPECT_GT(frame_.scene.instances().size() * 10, at_the_top * 6);
 }
 
+// A hundred and twenty thousand channels: the grid still draws one screen of
+// them, the letters and a held trigger cross the whole list, and a frame
+// costs what it costs with sixty.
+TEST_F(AppTest, AListOfMoreThanAHundredThousandChannelsIsOneScreenAtATime)
+{
+    idle(60);
+    const std::size_t with_sixty = frame_.scene.instances().size();
+    constexpr unsigned kChannels = 120000;
+    use_playlist(large_list::playlist(kChannels));
+    ASSERT_EQ(model_->visible_count(), kChannels);
+    idle(60);
+    EXPECT_EQ(position(), 0);
+    EXPECT_LT(frame_.scene.instances().size(), with_sixty * 2);
+
+    // Deep in the list at once.
+    app_.reset();
+    model_->view.focused_channel = model_->channel(model_->visible(100000)).id;
+    make_app();
+    EXPECT_EQ(position(), 100000);
+    EXPECT_LT(frame_.scene.instances().size(), with_sixty * 2);
+
+    // A held R2 turns pages for as long as it is held.
+    hold(Action::jump_next, 180);
+    idle(20);
+    const int after_pages = position();
+    EXPECT_GT(after_pages, 100000);
+
+    // The letters: from the last column onto the rail, then to another letter.
+    for (int i = 0; i < 6 && !app_->on_letters(); ++i)
+        move(Direction::right);
+    ASSERT_TRUE(app_->on_letters());
+    const int letter = model_->letter_at(static_cast<unsigned>(position()));
+    move(Direction::up);
+    idle(30);
+    EXPECT_EQ(model_->letter_at(static_cast<unsigned>(position())), letter - 1);
+    EXPECT_EQ(position(), model_->letter_start(letter - 1));
+    press(Action::back);
+
+    // A search narrows it and the grid follows.
+    model_->set_query("net 077777");
+    idle(30);
+    ASSERT_EQ(model_->visible_count(), 1u);
+    EXPECT_EQ(position(), 0);
+    model_->set_query("");
+    idle(30);
+    EXPECT_EQ(model_->visible_count(), kChannels);
+}
+
 iptv::Channel written(const char *name, const char *id = "")
 {
     iptv::Channel channel;
@@ -663,6 +898,123 @@ TEST_F(AppTest, ANewerVersionIsOfferedAndLaterLeavesEverythingAlone)
     EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
     press(Action::page_next);
     EXPECT_EQ(app_->tab(), 1);
+}
+
+// Release notes as the catalog gives them: headings, list items, callouts.
+const char *release_notes()
+{
+    return "Highlights\n"
+        "- The alphabet beside every list: Right from the last column, then up and down.\n"
+        "- Hold L2 or R2 and the pages keep turning.\n"
+        "- A tuning screen from Cross to the channel's first picture.\n"
+        "\n"
+           "Warning: this version moves your sources and favorites to /data/prosperotv the first "
+           "time it starts.\n"
+        "\n"
+        "Fixes\n"
+        "- Channels play again after the menu has been drawn with OpenGL.\n"
+        "- Greek channel names read as written.\n"
+        "- The launch picture stays until the menu is there.\n"
+        "- The player's messages no longer appear as notifications.\n"
+        "\n"
+        "Note: the update keeps everything you saved.\n"
+        "\n"
+        "Thanks\n"
+           "To everyone who tested the new interface on their console and wrote back with what "
+           "they saw, "
+        "and to the maintainers of the public channel list.\n"
+        "- More languages for channel names are next.\n"
+        "- So is a way to sort a list by country.\n"
+        "- And the guide, where a source provides one.";
+}
+
+TEST_F(AppTest, AReleaseWithNotesOffersWhatsNewAndTheNotesScroll)
+{
+    ptv::platform::UpdateOffer offer = newer_version();
+    offer.notes = release_notes();
+    offer.notes_truncated = true;
+    host::offer_update(offer);
+    idle(30);
+    const ptv::UpdateSheet &sheet = app_->update_sheet();
+    ASSERT_EQ(sheet.stage(), Stage::offer);
+    // Three answers now: Update now, What's new, Later.
+    move(Direction::right);
+    move(Direction::right);
+    EXPECT_EQ(sheet.focus(), 2);
+    move(Direction::right); // nothing further
+    EXPECT_EQ(sheet.focus(), 2);
+    move(Direction::left);
+    press(Action::confirm);
+    ASSERT_EQ(sheet.stage(), Stage::notes);
+    EXPECT_EQ(host::update_calls().begin, 0);
+
+    // The text is longer than its window: it scrolls, and stops at its end.
+    ASSERT_GT(sheet.notes_max_scroll(), 0.0f);
+    EXPECT_EQ(sheet.notes_scroll(), 0.0f);
+    move(Direction::up); // already at the top
+    EXPECT_EQ(sheet.notes_scroll(), 0.0f);
+    move(Direction::down);
+    EXPECT_GT(sheet.notes_scroll(), 0.0f);
+    for (int i = 0; i < 40; ++i)
+        move(Direction::down, 2);
+    EXPECT_EQ(sheet.notes_scroll(), sheet.notes_max_scroll());
+    press(Action::jump_prev);
+    EXPECT_LT(sheet.notes_scroll(), sheet.notes_max_scroll());
+
+    // Circle goes back to the offer, on the button that led here.
+    press(Action::back);
+    ASSERT_EQ(sheet.stage(), Stage::offer);
+    EXPECT_EQ(sheet.focus(), 1);
+    EXPECT_EQ(app_->tab(), 0);
+
+    // And the update can be started from the notes.
+    press(Action::confirm);
+    ASSERT_EQ(sheet.stage(), Stage::notes);
+    host::set_update_progress(progress(UpdatePhase::starting));
+    press(Action::confirm);
+    EXPECT_EQ(sheet.stage(), Stage::working);
+    EXPECT_EQ(host::update_calls().begin, 1);
+}
+
+TEST_F(AppTest, WithoutNotesTheOfferKeepsItsTwoAnswers)
+{
+    host::offer_update(newer_version());
+    idle(30);
+    move(Direction::right);
+    move(Direction::right);
+    EXPECT_EQ(app_->update_sheet().focus(), 1);
+    press(Action::confirm); // Later
+    EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
+}
+
+TEST_F(AppTest, TheOpeningPlaysOnceKeepsTheControllerAndEndsByItself)
+{
+    app_->play_intro();
+    ASSERT_TRUE(app_->intro_playing());
+    // The controller is not read while it plays: the tab stays.
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 0);
+    // That button took it to its last moment; it is over within a second.
+    idle(70);
+    EXPECT_FALSE(app_->intro_playing());
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
+
+    // Left alone it runs its whole length, then hands over.
+    app_->play_intro();
+    idle(120);
+    EXPECT_TRUE(app_->intro_playing());
+    idle(100);
+    EXPECT_FALSE(app_->intro_playing());
+}
+
+TEST_F(AppTest, WithReduceMotionThereIsNoOpening)
+{
+    ptv::Settings settings;
+    settings.reduced_motion = true;
+    app_ = std::make_unique<ptv::App>(*model_, font_set().fonts, 7u, settings, "test");
+    app_->play_intro();
+    EXPECT_FALSE(app_->intro_playing());
 }
 
 TEST_F(AppTest, CircleOnTheOfferMeansLater)
@@ -790,24 +1142,57 @@ TEST(ShownNames, AreWrittenInTheScriptsTheFontsHold)
     }
 }
 
-TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
+TEST(ShownNames, ChineseJapaneseAndKoreanAreWrittenAsTheyAre)
 {
     const hui::ui::Fonts &fonts = font_set().fonts;
-    const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93";
-    // Most of a mixed name survives: it is kept without the letters that cannot be drawn.
-    EXPECT_EQ(ptv::shown_name(fonts, written("CCTV-1 \xE7\xBB\xBC\xE5\x90\x88", "CCTV1.cn")),
-              "CCTV-1");
-    // Nothing survives: the playlist's own id for the channel stands in.
-    EXPECT_EQ(ptv::shown_name(fonts, written(chinese, "CCTV4.cn@SD")), "CCTV4");
-    // And without an id the tile still says something.
-    EXPECT_EQ(ptv::shown_name(fonts, written(chinese)), "Channel");
-    // Notes are filtered the same way; one that cannot be written is dropped.
+    const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93";     // 中文频道
+    const char *mixed = "CCTV-5 \xE9\xAB\x98\xE6\xB8\x85";                              // CCTV-5 高清
+    const char *japanese =
+        "\xE3\x83\x86\xE3\x83\xAC\xE3\x83\x93\xE6\x9C\x9D\xE6\x97\xA5";        // テレビ朝日
+    const char *korean = "\xEC\x97\xB0\xED\x95\xA9\xEB\x89\xB4\xEC\x8A\xA4TV";         // 연합뉴스TV
+    EXPECT_EQ(ptv::shown_name(fonts, written(chinese, "CCTV4.cn@SD")), chinese);
+    EXPECT_EQ(ptv::shown_name(fonts, written(mixed, "CCTV5.cn")), mixed);
+    EXPECT_EQ(ptv::shown_name(fonts, written(japanese)), japanese);
+    EXPECT_EQ(ptv::shown_name(fonts, written(korean)), korean);
+    // Each is written with the face that holds all of it; Latin names keep theirs.
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, chinese), &fonts.hand);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, mixed), &fonts.hand);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, japanese), &fonts.hand);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, korean), &fonts.pixel);
+    EXPECT_EQ(&ptv::face_for(fonts, fonts.semibold, "France 24"), &fonts.semibold);
+    EXPECT_EQ(&ptv::title_face(fonts, "France 24"), &fonts.display);
+    EXPECT_EQ(&ptv::title_face(fonts, mixed), &fonts.hand);
+    // A name of one script only gets its first character on its screen.
+    EXPECT_EQ(ptv::monogram(written(chinese)), "\xE4\xB8\xAD");
+    EXPECT_EQ(ptv::monogram(written(mixed)), "C5");
+    // A note in Chinese is kept too.
     std::vector<std::string> notes;
     const std::string noted = std::string("Alder [") + chinese + "] [Not 24/7]";
     EXPECT_EQ(ptv::shown_name(fonts, written(noted.c_str()), &notes), "Alder");
+    ASSERT_EQ(notes.size(), 2u);
+    EXPECT_EQ(notes[0], chinese);
+}
+
+TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
+{
+    const hui::ui::Fonts &fonts = font_set().fonts;
+    const char *thai = "\xE0\xB9\x84\xE0\xB8\x97\xE0\xB8\xA2\xE0\xB8\x97\xE0\xB8\xB5\xE0\xB8\xA7"
+                       "\xE0\xB8\xB5"; // ไทยทีวี
+    // Most of a mixed name survives: it is kept without the letters that cannot be drawn.
+    EXPECT_EQ(
+        ptv::shown_name(fonts, written((std::string("Thai PBS ") + thai).c_str(), "ThaiPBS.th")),
+              "Thai PBS");
+    // Nothing survives: the playlist's own id for the channel stands in.
+    EXPECT_EQ(ptv::shown_name(fonts, written(thai, "Channel3.th@SD")), "Channel3");
+    // And without an id the tile still says something.
+    EXPECT_EQ(ptv::shown_name(fonts, written(thai)), "Channel");
+    // Notes are filtered the same way; one that cannot be written is dropped.
+    std::vector<std::string> notes;
+    const std::string noted = std::string("Alder [") + thai + "] [Not 24/7]";
+    EXPECT_EQ(ptv::shown_name(fonts, written(noted.c_str()), &notes), "Alder");
     ASSERT_EQ(notes.size(), 1u);
     EXPECT_EQ(notes[0], "Not 24/7");
-    EXPECT_EQ(ptv::readable(fonts.regular, std::string("News | ") + chinese), "News");
+    EXPECT_EQ(ptv::readable(fonts.regular, std::string("News | ") + thai), "News");
 }
 
 // Whatever a player presses, in whatever order: nothing may fault, the tab
@@ -846,8 +1231,8 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
             static constexpr UpdatePhase phases[] = {
                 UpdatePhase::starting, UpdatePhase::downloading, UpdatePhase::unpacking,
                 UpdatePhase::failed,   UpdatePhase::cancelled,   UpdatePhase::idle};
-            host::set_update_progress(progress(phases[random() % std::size(phases)],
-                                               random() % 5000, random() % 5000));
+            host::set_update_progress(
+                progress(phases[random() % std::size(phases)], random() % 5000, random() % 5000));
         }
         frame(input);
         // A channel was chosen: the frame loop would play it and come back.

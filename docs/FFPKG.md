@@ -4,9 +4,10 @@ Every application or package build creates and validates
 `dist/<TITLE_ID>/`. The Make targets map to the same PowerShell
 `-OutputFormat` selections:
 
-All formats remain available for local development. Tagged GitHub Releases
-attach the complete compressed `.ffpfsc` image, a `.zip` containing the
-complete title folder, and their `SHA256SUMS`.
+Tagged GitHub Releases and every CI build attach a `.zip` containing the
+complete title folder and its `SHA256SUMS`, and nothing else. The image
+formats below (`make ffpkg`, `make ffpfsc`, `make packages`) remain a local
+option for anyone who wants an image on their own machine.
 
 | Make target / selection | Additional output | Packaging tool |
 | --- | --- | --- |

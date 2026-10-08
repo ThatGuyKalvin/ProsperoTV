@@ -10,8 +10,10 @@
 # The faces are the kit's (Inter, Montserrat, DejaVu Sans Mono, from its
 # third_party/fonts) and so is the baker, run with its "european" alphabet:
 # channel names in Western and Central European languages, in Greek and in Cyrillic
-# read as written. The result is the same for the same inputs, so it is made
-# once and reused.
+# read as written. Chinese, Japanese and Korean names get two faces of their
+# own, baked from Noto Sans (tools/fetch-cjk-fonts.sh) with the code points of
+# tools/cjk-ranges.py by this folder's font-baker/bake_list.cpp. The result is
+# the same for the same inputs, so it is made once and reused.
 
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -22,7 +24,9 @@ tool="$root/build/host/bake_font"
 source="$kit/tools/font-baker/bake_font.cpp"
 mkdir -p "$out" "$root/build/host"
 
-stamp=$(cat "$source" "${BASH_SOURCE[0]}" "$kit"/third_party/fonts/{Inter-Regular,Inter-SemiBold,Montserrat-Medium,DejaVuSansMono}.ttf | sha256sum | cut -d' ' -f1)
+cjk=$(bash "$root/tools/fetch-cjk-fonts.sh")
+list_source="$root/tools/font-baker/bake_list.cpp"
+stamp=$(cat "$source" "$list_source" "$root/tools/cjk-ranges.py" "${BASH_SOURCE[0]}" "$kit"/third_party/fonts/{Inter-Regular,Inter-SemiBold,Montserrat-Medium,DejaVuSansMono}.ttf "$cjk"/NotoSans{SC,KR}-Regular.otf | sha256sum | cut -d' ' -f1)
 if [[ -f $out/.stamp && $(<"$out/.stamp") == "$stamp" ]]; then
     printf '%s\n' "$out"
     exit 0
@@ -38,6 +42,15 @@ Inter-SemiBold.ttf inter-semibold 48 6
 Montserrat-Medium.ttf montserrat-medium 52 7
 DejaVuSansMono.ttf dejavu-sans-mono 44 6
 FONTS
+
+# The faces for Chinese and Japanese (Noto Sans SC) and for Korean (Noto Sans KR).
+"$cxx" -std=c++20 -O2 -w -I"$kit/third_party" -I"$kit/src" "$list_source" -o "$root/build/host/bake_list"
+python3 "$root/tools/cjk-ranges.py" "$root/build/host/cjk-ranges" >&2
+"$root/build/host/bake_list" "$cjk/NotoSansSC-Regular.otf" "$out/noto-sans-east-asian.huifont" 32 4 4096 \
+    "$root/build/host/cjk-ranges/east-asian.txt" >&2
+"$root/build/host/bake_list" "$cjk/NotoSansKR-Regular.otf" "$out/noto-sans-korean.huifont" 32 4 2048 \
+    "$root/build/host/cjk-ranges/korean.txt" >&2
+cp "$cjk/LICENSE" "$out/NotoSansCJK-LICENSE.txt"
 cp "$kit/third_party/fonts/Inter-LICENSE.txt" "$kit/third_party/fonts/Montserrat-LICENSE.txt" \
     "$kit/third_party/fonts/DejaVu-LICENSE.txt" "$out/"
 printf '%s\n' "$stamp" > "$out/.stamp"

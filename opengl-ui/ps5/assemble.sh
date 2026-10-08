@@ -58,6 +58,7 @@ for header in "$tv"/include/*.h; do
     [[ ${header##*/} == iptv_app.h ]] || cp "$header" "$out/include/"
 done
 cp -a "$tv/vendor/minimp3" "$out/vendor/minimp3"
+cp -a "$tv/vendor/qrcodegen" "$out/vendor/qrcodegen"
 cp "$tv/vendor/ps5/sdk/stubs/videodec2_link_stub.c" "$out/vendor/ps5/sdk/stubs/"
 cp "$tv"/tooling/native/ps5_radio_import_stub_{audiodec,common_dialog}.cpp "$out/tooling/native/"
 cp "$tv/tools/setup-audio-dependencies.sh" "$out/tools/"
@@ -70,6 +71,7 @@ rm -f -- "$out/sce_sys/snd0.at9"
 
 # ---- the kit: renderer, components, input, sounds, the console's display ----
 while IFS= read -r relative; do
+    relative=${relative%$'\r'}
     [[ -n $relative ]] || continue
     mkdir -p "$out/src/kit/$(dirname "$relative")"
     cp "$kit/src/$relative" "$out/src/kit/$relative"

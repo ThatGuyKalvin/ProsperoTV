@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,7 +21,10 @@ inline constexpr char kDefaultXtreamCredentialsPath[] =
     "/download0/prosperotv-xtream-v1.txt";
 inline constexpr std::size_t kMaxXtreamServerBytes = 1020u;
 inline constexpr std::size_t kMaxXtreamCredentialBytes = 255u;
-inline constexpr std::size_t kMaxXtreamResponseBytes = 16u * 1024u * 1024u;
+// The list of live streams: about 600 bytes a channel, read as it arrives.
+inline constexpr std::size_t kMaxXtreamResponseBytes = 512u * 1024u * 1024u;
+// The sign-in and the categories are small answers, read whole.
+inline constexpr std::size_t kMaxXtreamReplyBytes = 4u * 1024u * 1024u;
 
 enum class XtreamStatus : std::uint8_t
 {
@@ -74,11 +78,40 @@ XtreamStatus LoadXtreamCredentials(XtreamCredentials *credentials);
 XtreamStatus ParseXtreamAuth(std::string_view json, XtreamAuth *auth);
 XtreamStatus ParseXtreamCategories(std::string_view json,
                                    std::vector<XtreamCategory> *categories);
+// Reads the answer to get_live_streams as it arrives: Feed it the bytes in
+// order, in pieces of any size, then Finish. Each stream goes into `catalog`
+// when its last byte is in, so the answer (tens of megabytes for a large
+// provider) is never held whole. Past max_channels the streams are counted in
+// the report and left out; full() says so, which is when a download can stop.
+class XtreamStreamsParser
+{
+  public:
+    XtreamStreamsParser(const XtreamCredentials &credentials,
+                        const std::vector<XtreamCategory> &categories, std::uint64_t source_id,
+                        Catalog *catalog, ParseReport *report = nullptr,
+                        std::size_t max_channels = kDefaultMaxChannels);
+    ~XtreamStreamsParser();
+    XtreamStreamsParser(const XtreamStreamsParser &) = delete;
+    XtreamStreamsParser &operator=(const XtreamStreamsParser &) = delete;
+
+    // False once the answer cannot be a list of streams this app reads.
+    bool Feed(std::string_view bytes);
+    // What became of it. Anything but ok and the catalog is empty.
+    XtreamStatus Finish();
+    bool full() const;
+
+  private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
+
+// The same, for an answer that is already whole in memory.
 XtreamStatus ParseXtreamLiveStreams(std::string_view json,
                                     const XtreamCredentials &credentials,
                                     const std::vector<XtreamCategory> &categories,
-                                    std::uint64_t source_id, CatalogState *catalog,
-                                    ParseReport *report = nullptr);
+                                    std::uint64_t source_id, Catalog *catalog,
+                                    ParseReport *report = nullptr,
+                                    std::size_t max_channels = kDefaultMaxChannels);
 
 const char *XtreamStatusDescription(XtreamStatus status);
 

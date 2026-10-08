@@ -569,6 +569,7 @@ void DescribeFailure(Status status, int http_status, int native_error, const cha
         std::snprintf(description, description_capacity, "provider returned an invalid redirect");
         break;
     case Status::cancelled:
+    case Status::stopped:
         std::snprintf(description, description_capacity, "request was cancelled");
         break;
     case Status::http_status_error:
@@ -841,6 +842,64 @@ int ConfigureRequest(int request, const char *accept, std::uint32_t receive_time
     return result;
 }
 
+// Asks for a channel list, following its redirects. With Status::ok the
+// request is open on the last address (history->Current()) and http_status is
+// the server's answer, whatever it is; otherwise nothing is left open.
+FetchResult OpenListRequest(RedirectHistory *history, const RequestHeaders *headers,
+                            const RequestControl *control, int *connection, int *request)
+{
+    *connection = -1;
+    *request = -1;
+    for (;;)
+    {
+        if (control && control->cancelled && control->cancelled(control->context))
+        {
+            return Failure(Status::cancelled);
+        }
+        int http_status = 0;
+        *connection = sceHttpCreateConnectionWithURL(g_http_template, history->Current(), 1);
+        if (*connection < 0)
+            return Failure(Status::request_failed, *connection);
+        *request = sceHttpCreateRequestWithURL(*connection, kHttpMethodGet, history->Current(), 0);
+        if (*request < 0)
+        {
+            const int error = *request;
+            CloseRequest(*connection, -1);
+            return Failure(Status::request_failed, error);
+        }
+        TrackPlaylistRequest(*request);
+        if (control && control->cancelled && control->cancelled(control->context))
+        {
+            CloseRequest(*connection, *request);
+            return Failure(Status::cancelled);
+        }
+        int result = ConfigureRequest(*request,
+                                      "application/vnd.apple.mpegurl, application/x-mpegURL, "
+                                      "audio/mpegurl, text/plain, */*",
+                                      kReceiveTimeoutUsec, headers);
+        if (result >= 0)
+            result = sceHttpSendRequest(*request, nullptr, 0);
+        if (result >= 0)
+            result = sceHttpGetStatusCode(*request, &http_status);
+        if (result < 0)
+        {
+            CloseRequest(*connection, *request);
+            return Failure(Status::request_failed, result);
+        }
+        if (!IsRedirectStatus(http_status))
+            return {Status::ok, 0, http_status, 0};
+
+        char location[kMaxUrlBytes + 1u] = {};
+        const bool followed =
+            ExtractLocation(*request, location, sizeof(location)) && history->Follow(location);
+        CloseRequest(*connection, *request);
+        *connection = -1;
+        *request = -1;
+        if (!followed)
+            return Failure(Status::redirect_error, 0, http_status);
+    }
+}
+
 } // namespace
 
 Status NetworkInit()
@@ -947,60 +1006,13 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
     int connection = -1;
     int request = -1;
     int result = 0;
-    int http_status = 0;
-    for (;;)
-    {
-        if (control && control->cancelled && control->cancelled(control->context))
-        {
-            return Failure(Status::cancelled);
-        }
-        http_status = 0;
-        connection = sceHttpCreateConnectionWithURL(g_http_template, history.Current(), 1);
-        if (connection < 0)
-            return Failure(Status::request_failed, connection);
-        request = sceHttpCreateRequestWithURL(connection, kHttpMethodGet, history.Current(), 0);
-        if (request < 0)
-        {
-            const int error = request;
-            CloseRequest(connection, -1);
-            return Failure(Status::request_failed, error);
-        }
-        TrackPlaylistRequest(request);
-        if (control && control->cancelled && control->cancelled(control->context))
-        {
-            CloseRequest(connection, request);
-            return Failure(Status::cancelled);
-        }
-        result = ConfigureRequest(request,
-                                  "application/vnd.apple.mpegurl, application/x-mpegURL, "
-                                  "audio/mpegurl, text/plain, */*",
-                                  kReceiveTimeoutUsec, headers);
-        if (result >= 0)
-            result = sceHttpSendRequest(request, nullptr, 0);
-        if (result >= 0)
-            result = sceHttpGetStatusCode(request, &http_status);
-        if (result < 0)
-        {
-            CloseRequest(connection, request);
-            return Failure(Status::request_failed, result);
-        }
-        if (!IsRedirectStatus(http_status))
-            break;
-
-        char location[kMaxUrlBytes + 1u] = {};
-        const bool followed =
-            ExtractLocation(request, location, sizeof(location)) && history.Follow(location);
-        CloseRequest(connection, request);
-        connection = -1;
-        request = -1;
-        if (!followed || !CopyText(effective_url, effective_url_capacity, history.Current(),
-                                   std::strlen(history.Current())))
-        {
-            return Failure(Status::redirect_error, 0, http_status);
-        }
-    }
-    if (!CopyText(effective_url, effective_url_capacity, history.Current(),
-                  std::strlen(history.Current())))
+    const FetchResult opened = OpenListRequest(&history, headers, control, &connection, &request);
+    const int http_status = opened.http_status;
+    const bool named = CopyText(effective_url, effective_url_capacity, history.Current(),
+                                std::strlen(history.Current()));
+    if (opened.status != Status::ok)
+        return opened;
+    if (!named)
     {
         CloseRequest(connection, request);
         return Failure(Status::redirect_error, 0, http_status);
@@ -1073,6 +1085,78 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
         }
     }
     buffer[bytes] = '\0';
+    CloseRequest(connection, request);
+    return {status, bytes, http_status, status == Status::ok ? 0 : result};
+}
+
+FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes,
+                    const RequestHeaders *headers, const RequestControl *control)
+{
+    if (!IsSupportedUrl(url))
+        return Failure(Status::unsupported_url);
+    if (sink.write == nullptr || max_bytes == 0 || max_bytes > kMaxListBytes)
+        return Failure(Status::invalid_argument);
+    RedirectHistory history;
+    if (!history.Begin(url))
+        return Failure(Status::invalid_argument);
+    if (g_http_template < 0)
+        return Failure(Status::not_initialized);
+    std::unique_ptr<char[]> piece(new (std::nothrow) char[kListPieceBytes]);
+    if (!piece)
+        return Failure(Status::invalid_argument);
+
+    int connection = -1;
+    int request = -1;
+    const FetchResult opened = OpenListRequest(&history, headers, control, &connection, &request);
+    if (opened.status != Status::ok)
+        return opened;
+    const int http_status = opened.http_status;
+    if (http_status < 200 || http_status >= 300)
+    {
+        (void)ReadErrorResponse(request, piece.get(), kMaxErrorResponseBytes + 1u);
+        CloseRequest(connection, request);
+        return Failure(Status::http_status_error, 0, http_status, 0);
+    }
+
+    std::size_t bytes = 0;
+    int result = 0;
+    Status status = Status::ok;
+    const std::uint64_t started = MonotonicUsec();
+    for (;;)
+    {
+        if (control && control->cancelled && control->cancelled(control->context))
+        {
+            status = Status::cancelled;
+            break;
+        }
+        const std::uint64_t now = MonotonicUsec();
+        if (started != 0 && now >= started && now - started >= kPlaylistDeadlineUsec)
+        {
+            status = Status::deadline_exceeded;
+            result = -1;
+            break;
+        }
+        const int read = sceHttpReadData(request, piece.get(), kListPieceBytes);
+        if (read == 0)
+            break;
+        if (read < 0 || static_cast<std::size_t>(read) > kListPieceBytes)
+        {
+            status = Status::read_failed;
+            result = read < 0 ? read : -1;
+            break;
+        }
+        if (static_cast<std::size_t>(read) > max_bytes - bytes)
+        {
+            status = Status::response_too_large;
+            break;
+        }
+        bytes += static_cast<std::size_t>(read);
+        if (!sink.write(sink.context, piece.get(), static_cast<std::size_t>(read)))
+        {
+            status = Status::stopped;
+            break;
+        }
+    }
     CloseRequest(connection, request);
     return {status, bytes, http_status, status == Status::ok ? 0 : result};
 }
@@ -1215,6 +1299,18 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
     buffer[0] = '\0';
     const std::size_t url_length = BoundedLength(url, kMaxUrlBytes);
     if (!CopyText(effective_url, effective_url_capacity, url, url_length))
+        return {Status::invalid_argument, 0, 0, 0};
+    return {Status::platform_unavailable, 0, 0, 0};
+}
+
+FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes,
+                    const RequestHeaders *, const RequestControl *control)
+{
+    if (!IsSupportedUrl(url))
+        return {Status::unsupported_url, 0, 0, 0};
+    if (control && control->cancelled && control->cancelled(control->context))
+        return {Status::cancelled, 0, 0, 0};
+    if (sink.write == nullptr || max_bytes == 0 || max_bytes > kMaxListBytes)
         return {Status::invalid_argument, 0, 0, 0};
     return {Status::platform_unavailable, 0, 0, 0};
 }

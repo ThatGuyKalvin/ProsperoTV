@@ -10,6 +10,7 @@
 #include "ui/components/tabs.hpp"
 #include "ui/glyphs.hpp"
 
+#include <optional>
 #include <string>
 
 namespace ptv
@@ -43,7 +44,8 @@ class BrowseScreen
     int hints(ui::Hint *out, int capacity) const;
 
     // The channel in focus, or null: the backdrop takes its colours.
-    const iptv::Channel *focused() const;
+    // The channel in focus, to read and let go: nothing when the list is empty.
+    std::optional<iptv::ChannelView> focused() const;
     bool showing_favorites() const
     {
         return favorites_;
@@ -74,9 +76,9 @@ class BrowseScreen
     void restart_list();
     void begin_swap(int from);
     float appear(int order) const;
-    void draw_hero_text(ui::Canvas &canvas, const iptv::Channel &channel, unsigned index,
+    void draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &channel, unsigned index,
                         bool favorite, float alpha, float dx) const;
-    void draw_hero_art(ui::Canvas &canvas, const iptv::Channel &channel, float alpha) const;
+    void draw_hero_art(ui::Canvas &canvas, const iptv::ChannelView &channel, float alpha) const;
     void draw_list_header(ui::Canvas &canvas) const;
     void draw_waiting(ui::Canvas &canvas) const;
 

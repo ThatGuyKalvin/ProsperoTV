@@ -95,12 +95,23 @@ swap("src/iptv_player.cpp",
      "    }\n"
      "    sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);\n"
      "}\n",
+     "extern \"C\" int tv_diag_enabled(void);\n"
+     "extern \"C\" void tv_diag_line(const char *line);\n"
+     "\n"
      "void Notify(const char *message)\n"
      "{\n"
      "    // Into the log, not onto the screen: the menu tells the viewer what\n"
      "    // went wrong when it comes back.\n"
      "    if (message)\n"
+     "    {\n"
      "        std::fprintf(stdout, \"[ProsperoTV][player] %s\\n\", message);\n"
+     "        if (tv_diag_enabled())\n"
+     "        {\n"
+     "            char line[256];\n"
+     "            std::snprintf(line, sizeof(line), \"player: %s\", message);\n"
+     "            tv_diag_line(line);\n"
+     "        }\n"
+     "    }\n"
      "}\n")
 
 # ---- the tuning screen (src/tv_tuning.cpp): the player's loading thread
@@ -323,7 +334,7 @@ http_names = {
     "sceHttpSendRequest": ("tv_http_send", 3),
     "sceHttpGetStatusCode": ("tv_http_status", 3),
     "sceHttpGetAllResponseHeaders": ("tv_http_headers", 2),
-    "sceHttpReadData": ("tv_http_read", 5),
+    "sceHttpReadData": ("tv_http_read", 6),
 }
 http_file = tree / "src/iptv_http.cpp"
 http_text = http_file.read_text(encoding="utf-8")
@@ -414,8 +425,12 @@ if test_title:
         param["contentVersion"] = test_version
 param_path.write_text(json.dumps(param, indent=2, sort_keys=True) + "\n", encoding="utf-8",
                       newline="\n")
-# The test title also writes down what the video decoder asks of the system.
-if test_title:
+# TV_DEBUG_TRACE=1 builds the app someone is sent to find out why their
+# streams do not play: it writes logs/debug-trace.txt (see main.cpp).
+debug_trace = os.environ.get("TV_DEBUG_TRACE", "") not in ("", "0")
+# What the decoders ask of the system is wrapped in every build; the wrappers
+# write only while the diagnostic log is on (ps5/diag/decoder_trace.c).
+if True:
     import shutil
 
     shutil.copy(Path(__file__).resolve().parent / "diag/decoder_trace.c",
@@ -438,6 +453,7 @@ if test_title:
 (tree / "src/tv_build_options.h").write_text(
     "// ProsperoTV - What this build includes (written by ps5/patch_tree.py).\n#pragma once\n\n"
     f"#define TV_DEV_SCRIPTS {1 if test_title else 0}\n"
+    f"#define TV_DEBUG_TRACE {1 if debug_trace else 0}\n"
     "// The title this build installs as: its folder and its Lapy helper carry it.\n"
     f"#define TV_TITLE_ID \"{param['titleId']}\"\n", encoding="utf-8", newline="\n")
 print("tree patched, category", category, "title", param["titleId"])

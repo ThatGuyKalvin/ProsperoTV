@@ -66,7 +66,7 @@ bool load_font(hui::gfx::Renderer &renderer, const std::string &path, hui::gfx::
                hui::ui::FontRef *ref)
 {
     std::string data;
-    if (!hui::save::read_file(path, &data) || !font->load(data))
+    if (!hui::save::read_file(path, &data, 64u << 20) || !font->load(data))
     {
         std::fprintf(stderr, "cannot load font %s\n", path.c_str());
         return false;
@@ -204,6 +204,28 @@ const Step kWalk[] = {
     move(Direction::up, 0.2f),
     move(Direction::up, 0.2f),
     press(Action::confirm, 0.4f),
+    // The end of the page: Troubleshooting and its switch, then back to the top.
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.7f, "25a-settings-diagnostic-log"),
+    // Turned on: the page says so at the bottom, and so does every other one.
+    press(Action::confirm, 0.7f, "25b-settings-diagnostic-log-on"),
+    press(Action::confirm, 0.4f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.3f),
     // ---- About ----
     press(Action::page_next, 1.1f, "32-about"),
     // ---- the states that are hard to reach on purpose ----
@@ -211,8 +233,8 @@ const Step kWalk[] = {
     change(
         []()
         {
-            const iptv::Channel &channel = g_model->channel(g_model->visible(3));
-            g_model->report_playback_failure(channel.id.c_str(), channel.name.c_str(), -5, 2,
+            const iptv::ChannelView channel = g_model->channel(g_model->visible(3));
+            g_model->report_playback_failure(channel.id.data(), channel.name.data(), -5, 2,
                                              "The stream did not answer.");
         },
         0.9f, "26-channel-failed"),
@@ -252,6 +274,8 @@ int main(int argc, char **argv)
     hui::gfx::Font semibold;
     hui::gfx::Font display;
     hui::gfx::Font mono;
+    hui::gfx::Font east_asian;
+    hui::gfx::Font korean;
     hui::ui::Fonts fonts;
     if (!renderer.init() ||
         !load_font(renderer, fonts_dir + "/inter-regular.huifont", &regular, &fonts.regular) ||
@@ -263,6 +287,8 @@ int main(int argc, char **argv)
     // names need.
     fonts.pixel = fonts.mono;
     fonts.hand = fonts.regular;
+    (void)load_font(renderer, fonts_dir + "/noto-sans-east-asian.huifont", &east_asian, &fonts.hand);
+    (void)load_font(renderer, fonts_dir + "/noto-sans-korean.huifont", &korean, &fonts.pixel);
 
     GLuint framebuffer = 0;
     GLuint color = 0;
@@ -357,10 +383,22 @@ int main(int argc, char **argv)
         if (step.capture != nullptr)
             render(step.capture);
     }
+    {
+        // The opening, at six of its moments.
+        const std::pair<float, const char *> moments[] = {
+            {0.50f, "00a-intro-set"},   {0.80f, "00b-intro-line"}, {1.08f, "00c-intro-opening"},
+            {2.00f, "00d-intro-on"},    {2.72f, "00e-intro-into"}, {2.98f, "00f-intro-through"}};
+        for (const auto &[seconds, name] : moments)
+        {
+            app.set_intro_time(seconds);
+            render(name);
+        }
+        app.set_intro_time(-1.0f);
+    }
     // The tuning screen a channel opens on: halfway through the hand-over,
     // and as the player shows it with its bar part filled.
     {
-        const std::string id = g_model->channel(g_model->visible(2)).id;
+        const std::string id(g_model->channel(g_model->visible(2)).id);
         app.draw_tuning(frame, id, 0.5f);
         render_drawn("33-tuning-handover");
         app.draw_tuning(frame, id, 1.0f, 0.62f);
@@ -368,7 +406,8 @@ int main(int argc, char **argv)
     }
     // The update: offered, downloading, unpacking, ready to close, and failed.
     {
-        const auto run = [&](int count, std::uint32_t press = 0)
+        const auto run = [&](int count, std::uint32_t press = 0,
+                             hui::Direction nav = hui::Direction::none)
         {
             for (int i = 0; i < count; ++i)
             {
@@ -378,6 +417,7 @@ int main(int argc, char **argv)
                 {
                     input.pressed = press;
                     input.held = press;
+                    input.nav = nav;
                 }
                 feedback.clear();
                 app.update(input, kDt, feedback);
@@ -401,11 +441,43 @@ int main(int argc, char **argv)
         offer.installed = "01.000.015";
         offer.available = "01.000.020";
         offer.size = 41u * 1024u * 1024u;
+        offer.notes = "Highlights\n"
+        "- The alphabet beside every list: Right from the last column, then up and down.\n"
+        "- Hold L2 or R2 and the pages keep turning.\n"
+        "- A tuning screen from Cross to the channel's first picture.\n"
+        "\n"
+        "Warning: this version moves your sources and favorites to /data/prosperotv the first time it starts.\n"
+        "\n"
+        "Fixes\n"
+        "- Channels play again after the menu has been drawn with OpenGL.\n"
+        "- Greek channel names read as written.\n"
+        "- The launch picture stays until the menu is there.\n"
+        "- The player's messages no longer appear as notifications.\n"
+        "\n"
+        "Note: the update keeps everything you saved.\n"
+        "\n"
+        "Thanks\n"
+        "To everyone who tested the new interface on their console and wrote back with what they saw, "
+        "and to the maintainers of the public channel list.\n"
+        "- More languages for channel names are next.\n"
+        "- So is a way to sort a list by country.\n"
+        "- And the guide, where a source provides one.";
+        offer.notes_truncated = true;
         host::offer_update(offer);
         run(8);
         render("35-update-arriving");
         run(70);
         render("36-update-offer");
+        // What's new: the release notes, then further down, then back.
+        run(20, 0, hui::Direction::right);
+        run(60, cross);
+        render("36a-update-notes");
+        run(10, 0, hui::Direction::down);
+        run(10, 0, hui::Direction::down);
+        run(50, 0, hui::Direction::down);
+        render("36b-update-notes-scrolled");
+        run(40, hui::action_bit(hui::Action::back));
+        run(30, 0, hui::Direction::left);
         host::set_update_progress(at(UpdatePhase::starting, 0, 0));
         run(40, cross);
         render("37-update-starting");

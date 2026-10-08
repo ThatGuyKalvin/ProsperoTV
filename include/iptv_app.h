@@ -107,7 +107,7 @@ private:
     unsigned page_offset_ = 0;
     unsigned selected_group_ = 0;
     unsigned last_live_group_ = 0;
-    std::array<unsigned, iptv::kDefaultMaxChannels> filtered_indices_{};
+    std::vector<unsigned> filtered_indices_;
     unsigned filtered_count_ = 0;
     char search_query_[IPTV_IME_MAX_TEXT_BYTES]{};
     char filter_country_[48]{};
@@ -142,12 +142,12 @@ private:
     iptv::http::Status pending_network_status_ = iptv::http::Status::not_initialized;
     iptv::http::FetchResult pending_fetch_{};
     iptv::ParseReport pending_report_{};
-    iptv::CatalogState pending_catalog_{};
+    iptv::Catalog pending_catalog_{};
     iptv::XtreamStatus pending_xtream_status_ = iptv::XtreamStatus::ok;
     std::string pending_xtream_stage_;
     std::string pending_xtream_message_;
     bool pending_cache_saved_ = false;
-    iptv::CatalogState catalog_{};
+    iptv::Catalog catalog_{};
     iptv::UserState user_state_{};
     bool catalog_loaded_ = false;
     bool error_retries_playback_ = false;
@@ -183,8 +183,9 @@ private:
     void ResetSearch();
     void CycleSearchFilter(unsigned filter, int direction = 1);
     void RefreshSearchUi();
-    const iptv::Channel* FindChannelById(const std::string& channel_id) const;
-    void QueuePlay(const iptv::Channel& channel);
+    // Where the channel is in the catalog, or iptv::Catalog::npos.
+    std::size_t FindChannelById(const std::string& channel_id) const;
+    void QueuePlay(const iptv::ChannelView& channel);
     void RefreshGroupUi();
     unsigned CatalogIndexAt(unsigned filtered_index) const;
     void RefreshCatalogUi();

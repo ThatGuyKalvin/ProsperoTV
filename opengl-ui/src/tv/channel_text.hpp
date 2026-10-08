@@ -32,31 +32,31 @@ bool field_has_value(std::string_view field, std::string_view value);
 std::string first_value(std::string_view field);
 
 // The size a channel's name or address announces, or kQualityAny.
-unsigned quality_of(const iptv::Channel &channel);
+unsigned quality_of(const iptv::ChannelView &channel);
 // "Any quality", "SD", "720p", "1080p", "4K": the filter's own words.
 const char *quality_filter_name(unsigned quality);
 // The exact size the record names ("1080p", "576p"), or "" when it names none.
-std::string resolution_label(const iptv::Channel &channel);
+std::string resolution_label(const iptv::ChannelView &channel);
 // The codec the record names ("HEVC", "H.264", "VP9"), or "".
-const char *codec_label(const iptv::Channel &channel);
+const char *codec_label(const iptv::ChannelView &channel);
 
 // A channel's name as it reads on screen: the playlist's own notes are taken
 // out of it ("Name (1080p) [Not 24/7]" is "Name") and returned in `notes`
 // ("Not 24/7") when the caller wants them.
-std::string display_name(const iptv::Channel &channel, std::vector<std::string> *notes = nullptr);
+std::string display_name(const iptv::ChannelView &channel, std::vector<std::string> *notes = nullptr);
 // Two capitals for a channel that has no picture.
-std::string monogram(const iptv::Channel &channel);
+std::string monogram(const iptv::ChannelView &channel);
 // "Movies", or "Uncategorized".
-std::string category_of(const iptv::Channel &channel);
+std::string category_of(const iptv::ChannelView &channel);
 // "World", or the country, then the language when the record has one.
-std::string place_line(const iptv::Channel &channel);
+std::string place_line(const iptv::ChannelView &channel);
 
 // The lists are in the order of the alphabet, under 27 letters: '#' (names
 // that start with a digit or in another script), then A to Z.
 inline constexpr int kLetterCount = 27;
 // What a channel is sorted by: its letter, then its display name in capitals
 // with accents put aside and punctuation passed over.
-std::string sort_key(const iptv::Channel &channel);
+std::string sort_key(const iptv::ChannelView &channel);
 // 0 for '#', 1 to 26 for A to Z.
 int letter_of_key(std::string_view key);
 char letter_char(int letter);

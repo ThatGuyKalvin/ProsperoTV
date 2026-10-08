@@ -8,12 +8,14 @@
 #include "tv/shared.hpp"
 
 #include <string>
+#include <vector>
 
 namespace ptv
 {
 
 // A modal over the whole menu. It opens with the offer ("Update now" or
-// "Later"); accepted, a ring fills while the release downloads and unpacks,
+// "Later", and "What's new" when the release has notes: they open in a taller,
+// scrolling view of their own); accepted, a ring fills while the release downloads and unpacks,
 // and when everything is staged the app closes itself so the new files can
 // take the old ones' place. Nothing of the installed app changes before that
 // last step, so "Cancel" and a failure leave it as it was.
@@ -46,6 +48,7 @@ class UpdateSheet
     {
         closed,
         offer,
+        notes,      // the release notes, scrolling
         working,    // starting, downloading, unpacking
         cancelling, // told to stop, waiting for it
         closing,    // staged: the app is about to close
@@ -59,6 +62,12 @@ class UpdateSheet
     {
         return focus_;
     }
+    // How far the notes are scrolled, and how far they can be.
+    float notes_scroll() const
+    {
+        return notes_target_;
+    }
+    float notes_max_scroll() const;
 
   private:
     int button_count() const;
@@ -66,6 +75,16 @@ class UpdateSheet
     void begin(ui::Feedback &feedback);
     void fail(std::string reason, ui::Feedback &feedback);
     void close();
+    bool has_notes() const
+    {
+        return !offer_.notes.empty();
+    }
+    Rect panel() const;
+    Rect notes_window() const;
+    void layout_notes();
+    void open_notes(ui::Feedback &feedback);
+    void scroll_notes(float by, bool repeat, ui::Feedback &feedback);
+    void draw_notes(ui::Canvas &canvas, const Rect &panel) const;
     void draw_orb(ui::Canvas &canvas, float cx, float cy) const;
     void draw_steps(ui::Canvas &canvas, float x, float y, float width) const;
 
@@ -87,6 +106,32 @@ class UpdateSheet
     float age_ = 0.0f;       // seconds in this stage
     float closing_ = 0.0f;   // seconds since everything was staged
     float clock_ = 0.0f;     // free-running, for idle motion
+
+    // The notes, laid out once: lines with their place in the text, and the
+    // boxes behind warnings and notes.
+    struct NoteLine
+    {
+        std::string text;
+        float y = 0.0f;
+        float size = 0.0f;
+        float indent = 0.0f;
+        bool heading = false;
+        bool bullet = false;
+        bool muted = false;
+    };
+    struct NoteBox
+    {
+        float top = 0.0f;
+        float bottom = 0.0f;
+        bool warning = false;
+    };
+    std::vector<NoteLine> note_lines_;
+    std::vector<NoteBox> note_boxes_;
+    float notes_height_ = 0.0f;
+    float notes_target_ = 0.0f;
+    tween::Spring notes_scroll_;
+    tween::Spring notes_bounce_; // the text gives a little at either end
+    tween::Spring panel_height_;
 };
 
 } // namespace ptv

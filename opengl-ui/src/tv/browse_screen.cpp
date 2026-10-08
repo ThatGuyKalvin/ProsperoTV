@@ -156,13 +156,13 @@ unsigned BrowseScreen::focused_index() const
     return shared_.model.visible(static_cast<unsigned>(grid_.focus()));
 }
 
-const iptv::Channel *BrowseScreen::focused() const
+std::optional<iptv::ChannelView> BrowseScreen::focused() const
 {
     const Model &model = shared_.model;
     if (!model.has_catalog() || grid_.count() == 0 ||
         static_cast<unsigned>(grid_.focus()) >= model.visible_count())
-        return nullptr;
-    return &model.channel(focused_index());
+        return std::nullopt;
+    return model.channel(focused_index());
 }
 
 int BrowseScreen::current_letter() const
@@ -222,7 +222,9 @@ void BrowseScreen::begin_swap(int from)
     if (has_previous_)
     {
         previous_index_ = model.visible(static_cast<unsigned>(from));
-        previous_ = model.channel(previous_index_);
+        // Kept across frames, so with texts of its own: a download may
+        // replace the catalog while the hero changes hands.
+        previous_ = model.channel(previous_index_).Copy();
         previous_favorite_ = model.is_favorite(previous_);
     }
     travel_ = grid_.focus() >= from ? 1.0f : -1.0f;
@@ -371,7 +373,7 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
 
     if (input.is_pressed(Action::west))
     {
-        const iptv::Channel &channel = model.channel(focused_index());
+        const iptv::ChannelView &channel = model.channel(focused_index());
         const std::string name = shown_name(shared_.fonts, channel);
         keep_place_ = favorites_;
         switch (model.toggle_favorite(focused_index()))
@@ -487,7 +489,7 @@ void BrowseScreen::update(float dt)
         grid_.set_count(static_cast<int>(model.visible_count()));
     }
     keep_place_ = false;
-    if (const iptv::Channel *channel = focused())
+    if (const std::optional<iptv::ChannelView> channel = focused())
     {
         focused_id_ = channel->id;
         model.view.focused_channel = focused_id_;
@@ -575,7 +577,7 @@ void BrowseScreen::update(float dt)
     }
 }
 
-void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &channel, unsigned index,
+void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &channel, unsigned index,
                                   bool favorite, float alpha, float dx) const
 {
     if (alpha <= 0.01f)
@@ -595,8 +597,10 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &chann
     const std::string kicker =
         (favorites_ ? std::string("FAVORITE")
                     : "CHANNEL " + group_digits(shared_.model.number_of(index))) +
-        "  \xC2\xB7  " + ui::upper(readable(fonts.semibold, category_of(channel)));
-    ui::text(list, fonts.semibold, fonts.semibold.font->fit(kicker, 18.0f, kHeroText * 0.8f), x,
+        "  \xC2\xB7  " +
+        ui::upper(readable(face_for(fonts, fonts.semibold, category_of(channel)), category_of(channel)));
+    const ui::FontRef &kicker_face = face_for(fonts, fonts.semibold, kicker);
+    ui::text(list, kicker_face, kicker_face.font->fit(kicker, 18.0f, kHeroText * 0.8f), x,
              156.0f + rise(0), 18.0f, tone::accent, gfx::Align::left, 4.0f);
     list.pop_opacity();
 
@@ -612,10 +616,10 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &chann
     list.pop_opacity();
 
     list.push_opacity(appear(2));
-    ui::text(
-        list, fonts.regular,
-        fonts.regular.font->fit(readable(fonts.regular, place_line(channel)), 26.0f, kHeroText), x,
-        282.0f + rise(2), 26.0f, theme.text_muted);
+    const std::string place = place_line(channel);
+    const ui::FontRef &place_face = face_for(fonts, fonts.regular, place);
+    ui::text(list, place_face, place_face.font->fit(readable(place_face, place), 26.0f, kHeroText),
+             x, 282.0f + rise(2), 26.0f, theme.text_muted);
     list.pop_opacity();
 
     // ---- what the record says about the picture, and how the last try went ----
@@ -657,7 +661,7 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::Channel &chann
     list.pop_opacity();
 }
 
-void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::Channel &channel,
+void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::ChannelView &channel,
                                  float alpha) const
 {
     if (alpha <= 0.01f)
@@ -665,9 +669,10 @@ void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::Channel &channe
     gfx::DrawList &list = canvas.list;
     const Color accent = art_colors(channel.id).accent;
     list.push_opacity(alpha * appear(1));
-    list.shadow({kHeroArt.x, kHeroArt.y + 26.0f, kHeroArt.w, kHeroArt.h}, kHeroRadius, 56.0f,
+    const Rect set = tv_body(kHeroArt);
+    list.shadow({set.x, set.y + 26.0f, set.w, set.h}, kHeroRadius, 56.0f,
                 Color::rgb(0x000000, 0.5f));
-    list.glow(kHeroArt.inset(-4.0f), kHeroRadius + 4.0f, 80.0f, accent.with_alpha(0.24f));
+    list.glow(set.inset(-4.0f), kHeroRadius + 4.0f, 80.0f, accent.with_alpha(0.24f));
     draw_channel_art(list, canvas.fonts, kHeroArt, kHeroRadius, channel);
     list.pop_opacity();
 }
@@ -751,8 +756,13 @@ void BrowseScreen::draw_waiting(ui::Canvas &canvas) const
         const ui::Theme &theme = shared_.theme;
         ui::text(list, canvas.fonts.semibold, "Downloading the channel list", kMargin, 352.0f,
                  28.0f, theme.text);
+        const unsigned so_far = shared_.model.refresh_progress() / 1000u * 1000u;
         ui::text(list, canvas.fonts.regular,
-                 "This happens once. Later launches open from the copy saved on this console.",
+                 so_far != 0
+                     ? group_digits(so_far) + " channels so far. Later launches open from the " +
+                           "copy saved on this console."
+                     : std::string("This happens once. Later launches open from the copy saved "
+                                   "on this console."),
                  kMargin, 392.0f, 23.0f, theme.text_muted);
     }
     const float w = (kGridWidth - (kColumns - 1) * kGapX) / kColumns;
@@ -776,8 +786,8 @@ void BrowseScreen::draw(ui::Canvas &canvas) const
         return;
     }
 
-    const iptv::Channel *channel = focused();
-    if (channel != nullptr)
+    const std::optional<iptv::ChannelView> channel = focused();
+    if (channel)
     {
         const unsigned index = focused_index();
         const bool favorite = model.is_favorite(*channel);
@@ -888,7 +898,7 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
         add({ui::Button::dpad, "Jump to a letter"});
         add({ui::Button::cross, "Channels"});
     }
-    else if (focused() != nullptr)
+    else if (focused())
     {
         add({ui::Button::cross, "Watch"});
         add({ui::Button::square, model.is_favorite(*focused()) ? "Unfavorite" : "Favorite"});

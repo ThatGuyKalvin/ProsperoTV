@@ -35,6 +35,11 @@ void network_shutdown();
 void network_cancel();
 iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacity,
                               std::size_t max_bytes, const iptv::http::RequestControl *control);
+// The same download handed to `sink` piece by piece as it arrives and kept
+// nowhere: how a channel list of any size is read.
+iptv::http::FetchResult fetch_list(const char *url, const iptv::http::ListSink &sink,
+                                   std::size_t max_bytes,
+                                   const iptv::http::RequestControl *control);
 
 // ---- updates ----
 // Once per launch the machine asks homebrew.page whether a newer ProsperoTV is
@@ -49,6 +54,10 @@ struct UpdateOffer
     std::string installed;    // this build's content version
     std::string available;    // the release's content version
     std::uint64_t size = 0;   // the download in bytes; 0 when the catalog does not say
+    // What the developer wrote on the release, as the catalog gives it: plain
+    // text, lines split by \n, list items starting "- ". Empty when it has none.
+    std::string notes;
+    bool notes_truncated = false; // the catalog cut them; the rest is on the app's page
 };
 enum class UpdatePhase : std::uint8_t
 {

@@ -9,6 +9,7 @@
 #include <array>
 #include <cerrno>
 #include <cstdio>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -134,7 +135,19 @@ bool verify_data(pid_t pid, int &open_error) noexcept
         read(file.get(), actual.data(), actual.size()) == static_cast<ssize_t>(actual.size()) &&
         actual == token;
     (void)unlink(path.data());
-    return passed;
+    if (!passed)
+        return false;
+    // ShadowMountPlus 1.7 mounts /data into a sandboxed app: files open and write, but
+    // listing a folder or lstat is refused (EPERM). That is not elevation, so the
+    // request goes on to Lapy, and waits for /data to list once Lapy is done.
+    DIR *folder = opendir("/data");
+    if (!folder)
+    {
+        open_error = errno != 0 ? errno : EPERM;
+        return false;
+    }
+    (void)closedir(folder);
+    return true;
 }
 
 bool wait_for_data(pid_t pid, unsigned polls, int &open_error, bool &proof_failed) noexcept
@@ -277,15 +290,15 @@ elevation::Status run_helper(const char *path, const elevation::wire::Message &r
     constexpr int timeout_us = elevation::wire::io_timeout_us;
     bool configured = true;
     for (const int option : {0x1105, 0x1106, 0x1109})
-        configured &= sceNetSetsockopt(socket, socket_level, option, &timeout_us,
-                                      sizeof(timeout_us)) >= 0;
+        configured &=
+            sceNetSetsockopt(socket, socket_level, option, &timeout_us, sizeof(timeout_us)) >= 0;
     constexpr std::uint16_t port = 9021;
     const NetSockaddrIn endpoint{sizeof(NetSockaddrIn),
-                                2,
-                                static_cast<std::uint16_t>((port << 8) | (port >> 8)),
-                                0x0100007f,
-                                0,
-                                {0}};
+                                 2,
+                                 static_cast<std::uint16_t>((port << 8) | (port >> 8)),
+                                 0x0100007f,
+                                 0,
+                                 {0}};
     if (configured && sceNetConnect(socket, &endpoint, sizeof(endpoint)) >= 0)
     {
         std::array<std::uint8_t, 4096> buffer{};
@@ -342,9 +355,9 @@ elevation::Status elevation::request(Capability capability, const char *helper_p
         return helper;
 
     bool proof_failed = false;
-    return wait_for_data(pid, cancellation_grace_polls, open_error, proof_failed)
-               ? Status::ok
-               : proof_failed ? Status::apply_failed : Status::timeout;
+    return wait_for_data(pid, cancellation_grace_polls, open_error, proof_failed) ? Status::ok
+           : proof_failed ? Status::apply_failed
+                          : Status::timeout;
 }
 
 const char *elevation::path() noexcept

@@ -48,3 +48,9 @@ newer content version, the release's name, its ZIP on GitHub, the ZIP's
 SHA-256, its size), which replaces the catalog's answer so an update can be
 tried before the catalog lists one, and `dev/update-as.txt`
 (`PPSA99003 01.000.000`) to ask the catalog as another title and version.
+
+As in ProsperoEden, `self_update_check` also copies the catalog entry's
+`release_notes` and `release_notes_truncated` into the offer (`notes`,
+`notes_truncated`), for the update dialog's What's new view; the lines marked
+"ProsperoEden:" in `self_update.c` and `self_update.h` are that change. In
+`dev/update-offer.txt`, any lines after the fifth are the release notes.

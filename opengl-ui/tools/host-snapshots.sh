@@ -23,7 +23,7 @@ if [[ ${HOST_SANITIZE:-0} == 1 ]]; then
 fi
 mkdir -p "$build/obj"
 
-includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include"
+includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O2 -Wall -Wextra $sanitize \$flags -DGL_GLEXT_PROTOTYPES=1 $includes -MD -MF \$out.d -c \$in -o \$out"
