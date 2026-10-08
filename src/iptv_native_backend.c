@@ -250,6 +250,7 @@ _Static_assert(VIDEO_DRAIN_FLUSH_LIMIT >= PENDING_PTS_CAPACITY,
 typedef struct audio_sink
 {
     int32_t handle;
+    int64_t delay_frames; /* output frames added (or, below zero, skipped) for the delay */
     int applied_volume;
     uint32_t input_rate;
     uint32_t channels;
@@ -842,7 +843,43 @@ static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint
     return result < 0 ? result : 0;
 }
 
+static _Atomic int64_t audio_delay_us;
+
+void iptv_native_backend_set_audio_delay_us(int64_t delay_us)
+{
+    atomic_store_explicit(&audio_delay_us, delay_us, memory_order_relaxed);
+}
+
+int64_t iptv_native_backend_audio_delay_us(void)
+{
+    return atomic_load_explicit(&audio_delay_us, memory_order_relaxed);
+}
+
+static int32_t audio_output_raw(backend_state_t *state, int16_t left, int16_t right);
+
+/* Every output frame passes here. Audio starts with the picture; to play it later, silence
+ * goes out first, and to play it earlier, that much sound is skipped. */
 static int32_t audio_output_frame(backend_state_t *state, int16_t left, int16_t right)
+{
+    audio_sink_t *sink = &state->audio_sink;
+    const int64_t wanted = atomic_load_explicit(&audio_delay_us, memory_order_relaxed) *
+                           (int64_t)AUDIO_OUT_RATE / INT64_C(1000000);
+    while (sink->delay_frames < wanted)
+    {
+        const int32_t result = audio_output_raw(state, 0, 0);
+        if (result < 0)
+            return result;
+        ++sink->delay_frames;
+    }
+    if (sink->delay_frames > wanted)
+    {
+        --sink->delay_frames;
+        return 0;
+    }
+    return audio_output_raw(state, left, right);
+}
+
+static int32_t audio_output_raw(backend_state_t *state, int16_t left, int16_t right)
 {
     audio_sink_t *sink = &state->audio_sink;
     uint64_t started;
@@ -1596,6 +1633,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         (uint32_t)state->config.codec, state->config.visible_width,
         state->config.visible_height,  state->frame_rate_x100,
         state->bitrate_kbps,           rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
+        (int64_t)presentation_pts_us,
     };
     result = iptv_native_agc_present_yuv_deferred(
         output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
@@ -1840,8 +1878,13 @@ static int32_t repaint_paused(backend_state_t *state)
     state->paused_shown = 1;
     state->paused_osd_sequence = sequence;
     const iptv_native_video_overlay_t overlay = {
-        (uint32_t)state->config.codec, state->config.visible_width, state->config.visible_height,
-        state->frame_rate_x100,        state->bitrate_kbps,         0,
+        (uint32_t)state->config.codec,
+        state->config.visible_width,
+        state->config.visible_height,
+        state->frame_rate_x100,
+        state->bitrate_kbps,
+        0,
+        (int64_t)atomic_load_explicit(&state->presented_pts_us, memory_order_acquire),
     };
     result = iptv_native_agc_present_yuv_deferred(
         state->shown_buffer, state->shown_bytes, state->shown_pitch, state->shown_height,
@@ -2320,6 +2363,7 @@ static void *audio_worker_entry(void *argument)
             state->audio_sink.have_previous = 0;
             state->audio_sink.input_index = 0;
             state->audio_sink.next_output_position = 0;
+            state->audio_sink.delay_frames = 0;
             state->audio_generation = generation;
         }
         const int32_t result = decode_audio_frame(state, item->data, item->bytes, item->pts_us);

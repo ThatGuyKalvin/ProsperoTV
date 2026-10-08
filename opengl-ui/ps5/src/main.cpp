@@ -18,6 +18,7 @@
 #include "gfx/renderer.hpp"
 #include "iptv_ime.h"
 #include "iptv_native_backend.h"
+#include "iptv_osd.h"
 #include "iptv_player.h"
 #include "iptv_remote.h"
 #include "iptv_native_backend.h"
@@ -28,6 +29,7 @@
 #include "platform/ps5/system.hpp"
 #include "tv/app.hpp"
 #include "tv/diag.hpp"
+#include "tv/player_menu.hpp"
 #include "tv/remote_input.hpp"
 #include "tv_build_options.h"
 #include "tv_dev.hpp"
@@ -190,6 +192,51 @@ bool load_font(gfx::Renderer &renderer, const char *name, gfx::Font *font, ui::F
     ref->font = font;
     ref->texture = renderer.batch().create_font_texture(*font);
     return true;
+}
+
+// The player's settings menu is the interface's own, drawn by the CPU while the video owns the
+// screen (tv/player_menu.hpp). Its fonts stay loaded for the life of the process, without
+// OpenGL: the font handles name them for the CPU's drawing.
+struct PlayerMenuPainter
+{
+    gfx::Font regular;
+    gfx::Font semibold;
+    gfx::Font display;
+    gfx::Font mono;
+    ui::Fonts fonts;
+    std::unique_ptr<ptv::PlayerMenu> menu;
+
+    bool load(const char *name, gfx::Font *font, ui::FontRef *ref, unsigned slot)
+    {
+        std::string data;
+        const std::string path = tv::storage::app_file(std::string("assets/fonts/") + name);
+        if (!save::read_file(path, &data, 64u << 20) || !font->load(data))
+        {
+            say("[TV] player menu font %s failed: %s", name, font->error().c_str());
+            return false;
+        }
+        ref->font = font;
+        ref->texture = gfx::kFontHandleBase | slot;
+        return true;
+    }
+
+    static int paint(void *context, const iptv_osd_state_t *state, iptv_osd_image_t *image)
+    {
+        auto *painter = static_cast<PlayerMenuPainter *>(context);
+        return state && painter->menu->paint(*state, image) ? 0 : -1;
+    }
+};
+
+void install_player_menu()
+{
+    static PlayerMenuPainter painter;
+    if (!painter.load("inter-regular.huifont", &painter.regular, &painter.fonts.regular, 1u) ||
+        !painter.load("inter-semibold.huifont", &painter.semibold, &painter.fonts.semibold, 2u) ||
+        !painter.load("montserrat-medium.huifont", &painter.display, &painter.fonts.display, 3u) ||
+        !painter.load("dejavu-sans-mono.huifont", &painter.mono, &painter.fonts.mono, 4u))
+        return; // the player draws its own menu
+    painter.menu = std::make_unique<ptv::PlayerMenu>(painter.fonts);
+    iptv_osd_set_menu_painter(&PlayerMenuPainter::paint, &painter);
 }
 
 // The sharpest mode the settings allow, then 1080p.
@@ -977,6 +1024,7 @@ int main()
     iptv_remote_set_pairing_store((tv::storage::config_dir() + "/phone-pairing-v1.txt").c_str());
     iptv_remote_set_icon(tv::storage::app_file("sce_sys/icon0.png").c_str());
     iptv_remote_start(8888);
+    install_player_menu();
     // Said after it: the log moved with the app's data.
     say("[TV] modules videodec2=0x%08x compute=0x%08x h264=0x%08x hevc=0x%08x vp9=0x%08x "
              "audiodec=0x%08x dialogs=0x%08x keyboard=0x%08x",

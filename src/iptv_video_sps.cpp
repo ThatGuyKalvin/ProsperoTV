@@ -242,9 +242,36 @@ int ParseH264Sps(const uint8_t *nal, size_t bytes, SpsInfo *sps, const char **er
         return Fail(error, IPTV_STREAM_UNSUPPORTED_FORMAT,
                     "H.264 dimensions exceed the stream contract");
 
-    return Accept(sps, profile, level, static_cast<uint32_t>(coded_width),
-                  static_cast<uint32_t>(coded_height), static_cast<uint32_t>(coded_width - crop_x),
-                  static_cast<uint32_t>(coded_height - crop_y), 8, ChromaApi(chroma));
+    const int accepted =
+        Accept(sps, profile, level, static_cast<uint32_t>(coded_width),
+               static_cast<uint32_t>(coded_height), static_cast<uint32_t>(coded_width - crop_x),
+               static_cast<uint32_t>(coded_height - crop_y), 8, ChromaApi(chroma));
+    // The pixel shape, when the VUI gives one; anything unreadable leaves pixels square.
+    static const uint8_t kSarTable[17][2] = {
+        {0, 0},   {1, 1},   {12, 11}, {10, 11}, {16, 11},  {40, 33}, {24, 11}, {20, 11}, {32, 11},
+        {80, 33}, {18, 11}, {15, 11}, {64, 33}, {160, 99}, {4, 3},   {3, 2},   {2, 1}};
+    uint32_t vui = 0, present = 0, idc = 0;
+    if (accepted == IPTV_STREAM_OK && ReadBits(&bits, 1, &vui) && vui &&
+        ReadBits(&bits, 1, &present) && present && ReadBits(&bits, 8, &idc))
+    {
+        uint32_t num = 0, den = 0;
+        if (idc == 255u)
+        {
+            if (!ReadBits(&bits, 16, &num) || !ReadBits(&bits, 16, &den))
+                num = den = 0;
+        }
+        else if (idc < 17u)
+        {
+            num = kSarTable[idc][0];
+            den = kSarTable[idc][1];
+        }
+        if (num && den && num != den)
+        {
+            sps->sar_num = num;
+            sps->sar_den = den;
+        }
+    }
+    return accepted;
 }
 
 int ParseHevcSps(const uint8_t *nal, size_t bytes, SpsInfo *sps, const char **error)

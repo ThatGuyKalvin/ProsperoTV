@@ -206,7 +206,79 @@ TEST(IptvOsdTest, FormatsTimesAndPublishesStates)
     EXPECT_EQ(copy.kind, static_cast<std::uint32_t>(IPTV_OSD_HIDDEN));
 }
 
-TEST(IptvOsdTest, DrawsTheControlsInsideTheVisiblePart)
+void FillMenu(iptv_osd_state_t *state)
+{
+    const char *labels[3] = {"Aspect ratio", "Zoom", "Audio delay"};
+    const char *values[3] = {"Auto", "Fill screen", "+100 ms"};
+    const std::uint32_t kinds[3] = {IPTV_OSD_ROW_PICKER, IPTV_OSD_ROW_PICKER, IPTV_OSD_ROW_STEPPER};
+    for (int row = 0; row < 3; ++row)
+    {
+        state->menu[row].kind = kinds[row];
+        std::snprintf(state->menu[row].label, sizeof(state->menu[row].label), "%s", labels[row]);
+        std::snprintf(state->menu[row].value, sizeof(state->menu[row].value), "%s", values[row]);
+    }
+}
+
+// A painter that fills a rectangle at the image's right with opaque white.
+int PaintWhite(void *context, const iptv_osd_state_t *state, iptv_osd_image_t *image)
+{
+    int *calls = static_cast<int *>(context);
+    ++*calls;
+    if (!state->menu_rows)
+        return -1;
+    image->x = 400u;
+    image->y = 200u;
+    image->width = 300u;
+    image->height = 400u;
+    for (std::uint32_t y = image->y; y < image->y + image->height; ++y)
+        std::memset(image->rgba +
+                        (static_cast<std::size_t>(y) * IPTV_OSD_MENU_IMAGE_WIDTH + image->x) * 4u,
+                    255, image->width * 4u);
+    return 0;
+}
+
+int PaintNothing(void *, const iptv_osd_state_t *, iptv_osd_image_t *)
+{
+    return -1;
+}
+
+TEST(IptvOsdTest, DrawsAPaintedMenuOverTheOverlay)
+{
+    int calls = 0;
+    iptv_osd_set_menu_painter(PaintWhite, &calls);
+    iptv_osd_state_t state = MediaState();
+    state.menu_rows = 3u;
+    FillMenu(&state);
+    iptv_osd_publish(&state);
+    EXPECT_EQ(calls, 1);
+    // The same menu again is not painted again.
+    iptv_osd_publish(&state);
+    EXPECT_EQ(calls, 1);
+
+    Frame frame(1920, 1080, 1);
+    const iptv_osd_surface_t surface = frame.Surface();
+    std::uint32_t first = 0;
+    std::uint32_t rows = 0;
+    ASSERT_EQ(iptv_osd_draw(&surface, &state, &first, &rows), 0);
+    EXPECT_LE(first, 200u);
+    // The image covers the right of the overlay: its column 400 is overlay column 1520.
+    EXPECT_EQ(frame.Cover(1520 + 10, 300), 940u);
+    EXPECT_EQ(frame.Cover(1520 - 10, 300), 64u);
+    EXPECT_EQ(iptv_osd_reserved_columns(&surface, &state), 440u);
+
+    // A painter that cannot paint leaves the menu to the built-in drawing.
+    iptv_osd_set_menu_painter(PaintNothing, nullptr);
+    state.menu_selected = 1u;
+    iptv_osd_publish(&state);
+    Frame plain(1920, 1080, 1);
+    const iptv_osd_surface_t plain_surface = plain.Surface();
+    ASSERT_EQ(iptv_osd_draw(&plain_surface, &state, &first, &rows), 0);
+    EXPECT_GT(iptv_osd_reserved_columns(&plain_surface, &state), 600u);
+    iptv_osd_set_menu_painter(nullptr, nullptr);
+    iptv_osd_hide();
+}
+
+TEST(IptvOsdTest, DrawsTheSettingsMenuInsideTheVisiblePart)
 {
     // Drawn in an area: columns 240..1680 and rows 134..944.
     Frame frame(1920, 1080, 1);
@@ -216,11 +288,17 @@ TEST(IptvOsdTest, DrawsTheControlsInsideTheVisiblePart)
     surface.width = 1440u;
     surface.height = 810u;
     iptv_osd_state_t state = MediaState();
+    state.buttons |= IPTV_OSD_BUTTON_MENU;
+    state.menu_rows = 3u;
+    state.menu_selected = 1u;
+    FillMenu(&state);
     std::uint32_t first = 0;
     std::uint32_t rows = 0;
     ASSERT_EQ(iptv_osd_draw(&surface, &state, &first, &rows), 0);
     EXPECT_GE(first, 134u);
     EXPECT_EQ(first + rows, 944u);
+    // The menu reaches higher than the bar alone does.
+    EXPECT_LT(first, 944u - 400u);
     // Nothing outside the area changes.
     for (std::uint32_t y = 0; y < 1080u; y += 7u)
     {
@@ -232,8 +310,11 @@ TEST(IptvOsdTest, DrawsTheControlsInsideTheVisiblePart)
         ASSERT_EQ(frame.Cover(x, 100), 64u) << x;
         ASSERT_EQ(frame.Cover(x, 1000), 64u) << x;
     }
-    // The bar covers the bottom of the area.
-    EXPECT_GT(frame.Cover(960, 944u - 40u), 300u);
+    // The panel covers the picture at its right.
+    EXPECT_GT(frame.Cover(1500, first + 40u), 700u);
+    EXPECT_GT(iptv_osd_reserved_rows(&surface, &state), 200u);
+    state.kind = IPTV_OSD_HIDDEN;
+    EXPECT_EQ(iptv_osd_reserved_rows(&surface, &state), 0u);
 }
 
 } // namespace

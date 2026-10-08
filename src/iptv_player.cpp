@@ -95,6 +95,8 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 #include "iptv_native_agc_present.h"
 #include "iptv_native_backend.h"
 #include "iptv_osd.h"
+#include "iptv_picture.h"
+#include "iptv_player_menu.h"
 #include "iptv_stream.h"
 #include "iptv_webm.h"
 
@@ -215,6 +217,9 @@ struct PlaybackInfo
     long long now_end_unix = 0;
 };
 PlaybackInfo gPlaybackInfo{};
+// The viewer's subtitle choice, carried to the next film or episode: "off", a language code,
+// or empty for none made yet (only forced subtitles show).
+char gSubtitleLanguage[16] = {};
 std::int64_t gLastPositionUs = -1;
 std::int64_t gLastDurationUs = -1;
 
@@ -709,6 +714,8 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     config.hdr = 0;
     config.enable_audio = format->audio_pid != 0;
     config.audio_stream_type = format->audio_stream_type;
+    iptv_picture_set_sample_aspect(format->sample_aspect_num, format->sample_aspect_den);
+    iptv_picture_set_frame_size(format->visible_width, format->visible_height);
     iptv_native_agc_loading_stop();
     const int handoff = iptv_native_agc_present_shutdown();
     if (handoff != 0)
@@ -1035,6 +1042,23 @@ class StreamRunner
         iptv_input_event_t event{};
         while (iptv_input_next(&event))
         {
+            // Options opens the settings over the picture; while they are open the buttons
+            // work them, and Circle closes them.
+            if (event.pressed && event.action == IPTV_INPUT_OPTIONS && HasPresentedVideo())
+            {
+                if (menu_.is_open())
+                    menu_.Close();
+                else
+                    menu_.Open();
+                ShowControls();
+                continue;
+            }
+            if (event.pressed && menu_.is_open())
+            {
+                MenuInput(event.action);
+                ShowControls();
+                continue;
+            }
             if (event.pressed &&
                 (event.action == IPTV_INPUT_CIRCLE || event.action == IPTV_INPUT_OPTIONS))
             {
@@ -1077,15 +1101,23 @@ class StreamRunner
         controls_dirty_ = true;
     }
 
-    iptv::media::Command TakeCommand()
+    iptv::media::Request TakeCommand()
     {
         if (command_read_ == command_write_)
-            return iptv::media::Command::none;
+            return {};
         return commands_[command_read_++ % commands_.size()];
     }
 
     void SetMediaStatus(const iptv::media::Status &status)
     {
+        // A subtitle change the viewer made carries on to the next film or episode.
+        if (subtitle_choice_pending_ && status.subtitle_tracks &&
+            (status.subtitle_track != media_status_.subtitle_track || !have_media_status_))
+        {
+            subtitle_choice_pending_ = false;
+            std::snprintf(gSubtitleLanguage, sizeof(gSubtitleLanguage), "%s",
+                          status.subtitle_track ? status.subtitle_language : "off");
+        }
         media_status_ = status;
         have_media_status_ = true;
         controls_dirty_ = true;
@@ -1135,6 +1167,8 @@ class StreamRunner
         controls_dirty_ = false;
         controls_checked_usec_ = now;
         iptv_osd_state_t state{};
+        if (menu_.is_open())
+            controls_until_usec_ = now + UINT64_C(4000000);
         const bool shown = now < controls_until_usec_;
         if (mode_ == RunnerMode::media && have_media_status_ &&
             (shown || media_status_.paused || media_status_.seeking))
@@ -1155,7 +1189,7 @@ class StreamRunner
             else
                 std::snprintf(state.detail, sizeof(state.detail), "%s", media_status_.audio_label);
             state.buttons = IPTV_OSD_BUTTON_PAUSE | IPTV_OSD_BUTTON_SEEK | IPTV_OSD_BUTTON_JUMP |
-                            IPTV_OSD_BUTTON_BACK;
+                            IPTV_OSD_BUTTON_MENU | IPTV_OSD_BUTTON_BACK;
             if (media_status_.audio_tracks > 1u)
                 state.buttons |= IPTV_OSD_BUTTON_AUDIO;
             if (gPlaybackInfo.start_position_us > 0)
@@ -1174,6 +1208,7 @@ class StreamRunner
         else if (mode_ != RunnerMode::media && gPlaybackInfo.live && shown && HasPresentedVideo())
         {
             state.kind = IPTV_OSD_LIVE;
+            state.buttons = IPTV_OSD_BUTTON_MENU;
             std::snprintf(state.title, sizeof(state.title), "%s", gPlaybackInfo.title);
             std::snprintf(state.detail, sizeof(state.detail), "%s", gPlaybackInfo.now);
             std::snprintf(state.next, sizeof(state.next), "%s", gPlaybackInfo.next);
@@ -1196,11 +1231,94 @@ class StreamRunner
                     std::strftime(state.end_label, sizeof(state.end_label), "%H:%M", local);
             }
         }
+        if (menu_.is_open() && HasPresentedVideo())
+        {
+            if (state.kind == IPTV_OSD_HIDDEN)
+            {
+                // Something with no banner of its own: the menu over a plain title bar.
+                state.kind = gPlaybackInfo.live ? IPTV_OSD_LIVE : IPTV_OSD_MEDIA;
+                state.position_us = -1;
+                state.duration_us = -1;
+                std::snprintf(state.title, sizeof(state.title), "%s", gPlaybackInfo.title);
+            }
+            menu_.Fill(MenuInfo(), &state);
+        }
         if (std::memcmp(&state, &published_controls_, sizeof(state)) != 0)
         {
             published_controls_ = state;
             iptv_osd_publish(&state);
         }
+    }
+
+    // ---- The settings menu ----
+    iptv::player_menu::Info MenuInfo() const
+    {
+        iptv::player_menu::Info info;
+        if (mode_ == RunnerMode::media && have_media_status_)
+        {
+            info.tracks = true;
+            info.audio_track = media_status_.audio_track;
+            info.audio_tracks = media_status_.audio_tracks;
+            info.audio_label = media_status_.audio_label;
+            info.audio_labels = media_status_.audio_labels;
+            info.subtitle_track = media_status_.subtitle_track;
+            info.subtitle_tracks = media_status_.subtitle_tracks;
+            info.subtitle_label = media_status_.subtitle_label;
+            info.subtitle_labels = media_status_.subtitle_labels;
+            info.listed = iptv::media::kListedTracks;
+        }
+        iptv_picture_modes(&info.aspect, &info.zoom);
+        info.audio_delay_us = iptv_native_backend_audio_delay_us();
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        std::uint32_t sar_num = 0;
+        std::uint32_t sar_den = 0;
+        iptv_picture_frame_size(&width, &height);
+        iptv_picture_sample_aspect(&sar_num, &sar_den);
+        info.frame_milli = iptv_picture_frame_milli(width, height, sar_num, sar_den);
+        return info;
+    }
+
+    void MenuInput(iptv_input_action_t action)
+    {
+        using Kind = iptv::player_menu::Change::Kind;
+        const iptv::player_menu::Change change = menu_.Input(action, MenuInfo());
+        int aspect = IPTV_ASPECT_AUTO;
+        int zoom = IPTV_ZOOM_FIT;
+        iptv_picture_modes(&aspect, &zoom);
+        switch (change.kind)
+        {
+        case Kind::audio:
+            PushCommand({iptv::media::Command::select_audio, static_cast<unsigned>(change.value)});
+            break;
+        case Kind::subtitles:
+            subtitle_choice_pending_ = true;
+            PushCommand(
+                {iptv::media::Command::select_subtitle, static_cast<unsigned>(change.value)});
+            break;
+        case Kind::aspect:
+            iptv_picture_set_modes(change.value, zoom);
+            break;
+        case Kind::zoom:
+            iptv_picture_set_modes(aspect, change.value);
+            break;
+        case Kind::audio_delay:
+        {
+            // 50 ms steps, up to 3 s either way.
+            std::int64_t delay =
+                iptv_native_backend_audio_delay_us() + change.value * INT64_C(50000);
+            if (delay > INT64_C(3000000))
+                delay = INT64_C(3000000);
+            if (delay < -INT64_C(3000000))
+                delay = -INT64_C(3000000);
+            iptv_native_backend_set_audio_delay_us(delay);
+            break;
+        }
+        case Kind::close:
+        case Kind::none:
+            break;
+        }
+        controls_dirty_ = true;
     }
 
     bool NativeTelemetry(iptv_native_telemetry_t *telemetry) const
@@ -1446,10 +1564,12 @@ class StreamRunner
     std::uint64_t controls_checked_usec_ = 0;
     bool controls_dirty_ = false;
     bool live_intro_shown_ = false;
+    iptv::player_menu::Menu menu_;
+    bool subtitle_choice_pending_ = false;
     iptv_osd_state_t published_controls_{};
     iptv::media::Status media_status_{};
     bool have_media_status_ = false;
-    std::array<iptv::media::Command, 16> commands_{};
+    std::array<iptv::media::Request, 16> commands_{};
     std::uint32_t command_read_ = 0;
     std::uint32_t command_write_ = 0;
 
@@ -1465,7 +1585,13 @@ class StreamRunner
                                 : action == IPTV_INPUT_SQUARE && gPlaybackInfo.start_position_us > 0
                                     ? Command::start_over
                                     : Command::none;
-        if (command == Command::none || command_write_ - command_read_ >= commands_.size())
+        PushCommand({command, 0u});
+    }
+
+    void PushCommand(iptv::media::Request command)
+    {
+        if (mode_ != RunnerMode::media || command.command == iptv::media::Command::none ||
+            command_write_ - command_read_ >= commands_.size())
             return;
         commands_[command_write_++ % commands_.size()] = command;
     }
@@ -1802,6 +1928,7 @@ int RunMedia(iptv::http::StreamRequest *request, StreamRunner *runner, const cha
     source.prefix_bytes = prefix_bytes;
     source.container = container;
     source.start_position_us = gPlaybackInfo.start_position_us;
+    source.subtitle_language = gSubtitleLanguage;
 
     char error[IPTV_STREAM_ERROR_TEXT_BYTES * 2u] = {};
     runner->ShowControls();

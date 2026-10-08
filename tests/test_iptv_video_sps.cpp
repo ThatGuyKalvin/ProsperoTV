@@ -80,4 +80,83 @@ TEST(IptvVideoSpsTest, FindsThePictureTypeOfAnAccessUnit)
     EXPECT_EQ(iptv::video::PictureType(no_slice, sizeof(no_slice), IPTV_STREAM_VIDEO_H264), -1);
 }
 
+// Writes an H.264 SPS bit by bit: Baseline, 720x576, with only a pixel shape in its VUI.
+std::vector<std::uint8_t> PalSps(unsigned aspect_idc, unsigned sar_num, unsigned sar_den)
+{
+    std::vector<bool> bits;
+    const auto put = [&](unsigned value, unsigned count)
+    {
+        for (unsigned bit = count; bit-- > 0;)
+            bits.push_back((value >> bit) & 1u);
+    };
+    const auto put_ue = [&](unsigned value)
+    {
+        unsigned length = 0;
+        while ((value + 1u) >> length)
+            ++length;
+        put(0, length - 1u);
+        put(value + 1u, length);
+    };
+    put(66, 8); // profile
+    put(0, 8);
+    put(30, 8); // level 3.0
+    put_ue(0);  // seq_parameter_set_id
+    put_ue(0);  // log2_max_frame_num_minus4
+    put_ue(2);  // pic_order_cnt_type
+    put_ue(1);  // max_num_ref_frames
+    put(0, 1);  // gaps
+    put_ue(44); // 45 macroblocks wide
+    put_ue(35); // 36 high
+    put(1, 1);  // frame_mbs_only
+    put(1, 1);  // direct_8x8_inference
+    put(0, 1);  // no crop
+    put(1, 1);  // VUI present
+    put(1, 1);  // aspect_ratio_info_present
+    put(aspect_idc, 8);
+    if (aspect_idc == 255u)
+    {
+        put(sar_num, 16);
+        put(sar_den, 16);
+    }
+    put(0, 1); // overscan_info_present
+    put(1, 1); // rbsp stop bit
+    while (bits.size() % 8u)
+        bits.push_back(false);
+    std::vector<std::uint8_t> nal{0x67};
+    for (std::size_t at = 0; at < bits.size(); at += 8u)
+    {
+        std::uint8_t byte = 0;
+        for (std::size_t bit = 0; bit < 8u; ++bit)
+            byte = static_cast<std::uint8_t>((byte << 1) | (bits[at + bit] ? 1u : 0u));
+        nal.push_back(byte);
+    }
+    return nal;
+}
+
+TEST(IptvVideoSpsTest, ReadsThePixelShapeFromTheVui)
+{
+    iptv::video::SpsInfo sps;
+    const char *error = nullptr;
+    auto nal = PalSps(4u, 0u, 0u); // 16:11
+    ASSERT_EQ(iptv::video::ParseH264Sps(nal.data(), nal.size(), &sps, &error), IPTV_STREAM_OK)
+        << error;
+    EXPECT_EQ(sps.visible_width, 720u);
+    EXPECT_EQ(sps.visible_height, 576u);
+    EXPECT_EQ(sps.sar_num, 16u);
+    EXPECT_EQ(sps.sar_den, 11u);
+
+    sps = {};
+    nal = PalSps(255u, 64u, 45u);
+    ASSERT_EQ(iptv::video::ParseH264Sps(nal.data(), nal.size(), &sps, &error), IPTV_STREAM_OK);
+    EXPECT_EQ(sps.sar_num, 64u);
+    EXPECT_EQ(sps.sar_den, 45u);
+
+    // Square pixels are reported as no shape at all.
+    sps = {};
+    nal = PalSps(1u, 0u, 0u);
+    ASSERT_EQ(iptv::video::ParseH264Sps(nal.data(), nal.size(), &sps, &error), IPTV_STREAM_OK);
+    EXPECT_EQ(sps.sar_num, 0u);
+    EXPECT_EQ(sps.sar_den, 0u);
+}
+
 } // namespace

@@ -76,6 +76,9 @@ typedef struct iptv_stream_format {
     uint32_t video_chroma_format;
     uint32_t audio_sample_rate;
     uint32_t audio_channels;
+    /* The shape of one pixel (0:0 when square or unknown). */
+    uint32_t sample_aspect_num;
+    uint32_t sample_aspect_den;
 } iptv_stream_format_t;
 
 typedef struct iptv_stream_config {

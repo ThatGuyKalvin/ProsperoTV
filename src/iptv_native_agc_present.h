@@ -21,6 +21,7 @@ extern "C"
         uint32_t fps_x100;
         uint32_t bitrate_kbps;
         uint32_t show_controls;
+        int64_t pts_us; /* the frame's presentation time, for subtitles; < 0 when unknown */
     } iptv_native_video_overlay_t;
 
     int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,

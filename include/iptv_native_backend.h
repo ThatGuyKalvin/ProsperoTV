@@ -187,6 +187,10 @@ extern "C"
     uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend,
                                                uint32_t *generation);
     uint32_t iptv_native_backend_generation(const iptv_native_backend_t *backend);
+    /* Plays the sound later (positive) or earlier (negative) than the picture, for every
+     * stream from now on; a change is heard at once, as a short gap or skip. */
+    void iptv_native_backend_set_audio_delay_us(int64_t delay_us);
+    int64_t iptv_native_backend_audio_delay_us(void);
     void iptv_native_backend_request_stop(iptv_native_backend_t *backend);
     int iptv_native_backend_stop_requested(const iptv_native_backend_t *backend);
     int32_t iptv_native_backend_drain(iptv_native_backend_t *backend);

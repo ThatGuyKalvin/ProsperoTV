@@ -33,6 +33,7 @@ cd "$build"
     --disable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
     --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
     --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3 \
+    --enable-decoder=subrip,srt,ass,ssa,movtext,webvtt,text,pgssub,dvdsub,dvbsub \
     --enable-demuxer=matroska,mov \
     --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,eac3_core \
     --enable-parser=ac3
@@ -43,7 +44,9 @@ sed -i 's/^#define HAVE_LOCALTIME_R 1$/#define HAVE_LOCALTIME_R 0/' config.h
 # configure drops a component silently when a dependency is missing; the player needs these.
 # Component flags live in config_components.h since FFmpeg 5.1.
 for wanted in CONFIG_MATROSKA_DEMUXER CONFIG_MOV_DEMUXER CONFIG_H264_MP4TOANNEXB_BSF \
-    CONFIG_HEVC_MP4TOANNEXB_BSF CONFIG_EAC3_CORE_BSF CONFIG_AC3_PARSER; do
+    CONFIG_HEVC_MP4TOANNEXB_BSF CONFIG_EAC3_CORE_BSF CONFIG_AC3_PARSER \
+    CONFIG_SUBRIP_DECODER CONFIG_ASS_DECODER CONFIG_MOVTEXT_DECODER CONFIG_WEBVTT_DECODER \
+    CONFIG_PGSSUB_DECODER CONFIG_DVDSUB_DECODER CONFIG_DVBSUB_DECODER; do
     grep -q "^#define $wanted 1$" config_components.h ||
         { echo "FFmpeg configure dropped $wanted" >&2; exit 1; }
 done

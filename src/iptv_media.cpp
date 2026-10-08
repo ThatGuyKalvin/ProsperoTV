@@ -5,6 +5,7 @@
 #include "iptv_media.h"
 
 #include "iptv_audio_frame.h"
+#include "iptv_subtitle.h"
 #include "iptv_video_sps.h"
 
 extern "C"
@@ -21,6 +22,7 @@ extern "C"
 
 #include <atomic>
 #include <cerrno>
+#include <cctype>
 #include <time.h>
 #include <cstdarg>
 #include <cstdio>
@@ -418,6 +420,46 @@ std::uint32_t AudioStreamType(const AVCodecParameters *codec, AacConfig *aac)
     }
 }
 
+// Subtitle formats with a decoder in this build: text (SRT, ASS, MP4, WebVTT) and pictures
+// (Blu-ray PGS, DVD, DVB).
+bool SubtitleSupported(const AVCodecParameters *codec)
+{
+    switch (codec->codec_id)
+    {
+    case AV_CODEC_ID_SUBRIP:
+    case AV_CODEC_ID_TEXT:
+    case AV_CODEC_ID_ASS:
+    case AV_CODEC_ID_SSA:
+    case AV_CODEC_ID_MOV_TEXT:
+    case AV_CODEC_ID_WEBVTT:
+    case AV_CODEC_ID_HDMV_PGS_SUBTITLE:
+    case AV_CODEC_ID_DVD_SUBTITLE:
+    case AV_CODEC_ID_DVB_SUBTITLE:
+        return avcodec_find_decoder(codec->codec_id) != nullptr;
+    default:
+        return false;
+    }
+}
+
+const char *StreamLanguage(const AVStream *stream)
+{
+    const AVDictionaryEntry *language = av_dict_get(stream->metadata, "language", nullptr, 0);
+    return language && language->value[0] && std::strcmp(language->value, "und") != 0
+               ? language->value
+               : "";
+}
+
+bool SameLanguage(const char *a, const char *b)
+{
+    if (!a || !b || !*a || !*b)
+        return false;
+    for (; *a && *b; ++a, ++b)
+        if (std::tolower(static_cast<unsigned char>(*a)) !=
+            std::tolower(static_cast<unsigned char>(*b)))
+            return false;
+    return *a == *b;
+}
+
 struct Player
 {
     const Sink &sink;
@@ -444,6 +486,118 @@ struct Player
     unsigned waiting_for_random_access = 0;
     bool audio_hold = false;
     std::uint64_t audio_floor_us = 0;
+    std::vector<AVStream *> subtitle_streams; // the subtitle tracks this player can show
+    AVStream *subtitle = nullptr;             // the one shown; none when off
+    AVCodecContext *subtitle_decoder = nullptr;
+    std::vector<std::uint32_t> subtitle_pixels;
+
+    // Shows `stream`'s subtitles from the next packet on, or none.
+    void SelectSubtitle(AVStream *stream)
+    {
+        if (subtitle)
+            subtitle->discard = AVDISCARD_ALL;
+        avcodec_free_context(&subtitle_decoder);
+        subtitle = nullptr;
+        iptv_subtitle_reset();
+        if (!stream)
+            return;
+        const AVCodec *decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+        AVCodecContext *context = decoder ? avcodec_alloc_context3(decoder) : nullptr;
+        if (!context || avcodec_parameters_to_context(context, stream->codecpar) < 0)
+        {
+            avcodec_free_context(&context);
+            return;
+        }
+        context->pkt_timebase = stream->time_base;
+        if (avcodec_open2(context, decoder, nullptr) < 0)
+        {
+            avcodec_free_context(&context);
+            return;
+        }
+        subtitle_decoder = context;
+        subtitle = stream;
+        subtitle->discard = AVDISCARD_DEFAULT;
+    }
+
+    void SubmitSubtitle(AVPacket *packet)
+    {
+        if (!subtitle_decoder)
+            return;
+        AVSubtitle decoded{};
+        int got = 0;
+        if (avcodec_decode_subtitle2(subtitle_decoder, &decoded, &got, packet) < 0 || !got)
+            return;
+        std::int64_t stamp = decoded.pts;
+        if (stamp == AV_NOPTS_VALUE && packet->pts != AV_NOPTS_VALUE)
+            stamp = av_rescale_q(packet->pts, subtitle->time_base, AVRational{1, 1000000});
+        if (stamp == AV_NOPTS_VALUE)
+        {
+            avsubtitle_free(&decoded);
+            return;
+        }
+        const std::int64_t start = static_cast<std::int64_t>(NormalizePtsUs(
+            stamp + static_cast<std::int64_t>(decoded.start_display_time) * 1000, base_us));
+        std::int64_t end = -1;
+        if (decoded.end_display_time && decoded.end_display_time != UINT32_MAX &&
+            decoded.end_display_time > decoded.start_display_time)
+            end = static_cast<std::int64_t>(NormalizePtsUs(
+                stamp + static_cast<std::int64_t>(decoded.end_display_time) * 1000, base_us));
+
+        std::vector<iptv_subtitle_rect_t> pictures;
+        std::size_t pixels = 0;
+        for (unsigned index = 0; index < decoded.num_rects; ++index)
+        {
+            const AVSubtitleRect *rect = decoded.rects[index];
+            if (rect->type == SUBTITLE_BITMAP && rect->w > 0 && rect->h > 0 && rect->data[0] &&
+                rect->data[1])
+                pixels += static_cast<std::size_t>(rect->w) * static_cast<std::size_t>(rect->h);
+        }
+        subtitle_pixels.resize(pixels);
+        pixels = 0;
+        for (unsigned index = 0; index < decoded.num_rects; ++index)
+        {
+            const AVSubtitleRect *rect = decoded.rects[index];
+            if (rect->type == SUBTITLE_ASS && rect->ass)
+                iptv_subtitle_add_text(start, end, rect->ass, 1);
+            else if (rect->type == SUBTITLE_TEXT && rect->text)
+                iptv_subtitle_add_text(start, end, rect->text, 0);
+            else if (rect->type == SUBTITLE_BITMAP && rect->w > 0 && rect->h > 0 && rect->data[0] &&
+                     rect->data[1])
+            {
+                // Palette indices to colours (FFmpeg's palette is 0xAARRGGBB).
+                const auto *palette = reinterpret_cast<const std::uint32_t *>(rect->data[1]);
+                std::uint32_t *out = subtitle_pixels.data() + pixels;
+                for (int row = 0; row < rect->h; ++row)
+                    for (int column = 0; column < rect->w; ++column)
+                        out[static_cast<std::size_t>(row) * static_cast<std::size_t>(rect->w) +
+                            static_cast<std::size_t>(column)] =
+                            palette[rect->data[0][row * rect->linesize[0] + column]];
+                iptv_subtitle_rect_t picture{};
+                picture.x = rect->x;
+                picture.y = rect->y;
+                picture.width = static_cast<std::uint32_t>(rect->w);
+                picture.height = static_cast<std::uint32_t>(rect->h);
+                picture.argb = out;
+                pictures.push_back(picture);
+                pixels += static_cast<std::size_t>(rect->w) * static_cast<std::size_t>(rect->h);
+            }
+        }
+        // Pictures, or an empty set that clears the screen (how PGS ends a subtitle).
+        if (!pictures.empty() || decoded.num_rects == 0)
+        {
+            std::uint32_t canvas_width = static_cast<std::uint32_t>(subtitle_decoder->width);
+            std::uint32_t canvas_height = static_cast<std::uint32_t>(subtitle_decoder->height);
+            if (!canvas_width || !canvas_height)
+            {
+                canvas_width = static_cast<std::uint32_t>(subtitle->codecpar->width);
+                canvas_height = static_cast<std::uint32_t>(subtitle->codecpar->height);
+            }
+            iptv_subtitle_add_bitmaps(start, end, canvas_width, canvas_height,
+                                      pictures.empty() ? nullptr : pictures.data(),
+                                      static_cast<std::uint32_t>(pictures.size()));
+        }
+        avsubtitle_free(&decoded);
+    }
 
     std::uint64_t PtsUs(const AVPacket *packet, const AVStream *stream) const
     {
@@ -494,6 +648,18 @@ struct Player
         stream.visible_height = sps.visible_height;
         stream.video_bit_depth = sps.bit_depth;
         stream.video_chroma_format = sps.chroma;
+        // The pixel shape: the container's (an MKV's display size), else the stream's.
+        const AVRational shape = av_guess_sample_aspect_ratio(format, video, nullptr);
+        if (shape.num > 0 && shape.den > 0 && shape.num != shape.den)
+        {
+            stream.sample_aspect_num = static_cast<std::uint32_t>(shape.num);
+            stream.sample_aspect_den = static_cast<std::uint32_t>(shape.den);
+        }
+        else if (sps.sar_num && sps.sar_den)
+        {
+            stream.sample_aspect_num = sps.sar_num;
+            stream.sample_aspect_den = sps.sar_den;
+        }
         if (audio && audio_type)
         {
             stream.audio_pid = static_cast<std::uint32_t>(audio->index) + 1u;
@@ -664,6 +830,34 @@ AVBSFContext *CreateFilter(const char *name, const AVStream *stream)
     return context;
 }
 
+// "English  SRT": the track's title or language, and its format.
+void SubtitleLabel(const AVStream *stream, unsigned number, char *out, std::size_t capacity)
+{
+    const AVDictionaryEntry *title = av_dict_get(stream->metadata, "title", nullptr, 0);
+    const char *language = StreamLanguage(stream);
+    char name[40] = {};
+    if (title && title->value[0])
+        std::snprintf(name, sizeof(name), "%.39s", title->value);
+    else if (*language)
+    {
+        std::snprintf(name, sizeof(name), "%.39s", language);
+        for (char &character : name)
+            if (character >= 'a' && character <= 'z')
+                character = static_cast<char>(character - 'a' + 'A');
+    }
+    else
+        std::snprintf(name, sizeof(name), "Track %u", number);
+    const AVCodecID codec = stream->codecpar->codec_id;
+    const char *format = codec == AV_CODEC_ID_HDMV_PGS_SUBTITLE                 ? "PGS"
+                         : codec == AV_CODEC_ID_DVD_SUBTITLE                    ? "DVD"
+                         : codec == AV_CODEC_ID_DVB_SUBTITLE                    ? "DVB"
+                         : codec == AV_CODEC_ID_ASS || codec == AV_CODEC_ID_SSA ? "ASS"
+                         : codec == AV_CODEC_ID_WEBVTT                          ? "WebVTT"
+                                                                                : "Text";
+    std::snprintf(out, capacity, "%s%s  %s", name,
+                  (stream->disposition & AV_DISPOSITION_FORCED) ? " (forced)" : "", format);
+}
+
 // "English  AC-3 5.1": the track's title or language, its codec and its channels.
 void AudioLabel(const AVStream *stream, unsigned number, char *out, std::size_t capacity)
 {
@@ -784,6 +978,11 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
                 else if (!other_video)
                     other_video = stream;
             }
+            else if (codec->codec_type == AVMEDIA_TYPE_SUBTITLE)
+            {
+                if (SubtitleSupported(codec))
+                    player.subtitle_streams.push_back(stream);
+            }
             else if (codec->codec_type == AVMEDIA_TYPE_AUDIO)
             {
                 AacConfig aac;
@@ -831,6 +1030,28 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
                 player.audio_filter = CreateFilter("eac3_core", player.audio);
         }
         player.base_us = format->start_time != AV_NOPTS_VALUE ? format->start_time : 0;
+
+        // Subtitles to start with: the viewer's language, else a track marked as forced.
+        const char *wanted = source.subtitle_language ? source.subtitle_language : "";
+        AVStream *chosen = nullptr;
+        if (std::strcmp(wanted, "off") != 0)
+        {
+            for (AVStream *stream : player.subtitle_streams)
+            {
+                const bool forced = (stream->disposition & AV_DISPOSITION_FORCED) != 0;
+                if (*wanted && SameLanguage(StreamLanguage(stream), wanted) &&
+                    (!chosen || ((chosen->disposition & AV_DISPOSITION_FORCED) && !forced)))
+                    chosen = stream;
+            }
+            if (!chosen && !*wanted)
+                for (AVStream *stream : player.subtitle_streams)
+                    if (stream->disposition & AV_DISPOSITION_FORCED)
+                    {
+                        chosen = stream;
+                        break;
+                    }
+        }
+        player.SelectSubtitle(chosen);
     }
 
     // Playback controls. A seek waits briefly for further presses, so holding a direction
@@ -844,6 +1065,7 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
     std::int64_t seek_target_us = -1; // shown until a picture of the new position appears
     std::uint32_t seek_generation = 0;
     std::uint64_t last_status_at = 0;
+    std::uint64_t last_subtitle_at = 0;
     Status status;
 
     const auto now_position = [&]() -> std::int64_t
@@ -869,6 +1091,26 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
         status.duration_us = duration_us;
         status.paused = paused;
         status.seeking = pending_seek_us >= 0 || seek_target_us >= 0;
+        status.subtitle_tracks = static_cast<unsigned>(player.subtitle_streams.size());
+        status.subtitle_track = 0;
+        status.subtitle_label[0] = '\0';
+        status.subtitle_language[0] = '\0';
+        for (unsigned index = 0; index < player.subtitle_streams.size(); ++index)
+            if (player.subtitle_streams[index] == player.subtitle)
+            {
+                status.subtitle_track = index + 1u;
+                SubtitleLabel(player.subtitle, index + 1u, status.subtitle_label,
+                              sizeof(status.subtitle_label));
+                std::snprintf(status.subtitle_language, sizeof(status.subtitle_language), "%s",
+                              StreamLanguage(player.subtitle));
+            }
+        for (unsigned index = 0; index < kListedTracks; ++index)
+        {
+            status.subtitle_labels[index][0] = '\0';
+            if (index < player.subtitle_streams.size())
+                SubtitleLabel(player.subtitle_streams[index], index + 1u,
+                              status.subtitle_labels[index], sizeof(status.subtitle_labels[index]));
+        }
         status.audio_tracks = static_cast<unsigned>(player.audio_streams.size());
         status.audio_track = 0;
         status.audio_label[0] = '\0';
@@ -879,6 +1121,13 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
                 AudioLabel(player.audio, index + 1u, status.audio_label,
                            sizeof(status.audio_label));
             }
+        for (unsigned index = 0; index < kListedTracks; ++index)
+        {
+            status.audio_labels[index][0] = '\0';
+            if (index < player.audio_streams.size())
+                AudioLabel(player.audio_streams[index], index + 1u, status.audio_labels[index],
+                           sizeof(status.audio_labels[index]));
+        }
         sink.status(sink.context, &status);
     };
     // Moves playback to `target_us`; a non-zero audio type also switches the decoder's audio.
@@ -897,6 +1146,9 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
         av_bsf_flush(player.video_filter);
         if (player.audio_filter)
             av_bsf_flush(player.audio_filter);
+        if (player.subtitle_decoder)
+            avcodec_flush_buffers(player.subtitle_decoder);
+        iptv_subtitle_reset();
         player.random_access_seen = false;
         player.audio_hold = player.audio != nullptr;
         player.audio_floor_us = 0;
@@ -911,15 +1163,15 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
         seek_target_us = target_us;
         return true;
     };
-    const auto next_audio = [&]()
+    // Plays audio track `number` (1-based) from the moment on screen.
+    const auto choose_audio = [&](std::size_t number)
     {
         const std::size_t count = player.audio_streams.size();
-        if (count < 2u || !player.audio)
+        if (!player.audio || number < 1u || number > count)
             return;
-        std::size_t index = 0;
-        while (index < count && player.audio_streams[index] != player.audio)
-            ++index;
-        AVStream *next = player.audio_streams[(index + 1u) % count];
+        AVStream *next = player.audio_streams[number - 1u];
+        if (next == player.audio)
+            return;
         AacConfig aac;
         const std::uint32_t type = AudioStreamType(next->codecpar, &aac);
         if (!type)
@@ -936,6 +1188,42 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
         // Picking up the new track at the same moment means reading that part again.
         (void)seek(position >= 0 ? position : 0, type);
     };
+    const auto next_audio = [&](bool forward)
+    {
+        const std::size_t count = player.audio_streams.size();
+        if (count < 2u || !player.audio)
+            return;
+        std::size_t index = 0;
+        while (index < count && player.audio_streams[index] != player.audio)
+            ++index;
+        choose_audio((index + (forward ? 1u : count - 1u)) % count + 1u);
+    };
+    // Off, then each track in turn. A track's subtitles for the moment on screen were read
+    // with the picture, so turning one on reads that part again.
+    const auto choose_subtitle = [&](std::size_t number) // 0 is off
+    {
+        const std::size_t count = player.subtitle_streams.size();
+        if (number > count)
+            return;
+        AVStream *next = number ? player.subtitle_streams[number - 1u] : nullptr;
+        if (next == player.subtitle)
+            return;
+        const std::int64_t position = now_position();
+        player.SelectSubtitle(next);
+        if (next && player.opened)
+            (void)seek(position >= 0 ? position : 0, 0);
+    };
+    const auto next_subtitle = [&](bool forward)
+    {
+        const std::size_t count = player.subtitle_streams.size();
+        if (!count)
+            return;
+        std::size_t index = 0; // 0 is off
+        for (std::size_t at = 0; at < count; ++at)
+            if (player.subtitle_streams[at] == player.subtitle)
+                index = at + 1u;
+        choose_subtitle((index + (forward ? 1u : count)) % (count + 1u));
+    };
 
     if (result == 0 && source.start_position_us > 0)
         (void)seek(source.start_position_us, 0);
@@ -950,10 +1238,11 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
             result = 1;
             break;
         }
-        for (Command command = sink.command ? sink.command(sink.context) : Command::none;
-             command != Command::none;
-             command = sink.command ? sink.command(sink.context) : Command::none)
+        for (Request request = sink.command ? sink.command(sink.context) : Request{};
+             request.command != Command::none;
+             request = sink.command ? sink.command(sink.context) : Request{})
         {
+            const Command command = request.command;
             const std::int64_t step = command == Command::back           ? -INT64_C(10000000)
                                       : command == Command::forward      ? INT64_C(10000000)
                                       : command == Command::back_long    ? -INT64_C(60000000)
@@ -974,9 +1263,21 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
                 paused = !paused;
                 (void)sink.pause(sink.context, paused);
             }
-            else if (command == Command::next_audio)
+            else if (command == Command::next_audio || command == Command::previous_audio)
             {
-                next_audio();
+                next_audio(command == Command::next_audio);
+            }
+            else if (command == Command::next_subtitle || command == Command::previous_subtitle)
+            {
+                next_subtitle(command == Command::next_subtitle);
+            }
+            else if (command == Command::select_audio)
+            {
+                choose_audio(request.value);
+            }
+            else if (command == Command::select_subtitle)
+            {
+                choose_subtitle(request.value);
             }
             else if (command == Command::start_over)
             {
@@ -994,6 +1295,18 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
             report(true);
         }
         report(false);
+        // Subtitles due soon are drawn ahead for the screen overlay, here rather than on the
+        // video thread.
+        if (player.subtitle && player.opened)
+        {
+            const std::uint64_t now = MonotonicUs();
+            if (now - last_subtitle_at >= UINT64_C(100000))
+            {
+                last_subtitle_at = now;
+                iptv_subtitle_prepare(IPTV_OSD_OVERLAY_WIDTH, IPTV_OSD_OVERLAY_HEIGHT,
+                                      now_position());
+            }
+        }
         if (paused)
         {
             // Nothing is read while paused; the download thread fills its buffer meanwhile.
@@ -1028,6 +1341,8 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
             result = player.Feed(player.video_filter, packet, filtered, true);
         else if (player.audio && packet->stream_index == player.audio->index)
             (void)player.Feed(player.audio_filter, packet, filtered, false);
+        else if (player.subtitle && packet->stream_index == player.subtitle->index)
+            player.SubmitSubtitle(packet);
         av_packet_unref(packet);
 
         // A decoder that stops presenting frames would otherwise hang playback.
@@ -1059,6 +1374,8 @@ int Play(const Source &source, const Sink &sink, char *error, std::size_t error_
         result = -1;
     }
 
+    avcodec_free_context(&player.subtitle_decoder);
+    iptv_subtitle_reset();
     av_bsf_free(&player.video_filter);
     av_bsf_free(&player.audio_filter);
     av_packet_free(&packet);
