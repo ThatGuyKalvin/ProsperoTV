@@ -56,6 +56,19 @@ constexpr Answer kAnswers[] = {
     {"player_api.php", R"({"user_info":{"auth":1,"status":"Active"},"server_info":{}})"},
 };
 
+// The account's TV guide, around a fixed moment: 2025-10-09 07:46:40 UTC.
+constexpr std::uint64_t kNow = 1759996000u;
+constexpr const char *kGuide =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv>\n"
+    "<channel id=\"alder.uk\"><display-name>Alder News</display-name></channel>\n"
+    "<programme start=\"20251009070000 +0000\" stop=\"20251009080000 +0000\" "
+    "channel=\"alder.uk\"><title>Morning Briefing</title><desc>The day ahead.</desc></programme>\n"
+    "<programme start=\"20251009080000 +0000\" stop=\"20251009090000 +0000\" "
+    "channel=\"alder.uk\"><title>Markets</title></programme>\n"
+    "<programme start=\"20251009070000 +0000\" stop=\"20251009080000 +0000\" "
+    "channel=\"other.uk\"><title>Not ours</title></programme>\n"
+    "</tv>\n";
+
 class LibraryTest : public ::testing::Test
 {
   protected:
@@ -70,6 +83,8 @@ class LibraryTest : public ::testing::Test
             std::ofstream(file) << answer.body;
             host::set_network_route(answer.fragment, file);
         }
+        std::ofstream(dir_ + "/guide.xml") << kGuide;
+        host::set_network_route("xmltv.php", dir_ + "/guide.xml");
         host::set_network(true, dir_ + "/missing");
         account_.server_url = "http://provider.example.invalid:8080";
         account_.username = "viewer";
@@ -218,6 +233,26 @@ TEST_F(LibraryTest, ASeriesListsItsSeasonsAndGoesOnAfterTheLastEpisodeWatched)
     EXPECT_TRUE(model.series_started());
     EXPECT_EQ(model.continue_episode(), static_cast<int>(first[1]));
     model.close();
+}
+
+TEST_F(LibraryTest, TheGuideSaysWhatIsOnNowAndNext)
+{
+    host::set_unix_time(kNow);
+    ptv::Model model(dir_);
+    open(model);
+    const iptv::ChannelView alder = model.channel(model.visible(0));
+    ASSERT_EQ(alder.name, "Alder News");
+    ASSERT_TRUE(
+        wait(model, [&] { return !model.on_now(model.channel(model.visible(0))).title.empty(); }));
+    const ptv::OnNow &on = model.on_now(model.channel(model.visible(0)));
+    EXPECT_EQ(on.title, "Morning Briefing");
+    EXPECT_EQ(on.description, "The day ahead.");
+    EXPECT_EQ(on.next_title, "Markets");
+    EXPECT_EQ(on.stop, 1759996800ll);
+    // A channel the guide does not know has nothing on.
+    EXPECT_TRUE(model.on_now(model.channel(model.visible(1))).title.empty());
+    model.close();
+    EXPECT_TRUE(fs::exists(dir_ + "/prosperotv-guide.sqlite3"));
 }
 
 TEST_F(LibraryTest, ASourceWithoutAnAccountHasNoShelvesToFill)

@@ -352,6 +352,25 @@ TEST(IptvCatalogTest, SplittingKeepsLivePlaylistsUnchanged)
     EXPECT_TRUE(library.episodes.empty());
 }
 
+std::string GuideUrl(std::string_view playlist)
+{
+    iptv::ParseReport report;
+    (void)iptv::ParseExtendedM3u(playlist, kSourceId, {}, &report);
+    return report.guide_url;
+}
+
+TEST(IptvCatalogTest, ReadsTheGuideAddressFromThePlaylistHeader)
+{
+    EXPECT_EQ(GuideUrl("#EXTM3U x-tvg-url=\"https://epg.example/guide.xml.gz\"\n"),
+              "https://epg.example/guide.xml.gz");
+    EXPECT_EQ(GuideUrl("#EXTM3U URL-TVG=\"ftp://bad.example/a.xml, http://epg.example/b.xml\"\n"),
+              "http://epg.example/b.xml");
+    EXPECT_EQ(GuideUrl("#EXTM3U tvg-url=\"http://epg.example/c.xml\"\n"),
+              "http://epg.example/c.xml");
+    EXPECT_TRUE(GuideUrl("#EXTM3U\n").empty());
+    EXPECT_TRUE(GuideUrl("#EXTM3U my-tvg-url=\"http://epg.example/d.xml\"\n").empty());
+}
+
 // ---- the catalog itself ----------------------------------------------------------
 
 iptv::Channel Station(int number, const char *group)

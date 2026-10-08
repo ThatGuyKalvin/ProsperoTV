@@ -351,8 +351,11 @@ bool Model::open()
         refresh();
     swap_shelf(shown);
 
-    // The films and series of this source.
+    // The films and series of this source, and the live channels' guide.
     library_check_source();
+    if (first)
+        open_guide();
+    queue_guide(true);
     if (shelf_ != Shelf::live)
     {
         const unsigned at = static_cast<unsigned>(shelf_);
@@ -418,6 +421,8 @@ void Model::load_cache()
     swap_shelf(Shelf::live);
     load_live_cache();
     swap_shelf(shown);
+    if (guide_source_ != source_id(active_source_))
+        open_guide();
 }
 
 void Model::load_live_cache()
@@ -1350,6 +1355,9 @@ void Model::consume_refresh()
         adopt_catalog();
         if (has_failure_)
             failure_.can_retry = catalog_.Find(failure_.channel_id) != iptv::Catalog::npos;
+        // A new channel list: a new guide for it.
+        playlist_guide_url_ = account ? std::string() : pending_report_.guide_url;
+        queue_guide(false);
         health_[source] = pending_saved_ ? SourceHealth::ready : SourceHealth::stale;
         const std::string count = group_digits(channel_count()) + " channels";
         set_status(pending_saved_ ? "Up to date" : "Not saved",

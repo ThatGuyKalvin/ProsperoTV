@@ -754,4 +754,13 @@ TEST(IptvXtreamTest, ParsesMediaInfoFromVodAndSeriesResponses)
     EXPECT_EQ(iptv::ParseMediaInfo("", &details), iptv::XtreamStatus::malformed_json);
 }
 
+TEST(IptvXtreamTest, BuildsTheGuideAddress)
+{
+    std::string url;
+    ASSERT_TRUE(iptv::BuildXtreamGuideUrl(Credentials(), &url));
+    EXPECT_EQ(url, "https://provider.example:25461/xmltv.php"
+                   "?username=test%20user&password=p%40ss%26word");
+    EXPECT_FALSE(iptv::BuildXtreamGuideUrl({}, &url));
+}
+
 } // namespace
