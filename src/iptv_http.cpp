@@ -657,6 +657,28 @@ void DescribeFailure(Status status, int http_status, int native_error, const cha
     }
 }
 
+namespace
+{
+
+constexpr char kFormContentType[] = "application/x-www-form-urlencoded";
+constexpr char kJsonAccept[] = "application/json, text/plain, */*";
+
+// Form bodies are built from percent-encoded fields, so only printable ASCII is valid.
+bool ValidFormBody(const char *body, std::size_t bytes)
+{
+    if (!body || bytes == 0 || bytes > kMaxFormBodyBytes)
+        return false;
+    for (std::size_t index = 0; index < bytes; ++index)
+    {
+        const unsigned char byte = static_cast<unsigned char>(body[index]);
+        if (byte < 0x21u || byte > 0x7eu)
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
 #if defined(__PROSPERO__) || defined(__ORBIS__)
 
 namespace
@@ -664,6 +686,7 @@ namespace
 
 constexpr int kHttpVersion11 = 2;
 constexpr int kHttpMethodGet = 0;
+constexpr int kHttpMethodPost = 1;
 constexpr std::uint32_t kHeaderOverwrite = 0u;
 constexpr std::uint32_t kStreamReceiveTimeoutUsec = 5000000u;
 constexpr std::size_t kMaxResponseHeaderBytes = 64u * 1024u;
@@ -925,7 +948,8 @@ bool SafeHeaderValue(const char *value)
 }
 
 int ConfigureRequest(int request, const char *accept, std::uint32_t receive_timeout,
-                     const RequestHeaders *headers, const char *range = nullptr)
+                     const RequestHeaders *headers, const char *content_type = nullptr,
+                     const char *range = nullptr)
 {
     int result = sceHttpSetAutoRedirect(request, 0);
     if (result >= 0)
@@ -951,6 +975,7 @@ int ConfigureRequest(int request, const char *accept, std::uint32_t receive_time
     // fixed; opengl-ui/ps5/patch_tree.py counts them when it renames them.
     const char *const optional[][2] = {
         {"Referer", headers ? headers->referrer : nullptr},
+        {"Content-Type", content_type},
         {"Range", range},
     };
     for (const auto &header : optional)
@@ -964,11 +989,26 @@ int ConfigureRequest(int request, const char *accept, std::uint32_t receive_time
     return result;
 }
 
-// Asks for a channel list, following its redirects. With Status::ok the
-// request is open on the last address (history->Current()) and http_status is
-// the server's answer, whatever it is; otherwise nothing is left open.
-FetchResult OpenListRequest(RedirectHistory *history, const RequestHeaders *headers,
-                            const RequestControl *control, int *connection, int *request)
+struct RequestSpec
+{
+    int method = kHttpMethodGet;
+    const char *body = nullptr;
+    std::size_t body_bytes = 0;
+    const char *content_type = nullptr;
+    const char *accept = nullptr;
+};
+
+constexpr char kListAccept[] = "application/vnd.apple.mpegurl, application/x-mpegURL, "
+                               "audio/mpegurl, text/plain, */*";
+
+// Sends a request, following its redirects. With Status::ok the request is
+// open on the last address (history->Current()) and http_status is the
+// server's answer, whatever it is; otherwise nothing is left open. 301, 302
+// and 303 continue as a bodiless GET, as browsers and libcurl do; 307 and 308
+// repeat the original method and body.
+FetchResult OpenListRequest(RedirectHistory *history, RequestSpec spec,
+                            const RequestHeaders *headers, const RequestControl *control,
+                            int *connection, int *request)
 {
     *connection = -1;
     *request = -1;
@@ -982,7 +1022,8 @@ FetchResult OpenListRequest(RedirectHistory *history, const RequestHeaders *head
         *connection = sceHttpCreateConnectionWithURL(g_http_template, history->Current(), 1);
         if (*connection < 0)
             return Failure(Status::request_failed, *connection);
-        *request = sceHttpCreateRequestWithURL(*connection, kHttpMethodGet, history->Current(), 0);
+        *request = sceHttpCreateRequestWithURL(*connection, spec.method, history->Current(),
+                                               spec.body_bytes);
         if (*request < 0)
         {
             const int error = *request;
@@ -995,12 +1036,10 @@ FetchResult OpenListRequest(RedirectHistory *history, const RequestHeaders *head
             CloseRequest(*connection, *request);
             return Failure(Status::cancelled);
         }
-        int result = ConfigureRequest(*request,
-                                      "application/vnd.apple.mpegurl, application/x-mpegURL, "
-                                      "audio/mpegurl, text/plain, */*",
-                                      kReceiveTimeoutUsec, headers);
+        int result = ConfigureRequest(*request, spec.accept ? spec.accept : kListAccept,
+                                      kReceiveTimeoutUsec, headers, spec.content_type);
         if (result >= 0)
-            result = sceHttpSendRequest(*request, nullptr, 0);
+            result = sceHttpSendRequest(*request, spec.body, spec.body_bytes);
         if (result >= 0)
             result = sceHttpGetStatusCode(*request, &http_status);
         if (result < 0)
@@ -1014,6 +1053,8 @@ FetchResult OpenListRequest(RedirectHistory *history, const RequestHeaders *head
         char location[kMaxUrlBytes + 1u] = {};
         const bool followed =
             ExtractLocation(*request, location, sizeof(location)) && history->Follow(location);
+        if (spec.method != kHttpMethodGet && http_status != 307 && http_status != 308)
+            spec = {kHttpMethodGet, nullptr, 0, nullptr, spec.accept};
         CloseRequest(*connection, *request);
         *connection = -1;
         *request = -1;
@@ -1101,10 +1142,13 @@ FetchResult GetM3u(const char *url, char *buffer, std::size_t buffer_capacity,
                           max_bytes, headers, control);
 }
 
-FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_capacity,
-                           char *effective_url, std::size_t effective_url_capacity,
-                           std::size_t max_bytes, const RequestHeaders *headers,
-                           const RequestControl *control)
+namespace
+{
+
+FetchResult PerformRequest(const char *url, RequestSpec spec, char *buffer,
+                           std::size_t buffer_capacity, char *effective_url,
+                           std::size_t effective_url_capacity, std::size_t max_bytes,
+                           const RequestHeaders *headers, const RequestControl *control)
 {
     if (effective_url && effective_url_capacity != 0)
         effective_url[0] = '\0';
@@ -1128,7 +1172,8 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
     int connection = -1;
     int request = -1;
     int result = 0;
-    const FetchResult opened = OpenListRequest(&history, headers, control, &connection, &request);
+    const FetchResult opened =
+        OpenListRequest(&history, spec, headers, control, &connection, &request);
     const int http_status = opened.http_status;
     const bool named = CopyText(effective_url, effective_url_capacity, history.Current(),
                                 std::strlen(history.Current()));
@@ -1211,6 +1256,37 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
     return {status, bytes, http_status, status == Status::ok ? 0 : result};
 }
 
+} // namespace
+
+FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_capacity,
+                           char *effective_url, std::size_t effective_url_capacity,
+                           std::size_t max_bytes, const RequestHeaders *headers,
+                           const RequestControl *control)
+{
+    RequestSpec spec;
+    spec.accept = "application/vnd.apple.mpegurl, application/x-mpegURL, "
+                  "audio/mpegurl, text/plain, */*";
+    return PerformRequest(url, spec, buffer, buffer_capacity, effective_url, effective_url_capacity,
+                          max_bytes, headers, control);
+}
+
+FetchResult PostForm(const char *url, const char *body, std::size_t body_bytes, char *buffer,
+                     std::size_t buffer_capacity, std::size_t max_bytes,
+                     const RequestHeaders *headers, const RequestControl *control)
+{
+    if (!ValidFormBody(body, body_bytes))
+        return Failure(Status::invalid_argument);
+    RequestSpec spec;
+    spec.method = kHttpMethodPost;
+    spec.body = body;
+    spec.body_bytes = body_bytes;
+    spec.content_type = kFormContentType;
+    spec.accept = kJsonAccept;
+    char effective_url[kMaxUrlBytes + 1u] = {};
+    return PerformRequest(url, spec, buffer, buffer_capacity, effective_url, sizeof(effective_url),
+                          max_bytes, headers, control);
+}
+
 FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes,
                     const RequestHeaders *headers, const RequestControl *control)
 {
@@ -1229,7 +1305,8 @@ FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes
 
     int connection = -1;
     int request = -1;
-    const FetchResult opened = OpenListRequest(&history, headers, control, &connection, &request);
+    const FetchResult opened =
+        OpenListRequest(&history, RequestSpec{}, headers, control, &connection, &request);
     if (opened.status != Status::ok)
         return opened;
     const int http_status = opened.http_status;
@@ -1325,7 +1402,7 @@ Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
             return Status::request_failed;
         }
         int result = ConfigureRequest(stream->request, accepted, kStreamReceiveTimeoutUsec, headers,
-                                      range[0] ? range : nullptr);
+                                      nullptr, range[0] ? range : nullptr);
         if (result >= 0)
             result = sceHttpSendRequest(stream->request, nullptr, 0);
         if (result >= 0)
@@ -1426,6 +1503,25 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
     const std::size_t url_length = BoundedLength(url, kMaxUrlBytes);
     if (!CopyText(effective_url, effective_url_capacity, url, url_length))
         return {Status::invalid_argument, 0, 0, 0};
+    return {Status::platform_unavailable, 0, 0, 0};
+}
+
+FetchResult PostForm(const char *url, const char *body, std::size_t body_bytes, char *buffer,
+                     std::size_t buffer_capacity, std::size_t max_bytes, const RequestHeaders *,
+                     const RequestControl *control)
+{
+    if (!IsSupportedUrl(url))
+        return {Status::unsupported_url, 0, 0, 0};
+    if (control && control->cancelled && control->cancelled(control->context))
+        return {Status::cancelled, 0, 0, 0};
+    if (!ValidFormBody(body, body_bytes) || buffer == nullptr || max_bytes == 0 ||
+        max_bytes > kHardMaxPlaylistBytes || buffer_capacity < max_bytes + 1)
+    {
+        return {Status::invalid_argument, 0, 0, 0};
+    }
+    buffer[0] = '\0';
+    (void)kFormContentType;
+    (void)kJsonAccept;
     return {Status::platform_unavailable, 0, 0, 0};
 }
 

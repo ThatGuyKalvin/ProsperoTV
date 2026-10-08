@@ -20,7 +20,7 @@
 #endif
 
 // Bounded JSON pull parser and the small text helpers shared by the account sources
-// (Xtream accounts). Header-only so that every build that compiles iptv_xtream.cpp
+// (Xtream and OneStream). Header-only so that every build that compiles iptv_xtream.cpp
 // keeps working without a new source file.
 namespace iptv::json
 {
@@ -388,7 +388,7 @@ template <typename Handler> bool ReadArray(JsonReader *reader, Handler handler)
 }
 
 // Reads a whole response that is either a top-level array or an object whose `key` member
-// is the array ("data" or "content" on some panels).
+// is the array ("data" on some Xtream panels, "content" on OneStream).
 template <typename Handler>
 bool ReadArrayResponse(JsonReader *reader, Handler handler, bool *found,
                        std::string_view wrapper_key = "data")

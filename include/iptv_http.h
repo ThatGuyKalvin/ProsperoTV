@@ -22,6 +22,7 @@ inline constexpr std::size_t kMaxListBytes = 512u * 1024u * 1024u;
 inline constexpr std::size_t kListPieceBytes = 64u * 1024u;
 inline constexpr std::size_t kMaxUrlBytes = 4096u;
 inline constexpr std::size_t kMaxRedirects = 5u;
+inline constexpr std::size_t kMaxFormBodyBytes = 2048u;
 inline constexpr std::size_t kMaxErrorResponseBytes = 511u;
 
 // Video requests need more receive headroom than the original radio-sized pools.
@@ -175,6 +176,15 @@ struct ListSink
 FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes = kMaxListBytes,
                     const RequestHeaders *headers = nullptr,
                     const RequestControl *control = nullptr);
+
+// Sends body as an application/x-www-form-urlencoded POST and reads the response with the
+// same limits as GetM3u. body must be 1..kMaxFormBodyBytes of printable ASCII (that is,
+// already percent-encoded). A 301/302/303 redirect continues as a GET without the body.
+FetchResult PostForm(const char *url, const char *body, std::size_t body_bytes, char *buffer,
+                     std::size_t buffer_capacity,
+                     std::size_t max_bytes = kDefaultMaxPlaylistBytes,
+                     const RequestHeaders *headers = nullptr,
+                     const RequestControl *control = nullptr);
 
 // Opens a bounded-time streaming response. NetworkInit must have succeeded. A range_start of
 // zero or more asks for the file from that byte on ("Range: bytes=N-"); the caller checks

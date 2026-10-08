@@ -120,9 +120,11 @@ SourceStateStatus SaveActiveSource(const std::string &path, SourceKind source)
     constexpr char built_in[] = "built-in\n";
     constexpr char custom_source[] = "custom\n";
     constexpr char xtream_source[] = "xtream\n";
-    const char *value = source == SourceKind::Custom   ? custom_source
-                        : source == SourceKind::Xtream ? xtream_source
-                                                       : built_in;
+    constexpr char onestream_source[] = "onestream\n";
+    const char *value = source == SourceKind::Custom      ? custom_source
+                        : source == SourceKind::Xtream    ? xtream_source
+                        : source == SourceKind::OneStream ? onestream_source
+                                                          : built_in;
     const std::size_t bytes = std::strlen(value);
     const std::string temporary = path + ".tmp";
     std::FILE *output = std::fopen(temporary.c_str(), "wb");
@@ -169,6 +171,11 @@ SourceStateStatus LoadActiveSource(const std::string &path, SourceKind *source)
     if (std::strcmp(value, "xtream\n") == 0)
     {
         *source = SourceKind::Xtream;
+        return SourceStateStatus::ok;
+    }
+    if (std::strcmp(value, "onestream\n") == 0)
+    {
+        *source = SourceKind::OneStream;
         return SourceStateStatus::ok;
     }
     return SourceStateStatus::corrupt;
