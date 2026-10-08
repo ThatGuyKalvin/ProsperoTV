@@ -149,12 +149,24 @@ mistaken for the current application.
 
 ## Smoke test
 
-The default skeleton hides the splash screen, renders the Hello World frame,
-loads `/app0/assets/banner.txt`, and remains alive. Close it through the
-home-screen interface.
+This is for the released app: the folder from a release ZIP, or the one built
+from [`opengl-ui/`](../opengl-ui/README.md). The root `make` and `make deploy`
+build the interface of 01.000.015 and earlier, which looks different.
 
-The skeleton intentionally keeps `main` alive. Do not return from `main` or
-call an exit function unless the target loader and application lifecycle
-explicitly support that path.
+1. Launch ProsperoTV. The opening plays once (an old television switches on;
+   any button ends it, and Reduce motion skips it), then the menu is there on
+   Live TV.
+2. On a first launch, keep the console online and leave the app open while it
+   downloads and caches the iptv-org catalog. Later launches show the cached
+   channels immediately. If a newer version is listed on homebrew.page, an
+   update dialog opens over the menu; **Later** leaves everything as it is.
+3. Open a channel with Cross. The tuning screen stays until the channel's
+   first picture; closing playback returns to the same screen and channel. A
+   channel that does not play says why, and is not by itself a failed start:
+   public streams come and go.
+4. Close the app through the home-screen interface.
+
+`app.log` is in `/data/prosperotv/logs/` when the app was given filesystem
+access, and in the title's `/download0/prosperotv/` when it was not.
 
 If launch fails, see [Troubleshooting](TROUBLESHOOTING.md).

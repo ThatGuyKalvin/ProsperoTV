@@ -1,13 +1,16 @@
 # Contributing
 
-Keep the boilerplate small, reproducible, and useful to a first-time native-app
-developer.
+ProsperoTV is a native IPTV client for the PS5. The released interface lives in
+[`opengl-ui/`](opengl-ui/README.md); the catalog, the stores, and the player it
+uses are the shared sources in the rest of the repository. Keep a change small,
+reproducible, and about one thing.
 
 Before opening a change:
 
-1. Run `make test` and `make lint`; add a focused unit or integration regression
-   for behavior changed by the patch.
-2. Run `make`; it must reproduce the clean-room `runtime/libc.prx` digest.
+1. Run `make test`, `make lint`, and `opengl-ui/tools/run-tests.sh`; add a
+   focused unit or integration regression for behavior changed by the patch.
+2. Run `make`; it must reproduce the clean-room `runtime/libc.prx` digest. For
+   a change to the released app, also build it (`opengl-ui/ps5/assemble.sh`).
 3. Confirm the build reports zero static FSELF errors.
 4. Do not commit `.env`, `build/`, `dist/`, `.local/`, proprietary PRXs, game files, SDK
    binaries, generated `runtime/libc.prx`, console dumps, keys, or credentials.
