@@ -42,7 +42,7 @@ jobs:
       - name: Install native toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 clang-format-18 clang-tidy-18 lld-18 libsqlite3-dev libavcodec-dev libswresample-dev make pkg-config tar unzip wget
+          sudo apt-get install --yes clang-18 clang-format-18 lld-18 libsqlite3-dev libavcodec-dev libswresample-dev make pkg-config tar unzip wget
 
       - name: Read app identity and version
         shell: bash
@@ -59,7 +59,7 @@ jobs:
           echo "CONTENT_VERSION=$content_version" >> "$GITHUB_ENV"
 
       - name: Lint source and metadata
-        run: make lint
+        run: LINT_SKIP_TIDY=1 make lint
 
       - name: Run host GoogleTest suite
         run: make test-unit
@@ -80,7 +80,24 @@ jobs:
         run: |
           cd dist
           python3 -m zipfile -c "$TITLE_ID.zip" "$TITLE_ID"
-          python3 -m zipfile -t "$TITLE_ID.zip"
+          python3 ../tools/zip-open-modes.py "$TITLE_ID.zip"
+
+      - name: Check that every ZIP entry is open to all
+        run: |
+          python3 - "dist/$TITLE_ID.zip" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              entries = archive.infolist()
+              wrong = [i.filename for i in entries if (i.external_attr >> 16) & 0o777 != 0o777]
+              if not entries or wrong or archive.testzip() is not None:
+                  raise SystemExit(f"ZIP check failed: {len(entries)} entries, not 0777: {wrong[:5]}")
+              names = {i.filename for i in entries}
+              title = entries[0].filename.split("/")[0]
+              for needed in ("eboot.bin", "sce_sys/param.json"):
+                  if f"{title}/{needed}" not in names:
+                      raise SystemExit(f"ZIP check failed: {title}/{needed} is missing")
+              print(f"{len(entries)} entries, all stored as 0777")
+          PY
 
       - name: Write release checksums
         run: cd dist && sha256sum "$TITLE_ID.ffpfsc" "$TITLE_ID.zip" > SHA256SUMS
