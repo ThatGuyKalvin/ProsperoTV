@@ -204,6 +204,28 @@ const Step kWalk[] = {
     move(Direction::up, 0.2f),
     move(Direction::up, 0.2f),
     press(Action::confirm, 0.4f),
+    // The end of the page: Troubleshooting and its switch, then back to the top.
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.15f),
+    move(Direction::down, 0.7f, "25a-settings-diagnostic-log"),
+    // Turned on: the page says so at the bottom, and so does every other one.
+    press(Action::confirm, 0.7f, "25b-settings-diagnostic-log-on"),
+    press(Action::confirm, 0.4f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.15f),
+    move(Direction::up, 0.3f),
     // ---- About ----
     press(Action::page_next, 1.1f, "32-about"),
     // ---- the states that are hard to reach on purpose ----
