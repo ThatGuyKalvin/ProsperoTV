@@ -9,6 +9,7 @@
 #pragma once
 
 #include "iptv_catalog.h"
+#include "iptv_guide.h"
 #include "iptv_http.h"
 #include "iptv_source_state.h"
 #include "iptv_store.h"
@@ -25,6 +26,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace ptv
@@ -40,6 +42,17 @@ struct PlayRequest
     std::string referrer;
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
+};
+
+// What the guide says about a channel now.
+struct OnNow
+{
+    std::string title;
+    std::string description;
+    long long start = 0;
+    long long stop = 0;
+    std::string next_title;
+    long long next_start = 0;
 };
 
 // What the browse screens show: the live channels, or the films and the
@@ -201,6 +214,9 @@ class Model
     const iptv::MediaDetails *details(std::string_view id) const;
     bool details_failed(std::string_view id) const;
     void want_details(unsigned catalog_index);
+    // What the TV guide has for a live channel at this moment (empty when
+    // the source has no guide, or the guide nothing for it).
+    const OnNow &on_now(const iptv::ChannelView &channel) const;
 
     // ---- one series' episodes (tv/library.cpp) ----
     // Opens the series at that index of the shelf on screen: its episodes
@@ -469,6 +485,7 @@ class Model
             download, // a shelf's list from the account
             episodes, // one series
             details,  // one film or series
+            guide,    // the live channels' TV guide
         };
         Kind kind = Kind::load;
         Shelf shelf = Shelf::movies;
@@ -477,6 +494,8 @@ class Model
         std::string url;       // a series' episode list
         std::string name;
         bool series = false;
+        std::uint64_t source_id = 0;              // guide: the live channels' source
+        std::unordered_set<std::string> channels; // guide: their guide ids
     };
     struct LibraryResult
     {
@@ -488,6 +507,7 @@ class Model
         iptv::Catalog catalog;
         CatalogIndex index;
         iptv::MediaDetails details;
+        std::size_t programmes = 0; // guide: how many were kept
     };
 
     // Swaps the shelf on screen into its place in shelves_ and `shelf` out.
@@ -498,6 +518,10 @@ class Model
     void library_queue(LibraryJob job);
     void library_poll();
     void library_stop();
+    std::string guide_url() const;
+    std::string guide_path() const;
+    void queue_guide(bool only_when_old);
+    void open_guide();
     void finish_library_job();
     static void *library_entry(void *self);
     void run_library();
@@ -617,6 +641,14 @@ class Model
     std::string episodes_error_;
     iptv::Catalog episodes_;
     std::vector<std::uint16_t> seasons_;
+    // The TV guide of the live channels.
+    std::string playlist_guide_url_;  // a playlist's own, from its header
+    mutable iptv::GuideReader guide_; // its lookups reuse one statement
+    std::uint64_t guide_source_ = 0;
+    // The last answer, kept until the programme (or a minute) is over.
+    mutable OnNow on_now_;
+    mutable std::string on_now_id_;
+    mutable long long on_now_until_ = 0;
 
     // ---- playback ----
     bool play_requested_ = false;

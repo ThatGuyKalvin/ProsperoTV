@@ -1273,6 +1273,46 @@ bool ParseExtinf(std::string_view line, std::size_t max_field_bytes, EntryMetada
     return true;
 }
 
+// The first usable address in the header's x-tvg-url, url-tvg or tvg-url attribute. The
+// value may list several guides separated by commas.
+std::string PlaylistGuideUrl(std::string_view header)
+{
+    std::string lowered(header);
+    for (char &character : lowered)
+        character = LowerAscii(character);
+    for (const std::string_view key : {"x-tvg-url", "url-tvg", "tvg-url"})
+    {
+        std::size_t found = 0;
+        while ((found = lowered.find(key, found)) != std::string::npos)
+        {
+            // Skip "x-tvg-url" when looking for "tvg-url".
+            const bool whole = found == 0 || IsAsciiSpace(lowered[found - 1u]);
+            std::size_t index = found + key.size();
+            found = index;
+            if (!whole || index >= lowered.size() || lowered[index] != '=')
+                continue;
+            ++index;
+            if (index >= header.size() || header[index] != '"')
+                continue;
+            const std::size_t end = header.find('"', index + 1u);
+            if (end == std::string_view::npos)
+                break;
+            std::string_view list = header.substr(index + 1u, end - index - 1u);
+            while (!list.empty())
+            {
+                const std::size_t comma = list.find(',');
+                std::string canonical;
+                if (CanonicalizeUrl(Trim(list.substr(0, comma)), &canonical) == UrlError::none)
+                    return canonical;
+                if (comma == std::string_view::npos)
+                    break;
+                list.remove_prefix(comma + 1u);
+            }
+        }
+    }
+    return {};
+}
+
 bool UrlIssue(std::string_view raw, std::size_t max_url_bytes, std::string *canonical,
               ParseIssueCode *issue)
 {
@@ -1426,7 +1466,11 @@ struct M3uParser::State
         }
         if (line.front() == '#')
         {
-            if (StartsWithInsensitive(line, "#EXTINF:"))
+            if (StartsWithInsensitive(line, "#EXTM3U") && report->guide_url.empty())
+            {
+                report->guide_url = PlaylistGuideUrl(line);
+            }
+            else if (StartsWithInsensitive(line, "#EXTINF:"))
             {
                 if (pending)
                 {

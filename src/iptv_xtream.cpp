@@ -407,6 +407,18 @@ bool BuildXtreamApiUrlWithParam(const XtreamCredentials &credentials, std::strin
     return url->size() <= kDefaultMaxUrlBytes;
 }
 
+bool BuildXtreamGuideUrl(const XtreamCredentials &credentials, std::string *url)
+{
+    if (!url || !ValidateXtreamCredentials(credentials))
+        return false;
+    std::string username;
+    std::string password;
+    PercentEncode(credentials.username, &username);
+    PercentEncode(credentials.password, &password);
+    *url = credentials.server_url + "/xmltv.php?username=" + username + "&password=" + password;
+    return url->size() <= kDefaultMaxUrlBytes;
+}
+
 bool BuildXtreamLiveUrl(const XtreamCredentials &credentials, std::string_view stream_id,
                         std::string_view extension, std::string *url)
 {

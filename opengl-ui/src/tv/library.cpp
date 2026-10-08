@@ -11,6 +11,7 @@
 
 #include "tv/model.hpp"
 
+#include "iptv_guide.h"
 #include "iptv_store.h"
 #include "iptv_xtream.h"
 #include "tv/diag.hpp"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,6 +36,19 @@ constexpr std::size_t kLibraryThreadStackBytes = 2u * 1024u * 1024u;
 // A title's details, or a series with all its episodes: small answers.
 constexpr std::size_t kInfoBytes = 4u * 1024u * 1024u;
 constexpr std::size_t kDetailsKept = 48;
+// The guide keeps what is on from two hours ago to three days ahead, and is
+// downloaded again once a day.
+constexpr std::int64_t kGuidePastSeconds = 2 * 3600;
+constexpr std::int64_t kGuideAheadSeconds = 3 * 86400;
+constexpr std::uint64_t kGuideRefreshSeconds = UINT64_C(24) * 60u * 60u;
+constexpr std::uint64_t kMaxGuideBytes = UINT64_C(1024) * 1024u * 1024u;
+
+long read_file(void *context, unsigned char *buffer, std::size_t capacity)
+{
+    std::FILE *file = static_cast<std::FILE *>(context);
+    const std::size_t read = std::fread(buffer, 1, capacity, file);
+    return read == 0 && std::ferror(file) != 0 ? -1 : static_cast<long>(read);
+}
 
 const char *shelf_words(Shelf shelf)
 {
@@ -239,6 +254,101 @@ void Model::library_reset()
     }
     details_.clear();
     close_series();
+}
+
+// ---- the TV guide --------------------------------------------------------------
+
+std::string Model::guide_url() const
+{
+    std::string url;
+    if (active_source_ == iptv::SourceKind::Xtream && xtream_ready())
+        (void)iptv::BuildXtreamGuideUrl(xtream_, &url);
+    else
+        url = playlist_guide_url_;
+    return url;
+}
+
+std::string Model::guide_path() const
+{
+    return cache_dir_ + "/prosperotv-guide.sqlite3";
+}
+
+void Model::open_guide()
+{
+    guide_.Close();
+    on_now_id_.clear();
+    guide_source_ = source_id(active_source_);
+    if (guide_.Open(guide_path(), guide_source_) != iptv::GuideStatus::ok)
+        guide_source_ = 0;
+}
+
+// Asks the worker for the live channels' guide: after a new channel list, or
+// (only_when_old) when the one saved is missing or a day old.
+void Model::queue_guide(bool only_when_old)
+{
+    const std::string url = guide_url();
+    if (url.empty())
+        return;
+    if (only_when_old && guide_.is_open() && guide_source_ == source_id(active_source_))
+    {
+        const std::uint64_t now = platform::unix_time();
+        const std::uint64_t saved = static_cast<std::uint64_t>(guide_.saved_unix());
+        if (saved != 0 && now >= saved && now - saved < kGuideRefreshSeconds)
+            return;
+    }
+    for (const LibraryJob &queued : library_jobs_)
+        if (queued.kind == LibraryJob::Kind::guide)
+            return;
+    if (library_thread_ != nullptr && library_job_.kind == LibraryJob::Kind::guide)
+        return;
+    const iptv::Catalog &live = shelf_ == Shelf::live ? catalog_ : shelves_[0].catalog;
+    LibraryJob job;
+    job.kind = LibraryJob::Kind::guide;
+    job.url = url;
+    job.source_id = source_id(active_source_);
+    for (const iptv::ChannelView channel : live)
+        if (!channel.tvg_id.empty())
+            job.channels.insert(iptv::GuideChannelKey(std::string(channel.tvg_id)));
+    if (job.channels.empty())
+        return;
+    library_queue(std::move(job));
+}
+
+const OnNow &Model::on_now(const iptv::ChannelView &channel) const
+{
+    static const OnNow nothing;
+    if (!guide_.is_open() || channel.tvg_id.empty())
+        return nothing;
+    const long long now = static_cast<long long>(platform::unix_time());
+    if (on_now_id_ == channel.id && now < on_now_until_)
+        return on_now_;
+    on_now_ = {};
+    on_now_id_ = channel.id;
+    on_now_until_ = now + 60;
+    iptv::GuideEntry current;
+    iptv::GuideEntry following;
+    if (guide_.NowNext(std::string(channel.tvg_id), now, &current, &following))
+    {
+        if (current.start <= now)
+        {
+            on_now_.title = std::move(current.title);
+            on_now_.description = std::move(current.description);
+            on_now_.start = current.start;
+            on_now_.stop = current.stop;
+            if (current.stop > now)
+                on_now_until_ = std::min<long long>(on_now_until_, current.stop);
+            on_now_.next_title = std::move(following.title);
+            on_now_.next_start = following.start;
+        }
+        else
+        {
+            // Nothing on now: what comes first is next.
+            on_now_.next_title = std::move(current.title);
+            on_now_.next_start = current.start;
+            on_now_until_ = std::min<long long>(on_now_until_, current.start);
+        }
+    }
+    return on_now_;
 }
 
 // ---- details ------------------------------------------------------------------
@@ -491,8 +601,9 @@ void Model::library_stop()
              library_job_.kind == LibraryJob::Kind::download) &&
             shelf_state_[at] == LibraryState::loading)
             shelf_state_[at] = LibraryState::none;
-        if (library_job_.kind == LibraryJob::Kind::episodes && library_job_.id == series_open_ &&
-            episodes_state_ == LibraryState::loading)
+        if ((library_job_.kind == LibraryJob::Kind::episodes && library_job_.id == series_open_ &&
+             episodes_state_ == LibraryState::loading) ||
+            library_job_.kind == LibraryJob::Kind::guide)
             library_jobs_.push_front(library_job_);
     }
     for (const LibraryJob &queued : library_jobs_)
@@ -501,7 +612,10 @@ void Model::library_stop()
                 shelf_state_[static_cast<unsigned>(queued.shelf)] = LibraryState::none;
     library_jobs_.erase(std::remove_if(library_jobs_.begin(), library_jobs_.end(),
                                        [](const LibraryJob &queued)
-                                       { return queued.kind != LibraryJob::Kind::episodes; }),
+                                       {
+                                           return queued.kind != LibraryJob::Kind::episodes &&
+                                                  queued.kind != LibraryJob::Kind::guide;
+                                       }),
                         library_jobs_.end());
     library_result_ = {};
     library_stop_.store(false, std::memory_order_release);
@@ -620,6 +734,63 @@ void Model::run_library_job(const LibraryJob &job, LibraryResult *result)
             result->error = network_words(fetch.last);
         break;
     }
+    case LibraryJob::Kind::guide:
+    {
+        // Into a file first, as it arrives; then read from there into the
+        // guide's database, keeping the live channels' programmes only.
+        const std::string download = guide_path() + ".download";
+        std::FILE *file = std::fopen(download.c_str(), "wb");
+        if (file == nullptr)
+        {
+            result->error = "The guide could not be stored.";
+            break;
+        }
+        const iptv::http::ListSink sink{
+            [](void *context, const char *data, std::size_t bytes)
+            { return std::fwrite(data, 1, bytes, static_cast<std::FILE *>(context)) == bytes; },
+            file};
+        const iptv::http::FetchResult fetched =
+            platform::fetch_list(job.url.c_str(), sink, iptv::http::kMaxListBytes, &fetch.control);
+        const bool written = std::fclose(file) == 0;
+        if (fetched.status != iptv::http::Status::ok || !written)
+        {
+            result->error = network_words(fetched);
+            std::remove(download.c_str());
+            break;
+        }
+        const std::int64_t now = static_cast<std::int64_t>(platform::unix_time());
+        iptv::GuideWriter writer;
+        std::FILE *saved = std::fopen(download.c_str(), "rb");
+        if (saved != nullptr &&
+            writer.Open(guide_path(), job.source_id, job.channels, now - kGuidePastSeconds,
+                        now + kGuideAheadSeconds) == iptv::GuideStatus::ok)
+        {
+            iptv::GuideImportReport report;
+            const bool complete =
+                iptv::ImportGuide(&read_file, saved, &writer, kMaxGuideBytes, &report);
+            result->programmes = writer.stored();
+            result->ok = complete && writer.stored() != 0 &&
+                         !library_stop_.load(std::memory_order_acquire) &&
+                         writer.Commit(now) == iptv::GuideStatus::ok;
+            if (!result->ok)
+            {
+                writer.Abort();
+                result->error = complete ? "The guide has nothing for these channels."
+                                         : "The guide could not be read.";
+            }
+            diag::event("guide: %llu bytes compressed=%d programmes=%zu kept=%d",
+                        static_cast<unsigned long long>(report.bytes), report.compressed ? 1 : 0,
+                        result->programmes, result->ok ? 1 : 0);
+        }
+        else
+        {
+            result->error = "The guide could not be stored.";
+        }
+        if (saved != nullptr)
+            std::fclose(saved);
+        std::remove(download.c_str());
+        break;
+    }
     case LibraryJob::Kind::load:
         break;
     }
@@ -724,6 +895,10 @@ void Model::finish_library_job()
         details_.push_front({job.id, std::move(result.details), !result.ok});
         if (details_.size() > kDetailsKept)
             details_.pop_back();
+        break;
+    case LibraryJob::Kind::guide:
+        if (result.ok && job.source_id == source_id(active_source_))
+            open_guide();
         break;
     }
 }

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <iterator>
 #include <vector>
 
@@ -754,7 +755,26 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     list.pop_opacity();
 
     list.push_opacity(appear(2));
-    const std::string place = place_line(channel);
+    // What the guide says is on, else where the channel is from.
+    const OnNow &on = shared_.model.on_now(channel);
+    std::string place = place_line(channel);
+    if (!on.title.empty() || !on.next_title.empty())
+    {
+        const auto clock = [](long long when)
+        {
+            const std::time_t time = static_cast<std::time_t>(when);
+            char text[8] = "--:--";
+            if (const std::tm *local = std::localtime(&time))
+                std::strftime(text, sizeof(text), "%H:%M", local);
+            return std::string(text);
+        };
+        place.clear();
+        if (!on.title.empty())
+            place = "Now  " + clock(on.start) + " \xE2\x80\x93 " + clock(on.stop) + "  " + on.title;
+        if (!on.next_title.empty())
+            place += std::string(place.empty() ? "" : "   \xC2\xB7   ") + "Next  " +
+                     clock(on.next_start) + "  " + on.next_title;
+    }
     const ui::FontRef &place_face = face_for(fonts, fonts.regular, place);
     ui::text(list, place_face, place_face.font->fit(readable(place_face, place), 26.0f, kHeroText),
              x, 282.0f + rise(2), 26.0f, theme.text_muted);

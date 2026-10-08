@@ -100,6 +100,8 @@
 - Browse an Xtream account's movies and series in tabs of their own, with each
   title's plot, genre, rating, runtime and the provider's picture size, and a
   series' seasons and episodes in a drawer that starts at the next one to watch.
+- See what is on now and next for live channels from the source's XMLTV guide
+  (Xtream's own, or the one a playlist names; plain or gzip).
 - Return to the same screen, group, page, and channel after playback closes.
 - Show a tuning screen from Cross until the channel's first picture.
 - Keep a diagnostic log on request: a switch in Settings, off by default,
@@ -339,6 +341,7 @@ src/iptv_stream.cpp           MPEG-TS demux and H.264/HEVC access-unit assembly
 src/iptv_native_backend.c     Native video/audio decode and presentation backend
 src/iptv_catalog.cpp          Extended M3U catalog parser
 src/iptv_store.cpp            SQLite last-good catalog persistence
+src/iptv_guide.cpp            XMLTV guide import (iptv_xmltv, iptv_inflate) and now/next lookups
 src/iptv_webm.cpp             Bounded WebM/VP9 parser
 include/                      Public application and media interfaces
 ui/                           Earlier interface (retired): RML, RCSS, fonts, and icons

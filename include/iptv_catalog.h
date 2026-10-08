@@ -67,6 +67,8 @@ struct ParseReport {
     // in it, the others were left out.
     bool catalog_full = false;
     std::vector<ParseDiagnostic> diagnostics;
+    // The TV guide named in a playlist's #EXTM3U header (x-tvg-url, url-tvg or tvg-url).
+    std::string guide_url;
 };
 
 enum class PlaybackStatus : std::uint8_t {

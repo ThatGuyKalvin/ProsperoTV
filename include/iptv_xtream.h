@@ -81,6 +81,8 @@ bool BuildXtreamApiUrl(const XtreamCredentials &credentials, std::string_view ac
 // Adds one extra query parameter (for example category_id or series_id) to an API URL.
 bool BuildXtreamApiUrlWithParam(const XtreamCredentials &credentials, std::string_view action,
                                 std::string_view key, std::string_view value, std::string *url);
+// The provider's XMLTV guide: server/xmltv.php?username=&password=.
+bool BuildXtreamGuideUrl(const XtreamCredentials &credentials, std::string *url);
 bool BuildXtreamLiveUrl(const XtreamCredentials &credentials, std::string_view stream_id,
                         std::string_view extension, std::string *url);
 // Movie and episode URLs default to the HLS container, which the player supports.
