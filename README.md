@@ -310,7 +310,8 @@ decoder telemetry, and teardown checks.
 
 GitHub Actions runs linting, the host tests, and deterministic runtime
 reproduction on every push, and checks that a version tag matches
-`contentVersion`. It does not publish: a release is the app built from
+`contentVersion`. A pull request's build is uploaded under its number and
+commit: see [Pull-request builds](docs/PULL_REQUEST_BUILDS.md). It does not publish: a release is the app built from
 `opengl-ui/` at the tagged commit, run on consoles, and attached with its
 `SHA256SUMS`.
 

@@ -351,6 +351,46 @@ int main() {
         ):
             self.assertIn(required, build)
 
+    def test_pull_request_builds_are_named_and_labelled(self):
+        workflow = (ROOT / ".github/workflows/tooling.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'echo "artifact=${GITHUB_REPOSITORY##*/}-PR$PR_NUMBER-$short" >> "$GITHUB_OUTPUT"',
+            workflow,
+        )
+        self.assertIn('echo "BUILD_LABEL=PR $PR_NUMBER, $short" >> "$GITHUB_ENV"', workflow)
+        self.assertIn("PR_HEAD: ${{ github.event.pull_request.head.sha }}", workflow)
+        self.assertIn("name: ${{ steps.label.outputs.artifact }}", workflow)
+        # Every other build keeps the name it had.
+        self.assertIn('echo "artifact=prospero-tv-$GITHUB_SHA-release" >> "$GITHUB_OUTPUT"', workflow)
+        # A contributor's code is never built with write access or secrets.
+        self.assertNotIn("pull_request_target:", workflow)
+
+        build = (ROOT / "tools/build.sh").read_text(encoding="utf-8")
+        self.assertIn('> "$app/build-label.txt"', build)
+        self.assertLess(build.index("BUILD_LABEL must be"), build.index("setup-native-dependencies.sh"))
+        start = build.index("if [[ -n ${BUILD_LABEL:-} ]]; then")
+        check = build[start : build.index("\nfi\n", start) + 4]
+        for label, accepted in (
+            ("PR 12, 1a2b3c4", True),
+            ("pacing_test #2 v1.0-b", True),
+            ("x" * 40, True),
+            ("x" * 41, False),
+            ("PR 12; rm -rf", False),
+            ("two\nlines", False),
+            ("$(id)", False),
+            ("a/b", False),
+        ):
+            result = subprocess.run(
+                ["bash", "-c", check],
+                env={**os.environ, "BUILD_LABEL": label},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode == 0, accepted, label)
+        # The version shown and compared is param.json's alone.
+        self.assertNotIn("contentVersion", workflow.split("Name this build")[1].split("- name:")[0])
+
     def test_release_is_media_and_topbar_uses_the_app_icon(self):
         param = json.loads((ROOT / "sce_sys/param.json").read_text(encoding="utf-8"))
         self.assertEqual(param["applicationCategoryType"], 65536)
