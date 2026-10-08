@@ -1,10 +1,17 @@
 # Deployment
 
-This project creates a directory-style homebrew application and optional
-filesystem images. Its Makefile can update the directory or upload an image
-below `/data/homebrew` over FTP. It does not configure the console, start
-payloads, register titles, launch applications, or create a signed retail
-package.
+The released app is the interface in [`opengl-ui/`](../opengl-ui/README.md),
+since 01.000.020. It reaches a console as a complete title folder under
+`/data/homebrew`: the folder from a release ZIP, or the one built here. This
+repository has no deploy command for that app; the folder is copied over FTP.
+
+The repository root still builds the interface of 01.000.015 and earlier, and
+its `make deploy` uploads that build. It is described
+[at the end](#the-earlier-interface-root-build) and is not how a release is
+installed.
+
+Nothing here configures the console, starts payloads, registers titles, or
+creates a signed retail package.
 
 ## Requirements
 
@@ -12,50 +19,144 @@ Use a console you own with an already configured, compatible homebrew
 environment and loader. Follow that loader's documentation for setup and
 supported input formats. This repository does not configure the console.
 
-Keep loader, mount, and FTP services on a trusted local network. The automated
-path uses Python 3's standard-library FTP client and requires an already-running
-FTP service on the console.
+Keep loader, mount, and FTP services on a trusted local network. Copying a
+folder needs an already-running FTP service on the console (port `2121` in the
+setups this project was validated on) and any FTP client.
 
-## One-command development deployment
+## Install a release
 
-Build and update the title folder through the default FTP port `2121`:
+Tagged GitHub Releases provide `PPSA99003.zip`, which holds the complete
+`PPSA99003` title folder, and `SHA256SUMS`. A pull request's build is the same
+ZIP under another artifact name: see
+[Pull-request builds](PULL_REQUEST_BUILDS.md).
+
+1. Check the download: `sha256sum -c SHA256SUMS`.
+2. Fully close ProsperoTV if it is running.
+3. Extract the ZIP and upload the contained `PPSA99003` folder to
+   `/data/homebrew`, producing `/data/homebrew/PPSA99003/eboot.bin`.
+4. Restart ShadowMountPlus or the PS5, wait for the title to be rediscovered,
+   and launch it from the Media section of the home screen.
+
+Do not upload the ZIP itself or only `eboot.bin`: the app also needs its
+runtime module, fonts, sounds, artwork, metadata, and the two helper programs
+beside `eboot.bin` (`lapy.elf` and `self-updater.elf`). Do not keep a folder
+and an image with the same title ID in scan paths at the same time; coming
+from an installed `PPSA99003.ffpfsc`, delete it first (see
+[Updating ProsperoTV](../README.md#updating-prosperotv)).
+
+The ZIP stores every entry with permissions 0777, because the console only
+starts an app whose files are open to every user. A tool that keeps the stored
+permissions while unpacking therefore still produces a folder that starts.
+
+From 01.000.020 on, an installed folder updates itself when the app has
+filesystem access; copying by hand is needed for the first install, for a
+build of your own, and for an app without that access.
+
+## Build the released app
+
+Building requires Linux, WSL, or a Linux CI runner; the packages are listed in
+the [README](../README.md#requirements) and in the `app` job of
+[`.github/workflows/tooling.yml`](../.github/workflows/tooling.yml), which is
+the build every release comes from. From the repository root:
 
 ```bash
-make deploy PS5_HOST=192.168.1.100
+opengl-ui/tools/run-tests.sh           # the interface and its logic, on the PC
+opengl-ui/ps5/assemble.sh              # make the build tree beside the repository
+make -C ../prosperotv-ui-build app     # compile, link, sign, assemble
 ```
 
-The default folder deployment:
+`assemble.sh` takes the build tree's path as an optional argument; the default
+is `../prosperotv-ui-build`. It fetches every dependency at its pinned version.
+The outputs are:
 
-1. builds `dist/<TITLE_ID>/` from the current source;
-2. uploads each file beside its destination under a hidden `.upload` name;
-3. replaces that file only after its transfer completes;
-4. publishes `eboot.bin` and then `sce_sys/param.json` last; and
-5. verifies that both required files appear in the remote directory.
+```text
+../prosperotv-ui-build/dist/PPSA99003/       complete title folder
+../prosperotv-ui-build/dist/PPSA99003.zip    the same folder as a ZIP
+```
 
-The FTP client uses current-directory `MLSD` checks and accepts any successful
-2xx completion for file deletion. This accommodates the homebrew `ftpsrv`
-behavior used by the validated 6.02 and 12.70 environments while preserving
-the temporary-upload and required-file gates.
+The workflow runs `python3 tools/zip-open-modes.py <ZIP>` over that ZIP before
+it uploads or publishes it, which rewrites the stored permissions to 0777. Do
+the same to a ZIP you pass on.
 
-Keeping `/data/homebrew/<TITLE_ID>/` itself in place preserves ShadowMountPlus's
-existing nullfs source while updating what the next launch reads. Fully close
-the application before deploying and do not launch it until the command
-finishes. Files removed from the local build are not deleted remotely; clean
-the title directory with `make undeploy` when an exact reset is required.
-
-Select an image or a non-default port with Make variables:
+Two variants of the build, set when the tree is assembled:
 
 ```bash
-make deploy PS5_HOST=192.168.1.100 DEPLOY_FORMAT=ffpfsc
-make deploy PS5_HOST=192.168.1.100 FTP_PORT=2121 DEPLOY_FORMAT=ffpkg
+TV_TEST_TITLE=PPSA88021 opengl-ui/ps5/assemble.sh   # a disposable title beside the released app
+TV_DEBUG_TRACE=1 opengl-ui/ps5/assemble.sh          # the app with its diagnostic log always on
 ```
 
-Image deployment remains useful for distribution testing. An already-mounted
-image with the same pathname may remain cached by ShadowMountPlus, so folder
-deployment is the recommended repeated development workflow. Do not keep a
-folder and an image with the same title ID in scan paths at the same time.
+The test title has its own folder under `/data/homebrew`, so trying a build
+does not replace the installed app.
 
-Supported variables are:
+## Copy a built folder to the console
+
+1. Fully close the app and any remaining crash dialog.
+2. Upload the whole `dist/<TITLE_ID>/` folder to `/data/homebrew/<TITLE_ID>/`
+   with an FTP client, replacing the files that are there. Finish with
+   `eboot.bin` and `sce_sys/param.json`, so the title is complete only when
+   everything else has landed.
+3. Wait for the mount service to report the title ready (restart
+   ShadowMountPlus or the PS5 if it does not pick the change up), then launch
+   it by hand.
+4. Fully close the app before copying again.
+
+Files that a newer build no longer has are not removed by an upload; remove
+the title folder first when an exact copy matters (see the next section).
+Update `contentVersion` in `sce_sys/param.json` for a release-worthy change;
+routine copies do not need a bump.
+
+For scripted runs of the test title, `opengl-ui/tools/console-run.py
+<console address> <app folder> <results> <script>` uploads the folder with
+every file verified, launches the title, and collects its report and logs. It
+needs the launch helper of the separate
+[PS5 Homebrew Development Protocol](https://github.com/blackbearreloaded/ps5-homebrew-dev-protocol)
+(`PS5_PROTOCOL`); its header lists the environment it reads, and the scripts
+are in `opengl-ui/ps5/scripts/`. See
+[`opengl-ui/README.md`](../opengl-ui/README.md).
+
+## Remove the staged copy
+
+Fully close the application, then remove the current `titleId` from the FTP
+staging area:
+
+```bash
+make undeploy PS5_HOST=192.168.1.100
+```
+
+The command works on the title ID in the root `sce_sys/param.json`
+(`PPSA99003`), whichever interface the installed folder holds. It recursively
+removes only `/data/homebrew/<TITLE_ID>/`, and deletes exact same-ID `.ffpkg`
+and `.ffpfsc` files plus interrupted-upload temporary images. It never deletes
+the `/data/homebrew` root or another title, and it does not touch the app's
+data in `/data/prosperotv`. Preview the resolved targets without a network
+request by adding `DEPLOY_DRY_RUN=1`; `FTP_PORT`, `PS5_FTP_USER`, and
+`PS5_FTP_PASSWORD` are as in the table below.
+
+This is deliberately named **undeploy**, not uninstall: FTP removal does not
+unregister the title from the PS5 Shell database. A stale home-screen entry may
+remain until the loader refreshes or dedicated, separately authorized cleanup
+tooling unregisters it. The command fails if the FTP server cannot enumerate a
+directory safely or if an active mount prevents removal.
+
+## The earlier interface (root build)
+
+The root `Makefile` builds the interface of 01.000.015 and earlier. It shares
+the catalog, the stores, and the player with the released app and is kept for
+their tests; it is no longer released. It has the **same title ID**, so
+deploying it replaces an installed release with the earlier interface.
+
+```bash
+make                                   # dist/<TITLE_ID>/
+make deploy PS5_HOST=192.168.1.100     # build that folder and upload it over FTP
+```
+
+`make deploy` (`tools/deploy.sh`) builds `dist/<TITLE_ID>/`, uploads each file
+under a hidden `.upload` name and replaces the destination only after its
+transfer completes, publishes `eboot.bin` and then `sce_sys/param.json` last,
+and verifies that both are in the remote directory. It uploads only: it does
+not launch the app, and it does not delete remote files the build no longer
+has. Fully close the application before deploying and do not launch it until
+the command finishes.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -66,92 +167,25 @@ Supported variables are:
 | `PS5_FTP_PASSWORD` | `codex` | FTP password |
 | `DEPLOY_DRY_RUN` | `0` | Use `1` to build and print the target without networking |
 
-For repeated local work, copy `.env.example` to the ignored `.env` file and
-set `PS5_HOST`, `FTP_PORT`, and `DEPLOY_FORMAT` there. Command-line Make values
-still override file defaults.
+Copy `.env.example` to the ignored `.env` file to keep `PS5_HOST`, `FTP_PORT`,
+and `DEPLOY_FORMAT` between runs; command-line Make values still override it.
+`make deploy PS5_HOST=192.0.2.1 DEPLOY_DRY_RUN=1` checks the local build and
+the resolved destination without contacting a console.
 
-For example, validate local packaging and the resolved destination without
-contacting a console:
-
-```bash
-make deploy PS5_HOST=192.0.2.1 DEPLOY_DRY_RUN=1
-```
-
-## Remove the staged development copy
-
-Fully close the application, then remove the current `titleId` from the FTP
-staging area:
-
-```bash
-make undeploy PS5_HOST=192.168.1.100
-```
-
-The command validates `sce_sys/param.json`, recursively removes only
-`/data/homebrew/<TITLE_ID>/`, and deletes exact same-ID `.ffpkg` and `.ffpfsc`
-files plus interrupted-upload temporary images. It never deletes the
-`/data/homebrew` root or another title. Preview the resolved targets without a
-network request by adding `DEPLOY_DRY_RUN=1`.
-
-This is deliberately named **undeploy**, not uninstall: FTP removal does not
-unregister the title from the PS5 Shell database. A stale home-screen entry may
-remain until the loader refreshes or dedicated, separately authorized cleanup
-tooling unregisters it. The command fails if the FTP server cannot enumerate a
-directory safely or if an active mount prevents removal.
-
-## Recommended edit-test loop
-
-1. Fully close the previous application and any remaining crash dialog.
-2. Confirm the console's FTP and mount services are ready.
-3. Edit the source. Update `contentVersion` in `sce_sys/param.json` for a
-   release-worthy change; routine folder deployments do not require a bump.
-4. Run `make deploy PS5_HOST=<console-address>`.
-5. Wait for the mount service to report the title ready, then launch it
-   manually.
-6. Observe the result and fully close the application before deploying again.
-
-Keeping launch and close actions manual makes the default command predictable
-and avoids replacing a package while its previous title remains active.
-
-## Manual build and stage
-
-Tagged GitHub Releases provide the folder layout for ShadowMountPlus:
-
-- extract `<TITLE_ID>.zip` locally and upload the contained `<TITLE_ID>` folder
-  to `/data/homebrew`, producing `/data/homebrew/<TITLE_ID>/eboot.bin`.
-
-Do not upload the ZIP itself, upload only `eboot.bin`, or keep folder and image
-forms with the same title ID in scan paths simultaneously. Fully close the app
-before replacement, then restart ShadowMountPlus or the PS5 and wait for the
-title to be rediscovered before launching it.
-
-1. Build the exact format accepted by your loader:
-
-   ```bash
-   make          # directory form
-   make ffpkg    # directory plus UFS2 image
-   make ffpfsc   # directory plus compressed image
-   ```
-
-2. Choose one complete output supported by the loader:
-
-   - `dist/<TITLE_ID>/`: directory form;
-   - `dist/<TITLE_ID>.ffpkg`: UFS2 image;
-   - `dist/<TITLE_ID>.ffpfsc`: compressed image.
-
-3. For directory deployment, stage the entire `dist/<TITLE_ID>/` tree. Do not
-   upload only `eboot.bin`.
-4. Wait for the loader to report that the title is ready, then launch it from
-   the Media section of the home screen.
-
-Use `make packages` only when both optional image formats are needed. Rebuild
-the selected format immediately before deployment so an older package is not
-mistaken for the current application.
+The image formats are a local option of this root build only: `make ffpkg`,
+`make ffpfsc`, and `make packages` write `dist/<TITLE_ID>.ffpkg` and
+`dist/<TITLE_ID>.ffpfsc`, and `DEPLOY_FORMAT=ffpfsc` or `ffpkg` uploads one
+(see [Build output formats](FFPKG.md)). CI and releases carry the ZIP only, and
+an app installed as an image cannot update itself.
 
 ## Smoke test
 
-This is for the released app: the folder from a release ZIP, or the one built
-from [`opengl-ui/`](../opengl-ui/README.md). The root `make` and `make deploy`
-build the interface of 01.000.015 and earlier, which looks different.
+This is for the released app: the folder from a release ZIP
+([Install a release](#install-a-release)), or the one built from
+[`opengl-ui/`](../opengl-ui/README.md)
+([Build the released app](#build-the-released-app)). The root `make` and
+`make deploy` build the interface of 01.000.015 and earlier, which looks
+different.
 
 1. Launch ProsperoTV. The opening plays once (an old television switches on;
    any button ends it, and Reduce motion skips it), then the menu is there on
@@ -169,4 +203,5 @@ build the interface of 01.000.015 and earlier, which looks different.
 `app.log` is in `/data/prosperotv/logs/` when the app was given filesystem
 access, and in the title's `/download0/prosperotv/` when it was not.
 
-If launch fails, see [Troubleshooting](TROUBLESHOOTING.md).
+If launch fails, or `make deploy` cannot reach the console, see
+[Troubleshooting](TROUBLESHOOTING.md).
