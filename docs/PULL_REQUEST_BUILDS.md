@@ -4,7 +4,7 @@ Every pull request is built in full by the [Build workflow](../.github/workflows
 lint, host tests, the runtime reproduction, and the packaging steps. The result is kept for
 14 days under a name that says which pull request and which commit it came from.
 
-The workflow builds the app at the root of the repository (`src/`, through `make ffpfsc`).
+The workflow builds the app at the root of the repository (`src/`, through `make app`).
 The released interface is built from `opengl-ui/` by the same run's `app` job and is
 **not** what this artifact contains: that one is uploaded as
 `ProsperoTV-app-PR<number>-<commit>` and holds `PPSA99003.zip`, the folder to try on a
@@ -37,8 +37,7 @@ requests are named after the fork.
    **Actions**).
 2. Download the artifact named `ProsperoTV-PR<number>-<commit>` from the run's
    **Artifacts** list. GitHub requires a signed-in account for this.
-3. Unpack it: it holds `PPSA99003.zip` (the app folder), `PPSA99003.ffpfsc` (its image) and
-   `SHA256SUMS`. Check the files with `sha256sum -c SHA256SUMS`; installing is described in
+3. Unpack it: it holds `PPSA99003.zip` (the app folder) and `SHA256SUMS`. Check the files with `sha256sum -c SHA256SUMS`; installing is described in
    [Deployment](DEPLOYMENT.md).
 
 A first-time contributor's pull request does not build until a maintainer approves the

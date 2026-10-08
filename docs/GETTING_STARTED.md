@@ -229,7 +229,8 @@ The optional packaging tools are fetched only on first use. See
 [Build output formats](FFPKG.md).
 
 `runtime/libc.prx` is a generated, ignored file included in the application.
-Tagged GitHub Releases publish the complete compressed `.ffpfsc` image, the
-complete title folder as a `.zip`, and their `SHA256SUMS`.
+Tagged GitHub Releases publish the complete title folder as a `.zip` and its
+`SHA256SUMS`; the image formats remain a local option
+([Build output formats](FFPKG.md)).
 
 Continue with [Deployment](DEPLOYMENT.md).

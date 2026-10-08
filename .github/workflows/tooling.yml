@@ -93,8 +93,9 @@ jobs:
       - name: Verify generated runtime is unchanged
         run: cd runtime && sha256sum -c libc.prx.sha256
 
-      - name: Build compressed release image
-        run: make ffpfsc
+      # The ZIP is the one format builds and releases carry; no image is built here.
+      - name: Build the app folder
+        run: make app
 
       - name: Package folder release
         run: |
@@ -120,14 +121,13 @@ jobs:
           PY
 
       - name: Write release checksums
-        run: cd dist && sha256sum "$TITLE_ID.ffpfsc" "$TITLE_ID.zip" > SHA256SUMS
+        run: cd dist && sha256sum "$TITLE_ID.zip" > SHA256SUMS
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.label.outputs.artifact }}
           path: |
-            dist/${{ env.TITLE_ID }}.ffpfsc
             dist/${{ env.TITLE_ID }}.zip
             dist/SHA256SUMS
           if-no-files-found: error

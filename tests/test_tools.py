@@ -351,6 +351,17 @@ int main() {
         ):
             self.assertIn(required, build)
 
+    def test_automation_builds_the_zip_only(self):
+        workflow = (ROOT / ".github/workflows/tooling.yml").read_text(encoding="utf-8")
+        self.assertNotIn("ffpfsc", workflow.lower())
+        self.assertNotIn("ffpkg", workflow.lower())
+        self.assertIn("run: make app", workflow)
+        self.assertIn('sha256sum "$TITLE_ID.zip" > SHA256SUMS', workflow)
+        self.assertIn('assets=("release/$TITLE_ID.zip" "release/SHA256SUMS")', workflow)
+        # The image stays a local option.
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("bash tools/build.sh Ffpfsc", makefile)
+
     def test_pull_request_builds_are_named_and_labelled(self):
         workflow = (ROOT / ".github/workflows/tooling.yml").read_text(encoding="utf-8")
         self.assertIn(

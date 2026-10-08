@@ -243,7 +243,7 @@ GitHub Releases provide `PPSA99003.zip`, which contains the complete
 together.
 
 The repository root still builds the interface of 01.000.015 and earlier
-(`make check`, `make ffpfsc`); it shares the catalog, stores, and player with
+(`make check`, `make app`); it shares the catalog, stores, and player with
 the released app and is kept for their tests. It is no longer released.
 
 ## Install and development deployment
