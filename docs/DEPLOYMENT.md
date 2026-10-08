@@ -114,9 +114,8 @@ and avoids replacing a package while its previous title remains active.
 
 ## Manual build and stage
 
-Tagged GitHub Releases provide two equivalent ShadowMountPlus layouts:
+Tagged GitHub Releases provide the folder layout for ShadowMountPlus:
 
-- copy `<TITLE_ID>.ffpfsc` directly to `/data/homebrew`; or
 - extract `<TITLE_ID>.zip` locally and upload the contained `<TITLE_ID>` folder
   to `/data/homebrew`, producing `/data/homebrew/<TITLE_ID>/eboot.bin`.
 

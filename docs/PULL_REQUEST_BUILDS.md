@@ -12,7 +12,7 @@ console.
 
 ## What a pull request produces
 
-| | Pull request | Push to `main`, tag, manual run |
+| | Pull request | Tag, or a run started by hand |
 | --- | --- | --- |
 | Artifact name | `ProsperoTV-PR<number>-<commit>` | `prospero-tv-<commit>-release` |
 | `<commit>` | First seven characters of the pull request's own head commit | The full commit that was built |

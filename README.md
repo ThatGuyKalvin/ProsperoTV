@@ -313,13 +313,15 @@ acceptance is performed separately on PS5 with bounded channel samples,
 decoder telemetry, and teardown checks.
 
 GitHub Actions runs linting, the host tests, and deterministic runtime
-reproduction on every push, and checks that a version tag matches
+reproduction on every pull request and version tag, and checks that the tag matches
 `contentVersion`. A pull request's build is uploaded under its number and
 commit: see [Pull-request builds](docs/PULL_REQUEST_BUILDS.md). The same run
 builds the released app from `opengl-ui/` on a clean machine, fetching every
 dependency at its pinned version. A version tag also publishes: the ZIP that
 run built is attached to a GitHub Release with its `SHA256SUMS` and the notes
-in `docs/releases/<version>.md`. No release is built anywhere else.
+in `docs/releases/<version>.md`. No release is built anywhere else. A push to
+`main` builds nothing; a build on `main` is started by hand (**Actions**,
+**Build**, **Run workflow**).
 
 ## Source layout
 

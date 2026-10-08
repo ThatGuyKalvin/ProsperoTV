@@ -1,6 +1,7 @@
 # ps5-native-app-boilerplate - ProsperoTV lint, test, build, and release validation.
 #
-# Two builds on every push and pull request: the shared code with the earlier
+# Two builds on every pull request, version tag, and run started by hand (a push
+# to main builds nothing): the shared code with the earlier
 # interface (job "build": lint, tests, the clean-room runtime), and the released
 # app from opengl-ui/ (job "app"). A version tag, which must equal param.json's
 # contentVersion, also publishes: job "release" attaches the ZIP job "app"

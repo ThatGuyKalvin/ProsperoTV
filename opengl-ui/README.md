@@ -12,7 +12,7 @@ It asks for filesystem access the way ProsperoEden does, keeps its files in
 `/data/prosperotv`, and makes every request with libcurl.
 
 **This is the released app.** The workflow's `app` job tests and builds this
-folder on every push and pull request, and on a version tag its ZIP becomes
+folder on every pull request, version tag, and run started by hand, and on a version tag its ZIP becomes
 the GitHub Release. The repository's root `Makefile` still builds the
 interface of 01.000.015 and earlier, which shares those sources and keeps
 their tests; it builds nothing of this folder.
