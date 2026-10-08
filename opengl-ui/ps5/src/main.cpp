@@ -41,6 +41,7 @@
 
 #include <GL/glcorearb.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -689,15 +690,31 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
             write_autotest_marker(archive_path, marker, marker_bytes);
             std::remove(kLatestReceiptPath);
         }
-        outcome.result =
-            stop_after_ms != 0
-                ? iptv_player_run_controlled(request.urls[candidate].c_str(),
-                                             request.channel_name.c_str(), stop_after_ms)
-                : iptv_player_run_with_headers(
-                      request.urls[candidate].c_str(), request.channel_name.c_str(),
-                      request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
-                      request.referrer.empty() ? nullptr : request.referrer.c_str(),
-                      request.reconnect_live ? 1 : 0);
+        if (stop_after_ms == 0)
+        {
+            // A film or an episode has the player's controls for a file and
+            // starts where it was left off; a live channel's banner says
+            // what the guide has on now and next.
+            iptv_player_options_t options{};
+            options.url = request.urls[candidate].c_str();
+            options.channel_name = request.channel_name.c_str();
+            options.user_agent = request.user_agent.empty() ? nullptr : request.user_agent.c_str();
+            options.referrer = request.referrer.empty() ? nullptr : request.referrer.c_str();
+            options.reconnect_live = request.reconnect_live ? 1 : 0;
+            options.vod = request.vod ? 1 : 0;
+            options.start_position_us = request.start_position_us;
+            options.subtitle = request.subtitle.empty() ? nullptr : request.subtitle.c_str();
+            options.info_now = request.info_now.empty() ? nullptr : request.info_now.c_str();
+            options.info_next = request.info_next.empty() ? nullptr : request.info_next.c_str();
+            options.info_start_unix = request.info_start_unix;
+            options.info_end_unix = request.info_end_unix;
+            outcome.result = iptv_player_run_options(&options);
+        }
+        else
+        {
+            outcome.result = iptv_player_run_controlled(
+                request.urls[candidate].c_str(), request.channel_name.c_str(), stop_after_ms);
+        }
         if (archive_path != nullptr)
         {
             append_autotest_receipt(archive_path, kLatestReceiptPath);
@@ -1098,6 +1115,26 @@ int main()
         if (history != iptv::StoreStatus::ok)
             say("[TV] history channel=%s result=%d store=%u", request.channel_id.c_str(),
                      outcome.result, static_cast<unsigned>(history));
+        // Where a film or an episode stopped, to go on from there next time
+        // (one barely begun or watched to its end is forgotten instead).
+        if (request.vod && outcome.result >= 0)
+        {
+            const long long position = iptv_player_last_position_us();
+            const long long duration = iptv_player_last_duration_us();
+            if (position >= 0)
+            {
+                const auto secs = [](long long us)
+                {
+                    return static_cast<std::uint32_t>(
+                        std::min<long long>(us / 1000000, UINT32_MAX));
+                };
+                const iptv::StoreStatus resume = iptv::SaveResumePosition(
+                    iptv::kDefaultPlaybackHistoryPath, request.source_id, request.channel_id,
+                    secs(position), duration > 0 ? secs(duration) : request.duration_secs);
+                say("[TV] resume channel=%s at=%llds of %llds store=%u", request.channel_id.c_str(),
+                    position / 1000000, duration / 1000000, static_cast<unsigned>(resume));
+            }
+        }
         last = {};
         last.result = outcome.result;
         if (outcome.result < 0)

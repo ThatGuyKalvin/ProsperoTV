@@ -70,6 +70,11 @@ struct StreamRequest
     int http_status = 0;
     int native_error = 0;
     bool open = false;
+    // From the final response; -1 when the server did not say. range_start is the offset of
+    // the first byte returned (0 for a whole-file 200 reply) and total_length the file size.
+    std::int64_t content_length = -1;
+    std::int64_t range_start = -1;
+    std::int64_t total_length = -1;
     char effective_url[kMaxUrlBytes + 1u] = {};
     char error_response[kMaxErrorResponseBytes + 1u] = {};
 };
@@ -171,9 +176,17 @@ FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes
                     const RequestHeaders *headers = nullptr,
                     const RequestControl *control = nullptr);
 
-// Opens a bounded-time streaming response. NetworkInit must have succeeded.
+// Opens a bounded-time streaming response. NetworkInit must have succeeded. A range_start of
+// zero or more asks for the file from that byte on ("Range: bytes=N-"); the caller checks
+// stream->range_start, since a server may ignore the request and send the whole file.
 Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
-                  const RequestHeaders *headers = nullptr);
+                  const RequestHeaders *headers = nullptr, std::int64_t range_start = -1);
+
+// Header parsers; they perform no network access. ParseContentRange reads
+// "bytes first-last/total", where total may be "*" (reported as -1).
+bool ParseContentRange(const char *value, std::size_t bytes, std::int64_t *first,
+                       std::int64_t *last, std::int64_t *total);
+bool ParseContentLength(const char *value, std::size_t bytes, std::int64_t *length);
 int ReadStream(StreamRequest *stream, void *buffer, std::size_t bytes);
 void CloseStream(StreamRequest *stream);
 

@@ -42,6 +42,17 @@ struct PlayRequest
     std::string referrer;
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
+    // A film or an episode: played from start_position_us (a resumed one),
+    // with its controls for a file, and its place saved when it stops.
+    bool vod = false;
+    long long start_position_us = 0;
+    std::uint32_t duration_secs = 0;
+    std::string subtitle; // an episode: its number and title under the series' name
+    // A live channel: what the guide says is on now, and what follows.
+    std::string info_now;
+    std::string info_next;
+    long long info_start_unix = 0;
+    long long info_end_unix = 0;
 };
 
 // What the guide says about a channel now.
@@ -214,6 +225,8 @@ class Model
     const iptv::MediaDetails *details(std::string_view id) const;
     bool details_failed(std::string_view id) const;
     void want_details(unsigned catalog_index);
+    // Where a film or an episode stopped, in seconds; 0 when it was not.
+    std::uint32_t resume_secs(std::string_view id) const;
     // What the TV guide has for a live channel at this moment (empty when
     // the source has no guide, or the guide nothing for it).
     const OnNow &on_now(const iptv::ChannelView &channel) const;
@@ -255,7 +268,7 @@ class Model
     bool series_started() const;
     // Asks for the episodes again after they could not be read.
     void retry_series();
-    bool play_episode(unsigned episode_index);
+    bool play_episode(unsigned episode_index, bool from_start = false);
     // The letter (0 for '#', 1 to 26) the channel at a position is filed under.
     int letter_at(unsigned position) const;
     // The position of the first channel of that list under a letter, or -1.
@@ -357,7 +370,7 @@ class Model
     // ---- playback ----
     // Queues the channel for the player; the frame loop takes the request,
     // closes the menu and plays it.
-    bool play(unsigned catalog_index);
+    bool play(unsigned catalog_index, bool from_start = false);
     bool take_play_request(PlayRequest *request);
     // Called when the menu reopens after a channel that would not play.
     void report_playback_failure(const char *channel_id, const char *channel_name, int result,
@@ -518,6 +531,7 @@ class Model
     void library_queue(LibraryJob job);
     void library_poll();
     void library_stop();
+    void load_resume();
     std::string guide_url() const;
     std::string guide_path() const;
     void queue_guide(bool only_when_old);
@@ -633,6 +647,7 @@ class Model
         bool failed = false;
     };
     std::deque<DetailsEntry> details_; // the newest first, a few dozen at most
+    std::vector<iptv::ResumeEntry> resume_;
     std::string series_open_;
     std::string series_name_;
     std::string series_url_;

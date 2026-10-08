@@ -231,6 +231,7 @@ void Model::library_check_source()
     library_reset();
     library_source_ = wanted;
     library_account_ = wanted != 0 ? xtream_ : iptv::XtreamCredentials{};
+    load_resume();
 }
 
 void Model::library_reset()
@@ -253,7 +254,24 @@ void Model::library_reset()
         rebuild_visible();
     }
     details_.clear();
+    resume_.clear();
     close_series();
+}
+
+void Model::load_resume()
+{
+    resume_.clear();
+    if (library_source_ != 0)
+        (void)iptv::LoadResumePositions(path("prosperotv-playback-history.sqlite3"),
+                                        library_source_, iptv::kMaxResumeEntries, &resume_);
+}
+
+std::uint32_t Model::resume_secs(std::string_view id) const
+{
+    for (const iptv::ResumeEntry &entry : resume_)
+        if (entry.channel_id == id)
+            return entry.position_secs;
+    return 0;
 }
 
 // ---- the TV guide --------------------------------------------------------------
@@ -495,32 +513,47 @@ int Model::continue_episode() const
                          const iptv::ChannelView b = episodes_[right];
                          return a.season != b.season ? a.season < b.season : a.episode < b.episode;
                      });
-    // The one after the newest one watched; the last stays the last.
+    // The newest one watched: unfinished, it goes on; finished, the next one.
     for (const std::string &id : user_.recent_channel_ids)
         for (std::size_t at = 0; at < order.size(); ++at)
             if (episodes_[order[at]].id == id)
-                return static_cast<int>(order[at + 1u < order.size() ? at + 1u : at]);
+            {
+                if (resume_secs(id) != 0 || at + 1u >= order.size())
+                    return static_cast<int>(order[at]);
+                return static_cast<int>(order[at + 1u]);
+            }
     return static_cast<int>(order.front());
 }
 
-bool Model::play_episode(unsigned episode_index)
+bool Model::play_episode(unsigned episode_index, bool from_start)
 {
     if (episode_index >= episodes_.size())
         return false;
     const iptv::ChannelView episode = episodes_[episode_index];
     play_request_ = {};
     play_request_.channel_id = episode.id;
+    play_request_.channel_name = series_name_.empty() ? std::string(episode.name) : series_name_;
     const std::string label = episode_label(episode);
-    play_request_.channel_name =
-        series_name_.empty() ? std::string(episode.name) : series_name_ + "  " + label;
-    if (!episode.url.empty())
-        play_request_.urls.emplace_back(episode.url);
+    std::string title(episode.name);
+    // The provider's name for an episode often repeats its number.
+    if (title.rfind(label, 0) == 0)
+        title.erase(0, label.size());
+    while (!title.empty() && (title.front() == ' ' || title.front() == '-'))
+        title.erase(0, 1);
+    play_request_.subtitle = title.empty() ? label : label + "  " + title;
+    std::vector<std::string> alternates;
     for (const std::string_view alternate : episode.alternate_urls)
-        if (!alternate.empty())
-            play_request_.urls.emplace_back(alternate);
+        alternates.emplace_back(alternate);
+    play_request_.urls =
+        iptv::XtreamPlaybackOrder(std::string(episode.url), alternates, episode.container_ext);
     play_request_.source_id = library_source_ != 0 ? library_source_ : episode.source_id;
+    play_request_.vod = true;
+    play_request_.duration_secs = episode.duration_secs;
+    play_request_.start_position_us =
+        from_start ? 0 : static_cast<long long>(resume_secs(episode.id)) * 1000000ll;
     play_requested_ = !play_request_.urls.empty();
-    diag::event("episode asked: \"%s\"", play_request_.channel_name.c_str());
+    diag::event("episode asked: \"%s\" %s resume=%llds", play_request_.channel_name.c_str(),
+                label.c_str(), play_request_.start_position_us / 1000000ll);
     if (!play_requested_)
         return false;
     const std::vector<std::string> previous = user_.recent_channel_ids;

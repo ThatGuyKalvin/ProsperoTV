@@ -50,4 +50,33 @@ TEST(IptvHttpTest, PreservesNativeConnectionErrorForLogsAndUi)
               "connection failed (native error 0xFFFFFFD6)");
 }
 
+TEST(IptvHttpTest, ParsesContentRangeAndLength)
+{
+    std::int64_t first = 0;
+    std::int64_t last = 0;
+    std::int64_t total = 0;
+    const auto range = [&](const char *text)
+    { return iptv::http::ParseContentRange(text, std::strlen(text), &first, &last, &total); };
+    ASSERT_TRUE(range("bytes 0-4095/1048576"));
+    EXPECT_EQ(first, 0);
+    EXPECT_EQ(last, 4095);
+    EXPECT_EQ(total, 1048576);
+    ASSERT_TRUE(range("  Bytes 5000000000-5999999999/7000000000 "));
+    EXPECT_EQ(first, INT64_C(5000000000));
+    EXPECT_EQ(total, INT64_C(7000000000));
+    ASSERT_TRUE(range("bytes 10-20/*"));
+    EXPECT_EQ(total, -1);
+    for (const char *bad :
+         {"", "bytes", "bytes */100", "bytes 5-4/100", "bytes 0-100/100", "items 0-1/2",
+          "bytes 0-1/2 x", "bytes 0-1", "bytes 0-1/9999999999999999999"})
+        EXPECT_FALSE(range(bad)) << bad;
+
+    std::int64_t length = 0;
+    ASSERT_TRUE(iptv::http::ParseContentLength(" 123456789012 ", 14, &length));
+    EXPECT_EQ(length, INT64_C(123456789012));
+    EXPECT_FALSE(iptv::http::ParseContentLength("12a", 3, &length));
+    EXPECT_FALSE(iptv::http::ParseContentLength("", 0, &length));
+    EXPECT_FALSE(iptv::http::ParseContentLength("-5", 2, &length));
+}
+
 } // namespace

@@ -194,6 +194,13 @@ bool CreatePlaybackSchema(sqlite3 *database)
                              "PRIMARY KEY(source_id,channel_id)) WITHOUT ROWID;"
                              "CREATE INDEX IF NOT EXISTS playback_results_checked "
                              "ON playback_results(checked_unix);"
+                             "CREATE TABLE IF NOT EXISTS resume_positions("
+                             "source_id INTEGER NOT NULL,channel_id TEXT NOT NULL,"
+                             "position_secs INTEGER NOT NULL,duration_secs INTEGER NOT NULL,"
+                             "updated_unix INTEGER NOT NULL,updated_seq INTEGER NOT NULL,"
+                             "PRIMARY KEY(source_id,channel_id)) WITHOUT ROWID;"
+                             "CREATE INDEX IF NOT EXISTS resume_positions_updated "
+                             "ON resume_positions(source_id,updated_seq);"
                              "PRAGMA user_version=1;");
 }
 
@@ -721,6 +728,207 @@ StoreStatus LoadPlaybackResults(const std::string &path, std::uint64_t source_id
     sqlite3_finalize(statement);
     sqlite3_close_v2(database);
     return ok ? StoreStatus::ok : MapSqlite(sqlite_result);
+}
+
+namespace
+{
+
+bool OpenResumeDatabase(const std::string &path, bool writable, sqlite3 **database,
+                        StoreStatus *status)
+{
+    const int flags =
+        (writable ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE : SQLITE_OPEN_READONLY) |
+        SQLITE_OPEN_FULLMUTEX;
+    const int result = sqlite3_open_v2(path.c_str(), database, flags, nullptr);
+    if (result != SQLITE_OK)
+    {
+        if (*database)
+            sqlite3_close_v2(*database);
+        *database = nullptr;
+        *status = MapSqlite(result);
+        return false;
+    }
+    sqlite3_busy_timeout(*database, 2000);
+    return true;
+}
+
+bool HasResumeTable(sqlite3 *database)
+{
+    sqlite3_stmt *statement = nullptr;
+    const bool found =
+        Prepare(database,
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resume_positions'",
+                &statement) &&
+        sqlite3_step(statement) == SQLITE_ROW;
+    sqlite3_finalize(statement);
+    return found;
+}
+
+ResumeEntry ReadResumeEntry(sqlite3_stmt *statement)
+{
+    ResumeEntry entry;
+    entry.channel_id = ReadText(statement, 0);
+    entry.position_secs =
+        static_cast<std::uint32_t>(std::max<sqlite3_int64>(sqlite3_column_int64(statement, 1), 0));
+    entry.duration_secs =
+        static_cast<std::uint32_t>(std::max<sqlite3_int64>(sqlite3_column_int64(statement, 2), 0));
+    entry.updated_unix =
+        static_cast<std::uint64_t>(std::max<sqlite3_int64>(sqlite3_column_int64(statement, 3), 0));
+    return entry;
+}
+
+// True when the position is worth remembering: started, and not already finished.
+bool ResumeWorthKeeping(std::uint32_t position_secs, std::uint32_t duration_secs)
+{
+    if (position_secs <= kResumeMinimumSecs)
+        return false;
+    if (duration_secs == 0)
+        return true;
+    if (position_secs >= duration_secs)
+        return false;
+    const std::uint32_t remaining = duration_secs - position_secs;
+    return remaining > kResumeFinishedMarginSecs && remaining > duration_secs / 20u;
+}
+
+} // namespace
+
+StoreStatus SaveResumePosition(const std::string &path, std::uint64_t source_id,
+                               const std::string &channel_id, std::uint32_t position_secs,
+                               std::uint32_t duration_secs)
+{
+    if (path.empty() || channel_id.empty() || !Fits(channel_id, kDefaultMaxFieldBytes))
+        return StoreStatus::invalid_argument;
+    sqlite3 *database = nullptr;
+    StoreStatus status = StoreStatus::ok;
+    if (!OpenResumeDatabase(path, true, &database, &status))
+        return status;
+
+    const bool keep = ResumeWorthKeeping(position_secs, duration_secs);
+    const std::time_t now = std::time(nullptr);
+    sqlite3_stmt *statement = nullptr;
+    bool ok = CreatePlaybackSchema(database) && Execute(database, "BEGIN IMMEDIATE");
+    if (ok && keep)
+    {
+        ok = Prepare(database,
+                     // updated_seq orders entries even when several saves share a second.
+                     "INSERT OR REPLACE INTO resume_positions("
+                     "source_id,channel_id,position_secs,duration_secs,updated_unix,updated_seq) "
+                     "VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(updated_seq),0)+1 "
+                     "FROM resume_positions))",
+                     &statement) &&
+             sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK &&
+             BindText(statement, 2, channel_id) &&
+             sqlite3_bind_int64(statement, 3, position_secs) == SQLITE_OK &&
+             sqlite3_bind_int64(statement, 4, duration_secs) == SQLITE_OK &&
+             sqlite3_bind_int64(statement, 5, now > 0 ? static_cast<sqlite3_int64>(now) : 0) ==
+                 SQLITE_OK &&
+             sqlite3_step(statement) == SQLITE_DONE;
+    }
+    else if (ok)
+    {
+        ok = Prepare(database, "DELETE FROM resume_positions WHERE source_id=? AND channel_id=?",
+                     &statement) &&
+             sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK &&
+             BindText(statement, 2, channel_id) && sqlite3_step(statement) == SQLITE_DONE;
+    }
+    sqlite3_finalize(statement);
+    statement = nullptr;
+    if (ok && keep)
+    {
+        // Keep only the newest entries so the table cannot grow without bound.
+        ok = Prepare(database,
+                     "DELETE FROM resume_positions WHERE source_id=? AND channel_id NOT IN("
+                     "SELECT channel_id FROM resume_positions WHERE source_id=? "
+                     "ORDER BY updated_seq DESC LIMIT ?)",
+                     &statement) &&
+             sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK &&
+             sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK &&
+             sqlite3_bind_int64(statement, 3, static_cast<sqlite3_int64>(kMaxResumeEntries)) ==
+                 SQLITE_OK &&
+             sqlite3_step(statement) == SQLITE_DONE;
+        sqlite3_finalize(statement);
+    }
+    ok = ok && Execute(database, "COMMIT");
+    const int result = ok ? SQLITE_OK : sqlite3_errcode(database);
+    if (!ok)
+        Execute(database, "ROLLBACK");
+    sqlite3_close_v2(database);
+    return ok ? StoreStatus::ok : MapSqlite(result);
+}
+
+StoreStatus LoadResumePosition(const std::string &path, std::uint64_t source_id,
+                               const std::string &channel_id, ResumeEntry *entry)
+{
+    if (path.empty() || channel_id.empty() || !entry)
+        return StoreStatus::invalid_argument;
+    if (FileSize(path) == std::numeric_limits<std::size_t>::max())
+        return StoreStatus::not_found;
+    sqlite3 *database = nullptr;
+    StoreStatus status = StoreStatus::ok;
+    if (!OpenResumeDatabase(path, false, &database, &status))
+        return status;
+    if (!HasResumeTable(database))
+    {
+        sqlite3_close_v2(database);
+        return StoreStatus::not_found;
+    }
+    sqlite3_stmt *statement = nullptr;
+    bool ok =
+        Prepare(database,
+                "SELECT channel_id,position_secs,duration_secs,updated_unix "
+                "FROM resume_positions WHERE source_id=? AND channel_id=?",
+                &statement) &&
+        sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK &&
+        BindText(statement, 2, channel_id);
+    const int step = ok ? sqlite3_step(statement) : SQLITE_ERROR;
+    if (step == SQLITE_ROW)
+        *entry = ReadResumeEntry(statement);
+    const int result =
+        step == SQLITE_ROW || step == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(database);
+    sqlite3_finalize(statement);
+    sqlite3_close_v2(database);
+    if (step == SQLITE_ROW)
+        return StoreStatus::ok;
+    return step == SQLITE_DONE ? StoreStatus::not_found : MapSqlite(result);
+}
+
+StoreStatus LoadResumePositions(const std::string &path, std::uint64_t source_id, std::size_t limit,
+                                std::vector<ResumeEntry> *entries)
+{
+    if (path.empty() || !entries || limit == 0)
+        return StoreStatus::invalid_argument;
+    entries->clear();
+    if (FileSize(path) == std::numeric_limits<std::size_t>::max())
+        return StoreStatus::not_found;
+    sqlite3 *database = nullptr;
+    StoreStatus status = StoreStatus::ok;
+    if (!OpenResumeDatabase(path, false, &database, &status))
+        return status;
+    if (!HasResumeTable(database))
+    {
+        sqlite3_close_v2(database);
+        return StoreStatus::not_found;
+    }
+    sqlite3_stmt *statement = nullptr;
+    const std::size_t bounded = std::min(limit, kMaxResumeEntries);
+    bool ok =
+        Prepare(database,
+                "SELECT channel_id,position_secs,duration_secs,updated_unix "
+                "FROM resume_positions WHERE source_id=? "
+                "ORDER BY updated_seq DESC LIMIT ?",
+                &statement) &&
+        sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK &&
+        sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(bounded)) == SQLITE_OK;
+    int step = SQLITE_DONE;
+    while (ok && (step = sqlite3_step(statement)) == SQLITE_ROW)
+        entries->push_back(ReadResumeEntry(statement));
+    ok = ok && step == SQLITE_DONE;
+    const int result = ok ? SQLITE_OK : sqlite3_errcode(database);
+    sqlite3_finalize(statement);
+    sqlite3_close_v2(database);
+    if (!ok)
+        entries->clear();
+    return ok ? StoreStatus::ok : MapSqlite(result);
 }
 
 } // namespace iptv

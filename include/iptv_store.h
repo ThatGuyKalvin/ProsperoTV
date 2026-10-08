@@ -22,6 +22,11 @@ inline constexpr char kDefaultPlaybackHistoryPath[] =
     "/download0/prosperotv-playback-history.sqlite3";
 
 inline constexpr std::size_t kLibraryMaxStoreBytes = kDefaultMaxStoreBytes;
+inline constexpr std::size_t kMaxResumeEntries = 512u;
+// Positions at or below this are treated as "not started".
+inline constexpr std::uint32_t kResumeMinimumSecs = 10u;
+// Positions inside this tail (or the last 5%) are treated as "finished".
+inline constexpr std::uint32_t kResumeFinishedMarginSecs = 30u;
 
 struct StoreLimits {
     std::size_t max_file_bytes = kDefaultMaxStoreBytes;
@@ -78,6 +83,33 @@ StoreStatus LoadPlaybackResults(const std::string& path,
                                 std::uint64_t source_id,
                                 Catalog* catalog,
                                 const StoreLimits& limits = StoreLimits{});
+
+struct ResumeEntry {
+    std::string channel_id;
+    std::uint32_t position_secs = 0;
+    std::uint32_t duration_secs = 0;
+    std::uint64_t updated_unix = 0;
+};
+
+// Stores where playback stopped. Positions that are barely started or already
+// finished remove the entry instead, so only titles worth resuming are kept.
+// duration_secs may be 0 when the provider did not report one.
+StoreStatus SaveResumePosition(const std::string& path,
+                               std::uint64_t source_id,
+                               const std::string& channel_id,
+                               std::uint32_t position_secs,
+                               std::uint32_t duration_secs);
+
+StoreStatus LoadResumePosition(const std::string& path,
+                               std::uint64_t source_id,
+                               const std::string& channel_id,
+                               ResumeEntry* entry);
+
+// Newest first, at most `limit` entries.
+StoreStatus LoadResumePositions(const std::string& path,
+                                std::uint64_t source_id,
+                                std::size_t limit,
+                                std::vector<ResumeEntry>* entries);
 
 }  // namespace iptv
 

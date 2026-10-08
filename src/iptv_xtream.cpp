@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -438,10 +439,55 @@ bool BuildXtreamEpisodeUrl(const XtreamCredentials &credentials, std::string_vie
     return BuildXtreamMediaUrl(credentials, "series", episode_id, extension, "m3u8", url);
 }
 
+bool XtreamContainerDirect(std::string_view extension)
+{
+    return EqualsCi(extension, "mkv") || EqualsCi(extension, "mp4") || EqualsCi(extension, "m4v") ||
+           EqualsCi(extension, "mov") || EqualsCi(extension, "webm");
+}
+
 bool XtreamContainerStreamable(std::string_view extension)
 {
     return extension.empty() || EqualsCi(extension, "ts") || EqualsCi(extension, "m3u8") ||
-           EqualsCi(extension, "m3u");
+           EqualsCi(extension, "m3u") || XtreamContainerDirect(extension);
+}
+
+std::vector<std::string> XtreamPlaybackOrder(const std::string &primary,
+                                             const std::vector<std::string> &alternates,
+                                             std::string_view container_ext)
+{
+    std::vector<std::string> urls;
+    const auto add = [&urls](std::string url)
+    {
+        if (!url.empty() && std::find(urls.begin(), urls.end(), url) == urls.end())
+            urls.push_back(std::move(url));
+    };
+    // Xtream media URLs end in <id>.<extension> with no query; anything else is left alone.
+    const std::size_t slash = primary.rfind('/');
+    const std::size_t dot = primary.rfind('.');
+    const bool rewritable = slash != std::string::npos && dot != std::string::npos && dot > slash &&
+                            primary.find_first_of("?#", slash) == std::string::npos;
+    const bool streamed = container_ext.empty() || EqualsCi(container_ext, "ts") ||
+                          EqualsCi(container_ext, "m3u8") || EqualsCi(container_ext, "m3u");
+    if (!rewritable || streamed || !ValidExtension(container_ext))
+    {
+        add(primary);
+    }
+    else
+    {
+        const std::string base = primary.substr(0, dot + 1u);
+        const std::string listed = base + std::string(container_ext);
+        // Panels such as Allvue serve a title only in its own container and refuse the HLS
+        // and MPEG-TS forms; others serve every form. The player reads MKV and MP4 directly,
+        // so those go first. Other containers (AVI and the like) need a transcoded form.
+        if (XtreamContainerDirect(container_ext))
+            add(listed);
+        add(base + "m3u8");
+        add(base + "ts");
+        add(listed);
+    }
+    for (const std::string &alternate : alternates)
+        add(alternate);
+    return urls;
 }
 
 XtreamStatus SaveXtreamCredentials(const std::string &path, const XtreamCredentials &credentials)
@@ -893,8 +939,11 @@ XtreamStatus ParseXtreamVodStreams(std::string_view json, const XtreamCredential
             std::string canonical;
             if (CanonicalizeStreamUrl(logo, &canonical))
                 channel.tvg_logo = std::move(canonical);
-            channel.url = std::move(primary_url);
-            channel.alternate_urls.push_back(std::move(transport_stream_url));
+            std::vector<std::string> urls =
+                XtreamPlaybackOrder(primary_url, {transport_stream_url}, channel.container_ext);
+            channel.url = std::move(urls.front());
+            channel.alternate_urls.assign(std::make_move_iterator(urls.begin() + 1),
+                                          std::make_move_iterator(urls.end()));
             if (!catalog->Add(channel) && report)
                 ++report->skipped;
             if (report)
@@ -1092,8 +1141,11 @@ XtreamStatus ParseXtreamSeriesInfo(std::string_view json, const XtreamCredential
         channel.episode = static_cast<std::uint16_t>(number);
         channel.duration_secs = ParseUnsigned(duration, 24u * 3600u);
         channel.container_ext = std::move(extension);
-        channel.url = std::move(primary_url);
-        channel.alternate_urls.push_back(std::move(transport_stream_url));
+        std::vector<std::string> urls =
+            XtreamPlaybackOrder(primary_url, {transport_stream_url}, channel.container_ext);
+        channel.url = std::move(urls.front());
+        channel.alternate_urls.assign(std::make_move_iterator(urls.begin() + 1),
+                                      std::make_move_iterator(urls.end()));
         if (!catalog->Add(channel) && report)
             ++report->skipped;
         if (report)

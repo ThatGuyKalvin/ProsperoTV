@@ -116,6 +116,11 @@
   multichannel AAC, AAC-LATM, AC-3 and E-AC-3 through the same audio output
   pipeline. Surround audio is downmixed to stereo, including the dialogue channel.
 - Play direct WebM streams containing VP9 Profile 0 video.
+- Play MKV and MP4 films and episodes (H.264 or HEVC, with AAC, AC-3, E-AC-3 or MP2 audio)
+  on the hardware decoder. FFmpeg's demuxers read them through the app's HTTP layer, which
+  reopens the file with Range requests to seek or to continue after a dropped connection.
+- Pause, seek and change audio track in films and episodes, which resume where
+  they were left off; a live channel's banner says what is on now and next.
 - Adapt read-ahead buffering to live HLS timing and recover from stale live
   segments without discarding the channel immediately.
 - Display codec, resolution, frame rate, and bitrate during playback; toggle
@@ -132,8 +137,8 @@
 
 | Codec | Supported path | Output classes |
 | --- | --- | --- |
-| H.264 / AVC | MPEG-TS and HLS; Baseline, Main, and High profiles within the configured level limits | 720p, 1080p, 1440p, 2160p |
-| HEVC | MPEG-TS and HLS; Main / Main10, 8-bit or 10-bit 4:2:0, SDR output | 720p, 1080p, 1440p, 2160p |
+| H.264 / AVC | MPEG-TS, HLS, MKV and MP4; Baseline, Main, and High profiles within the configured level limits | 720p, 1080p, 1440p, 2160p |
+| HEVC | MPEG-TS, HLS, MKV and MP4; Main / Main10, 8-bit or 10-bit 4:2:0, SDR output | 720p, 1080p, 1440p, 2160p |
 | VP9 | Direct WebM; Profile 0, 8-bit 4:2:0 | 1080p, 1440p, 2160p |
 
 Sources up to 1080p use a 1920×1080 presentation surface. Native 1440p video
@@ -343,6 +348,10 @@ src/iptv_catalog.cpp          Extended M3U catalog parser
 src/iptv_store.cpp            SQLite last-good catalog persistence
 src/iptv_guide.cpp            XMLTV guide import (iptv_xmltv, iptv_inflate) and now/next lookups
 src/iptv_webm.cpp             Bounded WebM/VP9 parser
+src/iptv_media.cpp            MKV/MP4 playback through FFmpeg's demuxers and Range-backed I/O
+src/iptv_media_pack.cpp       Container sniffing and AAC-to-ADTS repackaging
+src/iptv_video_sps.cpp        H.264/HEVC SPS parsing shared by the TS and file players
+src/iptv_osd.c                The player's controls, drawn on a screen overlay
 include/                      Public application and media interfaces
 ui/                           Earlier interface (retired): RML, RCSS, fonts, and icons
 sce_sys/                      PS5 metadata and launcher assets

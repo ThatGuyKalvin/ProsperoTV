@@ -351,8 +351,10 @@ bool Model::open()
         refresh();
     swap_shelf(shown);
 
-    // The films and series of this source, and the live channels' guide.
+    // The films and series of this source, and where they were left off
+    // (a film that just played moved its place); the live channels' guide.
     library_check_source();
+    load_resume();
     if (first)
         open_guide();
     queue_guide(true);
@@ -735,7 +737,7 @@ Model::Starred Model::toggle_favorite(unsigned catalog_index)
 
 // ---- playback -----------------------------------------------------------------------
 
-bool Model::play(unsigned catalog_index)
+bool Model::play(unsigned catalog_index, bool from_start)
 {
     if (catalog_index >= channel_count())
         return false;
@@ -757,6 +759,39 @@ bool Model::play(unsigned catalog_index)
     // Only live streams are re-opened when they drop; a finished movie must simply end.
     play_request_.reconnect_live =
         channel.kind == iptv::MediaKind::live && active_source_ == iptv::SourceKind::Xtream;
+    if (channel.kind == iptv::MediaKind::live)
+    {
+        // The banner says what is on, and until when.
+        const OnNow &on = on_now(channel);
+        play_request_.info_now = on.title;
+        play_request_.info_start_unix = on.start;
+        play_request_.info_end_unix = on.stop;
+        if (!on.next_title.empty())
+        {
+            const std::time_t when = static_cast<std::time_t>(on.next_start);
+            char clock[8] = "--:--";
+            if (const std::tm *local = std::localtime(&when))
+                std::strftime(clock, sizeof(clock), "%H:%M", local);
+            play_request_.info_next = std::string("Next   ") + clock + "   " + on.next_title;
+        }
+    }
+    if (channel.kind == iptv::MediaKind::movie || channel.kind == iptv::MediaKind::episode)
+    {
+        // The provider's own container first: some serve a film in nothing else.
+        const std::string primary =
+            play_request_.urls.empty() ? std::string() : play_request_.urls[0];
+        if (!primary.empty())
+            play_request_.urls = iptv::XtreamPlaybackOrder(
+                primary,
+                std::vector<std::string>(play_request_.urls.begin() + 1, play_request_.urls.end()),
+                channel.container_ext);
+        play_request_.vod = true;
+        play_request_.duration_secs = channel.duration_secs;
+        play_request_.start_position_us =
+            from_start ? 0 : static_cast<long long>(resume_secs(channel.id)) * 1000000ll;
+        if (channel.year != 0)
+            play_request_.subtitle = std::to_string(channel.year);
+    }
     play_requested_ = !play_request_.urls.empty();
     diag::event("play asked: \"%s\" id=%s addresses=%zu source=%d own user agent=%s referrer=%s",
                 play_request_.channel_name.c_str(), play_request_.channel_id.c_str(),

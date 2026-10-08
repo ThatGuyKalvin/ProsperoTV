@@ -118,8 +118,34 @@ TEST(IptvXtreamTest, BuildsParameterizedApiAndMediaUrls)
     EXPECT_TRUE(iptv::XtreamContainerStreamable(""));
     EXPECT_TRUE(iptv::XtreamContainerStreamable("TS"));
     EXPECT_TRUE(iptv::XtreamContainerStreamable("m3u8"));
-    EXPECT_FALSE(iptv::XtreamContainerStreamable("mkv"));
-    EXPECT_FALSE(iptv::XtreamContainerStreamable("mp4"));
+    EXPECT_TRUE(iptv::XtreamContainerStreamable("MKV"));
+    EXPECT_TRUE(iptv::XtreamContainerStreamable("mp4"));
+    EXPECT_FALSE(iptv::XtreamContainerStreamable("avi"));
+}
+
+TEST(IptvXtreamTest, OrdersPlaybackAddressesByTheListedContainer)
+{
+    const std::string base = "http://p.example/series/u/p/77.";
+    const std::vector<std::string> legacy = {base + "ts"};
+    using Urls = std::vector<std::string>;
+    // MKV first: some panels (HTTP 551) serve a title only in its own container.
+    EXPECT_EQ(iptv::XtreamPlaybackOrder(base + "m3u8", legacy, "mkv"),
+              (Urls{base + "mkv", base + "m3u8", base + "ts"}));
+    // Applying it again to its own output changes nothing.
+    const Urls once = iptv::XtreamPlaybackOrder(base + "m3u8", legacy, "mp4");
+    EXPECT_EQ(iptv::XtreamPlaybackOrder(once[0], Urls(once.begin() + 1, once.end()), "mp4"), once);
+    // Streamed containers keep their addresses; others go after HLS and MPEG-TS.
+    EXPECT_EQ(iptv::XtreamPlaybackOrder(base + "m3u8", legacy, "ts"),
+              (Urls{base + "m3u8", base + "ts"}));
+    EXPECT_EQ(iptv::XtreamPlaybackOrder(base + "m3u8", legacy, ""),
+              (Urls{base + "m3u8", base + "ts"}));
+    EXPECT_EQ(iptv::XtreamPlaybackOrder(base + "m3u8", legacy, "avi"),
+              (Urls{base + "m3u8", base + "ts", base + "avi"}));
+    // A malformed extension or a URL with a query is not rewritten.
+    EXPECT_EQ(iptv::XtreamPlaybackOrder(base + "m3u8", legacy, "m/p4"),
+              (Urls{base + "m3u8", base + "ts"}));
+    EXPECT_EQ(iptv::XtreamPlaybackOrder("http://cdn.example/a.mp4?sig=1", {}, "mkv"),
+              (Urls{"http://cdn.example/a.mp4?sig=1"}));
 }
 
 TEST(IptvXtreamTest, ConvertsVodJsonIntoMovieEntries)
@@ -146,9 +172,11 @@ TEST(IptvXtreamTest, ConvertsVodJsonIntoMovieEntries)
     EXPECT_EQ(first.rating_tenths, 75u);
     EXPECT_EQ(first.year, 2021u);
     EXPECT_EQ(first.tvg_logo, "https://images.example/1.jpg");
-    EXPECT_EQ(first.url, "https://provider.example:25461/movie/test%20user/p%40ss%26word/501.m3u8");
-    ASSERT_EQ(first.alternate_urls.size(), 1u);
+    EXPECT_EQ(first.url, "https://provider.example:25461/movie/test%20user/p%40ss%26word/501.mkv");
+    ASSERT_EQ(first.alternate_urls.size(), 2u);
     EXPECT_EQ(first.alternate_urls[0],
+              "https://provider.example:25461/movie/test%20user/p%40ss%26word/501.m3u8");
+    EXPECT_EQ(first.alternate_urls[1],
               "https://provider.example:25461/movie/test%20user/p%40ss%26word/501.ts");
 
     const iptv::ChannelView second = catalog[1];
@@ -212,7 +240,7 @@ TEST(IptvXtreamTest, ConvertsSeriesInfoIntoEpisodes)
     EXPECT_EQ(catalog[0].tvg_name, "Show");
     EXPECT_EQ(catalog[0].container_ext, "mkv");
     EXPECT_EQ(catalog[0].url,
-              "https://provider.example:25461/series/test%20user/p%40ss%26word/900.m3u8");
+              "https://provider.example:25461/series/test%20user/p%40ss%26word/900.mkv");
     EXPECT_EQ(catalog[1].name, "S01 E02");
     EXPECT_EQ(catalog[1].duration_secs, 0u);
     EXPECT_EQ(catalog[2].season, 2u);

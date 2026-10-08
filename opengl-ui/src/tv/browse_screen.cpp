@@ -69,6 +69,18 @@ std::string runtime_words(std::uint32_t seconds)
            std::to_string(minutes % 60u) + " min";
 }
 
+// 754 seconds as "12:34", 4000 as "1:06:40".
+std::string clock_words(std::uint32_t seconds)
+{
+    char text[24]{};
+    if (seconds >= 3600u)
+        std::snprintf(text, sizeof(text), "%u:%02u:%02u", seconds / 3600u, seconds / 60u % 60u,
+                      seconds % 60u);
+    else
+        std::snprintf(text, sizeof(text), "%u:%02u", seconds / 60u, seconds % 60u);
+    return text;
+}
+
 // What a picture of that height is called.
 std::string picture_words(std::uint32_t height)
 {
@@ -900,11 +912,16 @@ void BrowseScreen::draw_title_text(ui::Canvas &canvas, const iptv::ChannelView &
         chip(resolution_label(title));
     if (details != nullptr && !details->genre.empty())
         chip(fonts.semibold.font->fit(details->genre, 19.0f, 300.0f));
+    const std::uint32_t left_at = model.resume_secs(title.id);
+    if (left_at != 0)
+        at += draw_status_chip(canvas, theme, at, chips_y, "Left off at " + clock_words(left_at),
+                               tone::good) +
+              12.0f;
     list.pop_opacity();
 
     // ---- what Cross and Square will do ----
     list.push_opacity(appear(4));
-    const char *action = series ? "Episodes" : "Watch";
+    const char *action = series ? "Episodes" : left_at != 0 ? "Resume" : "Watch";
     const float cy = 418.0f + rise(4);
     const float width = 16.0f + 40.0f + 14.0f + fonts.semibold.measure(action, 27.0f) + 34.0f;
     const Rect pill{x, cy - 34.0f, width, 68.0f};
@@ -1178,8 +1195,10 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
     else if (focused() && is_title(*focused()))
     {
         const iptv::ChannelView title = *focused();
-        add({ui::Button::cross,
-             title.kind == iptv::MediaKind::series ? "Episodes" : "Watch"});
+        const bool resumable = model.resume_secs(title.id) != 0;
+        add({ui::Button::cross, title.kind == iptv::MediaKind::series ? "Episodes"
+                                : resumable                           ? "Resume"
+                                                                      : "Watch"});
         add({ui::Button::square, model.is_favorite(title) ? "Unfavorite" : "Favorite"});
         add({ui::Button::l2, "Page", ui::Button::r2});
     }

@@ -5,6 +5,7 @@
 /* SDR NV12/Main10 Videodec2-to-AGC presenter extracted from ProsperoLight. */
 
 #include "iptv_native_agc_present.h"
+#include "iptv_osd.h"
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define BASE_OUTPUT_WIDTH 1920u
 #define BASE_OUTPUT_HEIGHT 1080u
@@ -158,12 +160,24 @@ typedef struct iptv_native_agc_presenter
     size_t framebuffer_pool_bytes;
     uint8_t ready;
     uint8_t main10;
+    /* The screen overlay: the colour plane, then the mask plane. */
+    void *overlay;
+    int64_t overlay_start;
+    size_t overlay_plane_bytes;
+    size_t overlay_pool_bytes;
+    uint8_t overlay_valid;
+    uint32_t overlay_sequence;
+    char overlay_stats[96];
+    int64_t overlay_stats_ms;
+    uint32_t overlay_first; /* the rows with anything on them */
+    uint32_t overlay_end;
 } iptv_native_agc_presenter_t;
 
 static iptv_native_agc_presenter_t presenter = {
     .shader_start = -1,
     .framebuffer_start = -1,
     .video = -1,
+    .overlay_start = -1,
 };
 static uint64_t agc_state;
 static uint8_t agc_initialized;
@@ -315,16 +329,6 @@ static void put_luma(uint8_t *luma, size_t index, uint8_t value, uint32_t compon
         luma[index] = value;
 }
 
-static void fill_luma(uint8_t *luma, size_t index, uint32_t count, uint8_t value,
-                      uint32_t component_bytes)
-{
-    if (component_bytes == 1u)
-        memset(luma + index, value, count);
-    else
-        for (uint32_t i = 0; i < count; ++i)
-            put_luma(luma, index + i, value, component_bytes);
-}
-
 static void draw_text(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t height,
                       const char *text, uint32_t x, uint32_t y, uint32_t scale, uint8_t value,
                       uint32_t component_bytes)
@@ -464,68 +468,137 @@ static void draw_disc(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t he
                 luma[(size_t)(center_y + y) * pitch + (uint32_t)(center_x + x)] = value;
 }
 
-static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch,
-                               uint32_t surface_height, uint32_t visible_width,
-                               uint32_t visible_height, const iptv_native_video_overlay_t *overlay,
-                               uint32_t component_bytes)
+/* ---- The screen overlay: controls and statistics ----
+ *
+ * Drawn by the CPU into two surfaces of their own (iptv_osd.h) and blended over the placed
+ * picture by two more draws: the picture is darkened by the mask, then the premultiplied colour
+ * is added. It is redrawn only when what it shows changes, and the decoded video is never
+ * written to (the decoder still refers to those pictures). */
+
+#define OVERLAY_PITCH IPTV_OSD_OVERLAY_WIDTH
+#define OVERLAY_SURFACE_HEIGHT 1088u
+/* A small black picture after the two overlay planes, stretched over the screen to paint the
+ * bars around a picture that does not fill it. Its rows are 256 samples: the GPU reads a linear
+ * texture with its row pitch rounded up to 256 bytes, so narrower rows would be read wrongly. */
+#define BLACK_WIDTH 256u
+#define BLACK_HEIGHT 64u
+
+static iptv_osd_surface_t overlay_surface(void)
 {
-    uint8_t *luma = source;
-    const size_t y_bytes = (size_t)pitch * surface_height * component_bytes;
-    const uint32_t scale = visible_width >= 640u ? 2u : 1u;
+    const iptv_osd_surface_t surface = {
+        presenter.overlay,
+        presenter.overlay_plane_bytes,
+        OVERLAY_PITCH,
+        OVERLAY_SURFACE_HEIGHT,
+        IPTV_OSD_OVERLAY_WIDTH,
+        IPTV_OSD_OVERLAY_HEIGHT,
+        presenter.main10 ? 2u : 1u,
+        0,
+        0,
+        (uint8_t *)presenter.overlay + presenter.overlay_plane_bytes,
+    };
+    return surface;
+}
 
-    if (!source || !overlay ||
-        y_bytes + (size_t)pitch * ((surface_height + 1u) / 2u) * component_bytes > source_bytes)
-        return;
+static size_t black_bytes(void)
+{
+    return (size_t)BLACK_WIDTH * BLACK_HEIGHT * 3u / 2u * (presenter.main10 ? 2u : 1u);
+}
 
+static uint8_t *black_surface(void)
+{
+    return (uint8_t *)presenter.overlay + presenter.overlay_plane_bytes * 2u;
+}
+
+static void flush_overlay_rows(const iptv_osd_surface_t *surface, uint32_t first, uint32_t end)
+{
+    const size_t row_bytes = (size_t)surface->pitch * surface->component_bytes;
+    const size_t chroma =
+        (size_t)surface->pitch * surface->surface_height * surface->component_bytes;
+    uint8_t *planes[2] = {surface->data, surface->mask};
+    for (int plane = 0; plane < 2; ++plane)
+    {
+        flush_gpu_data(planes[plane] + (size_t)first * row_bytes,
+                       (size_t)(end - first) * row_bytes);
+        flush_gpu_data(planes[plane] + chroma + (size_t)(first / 2u) * row_bytes,
+                       (size_t)((end + 1u) / 2u - first / 2u) * row_bytes);
+    }
+}
+
+/* Brings the overlay up to date for the next frame. Returns 1 when it has anything on it. */
+static int compose_overlay(const iptv_native_video_overlay_t *overlay)
+{
+    if (!presenter.overlay)
+        return 0;
+    iptv_osd_state_t state;
+    const uint32_t sequence = iptv_osd_snapshot(&state);
+
+    /* The statistics line, refreshed twice a second. */
+    char stats[96] = {0};
     if (iptv_native_agc_overlay_enabled())
     {
-        char text[96];
-        const uint32_t x = visible_width >= 200u ? 16u : 4u;
-        const uint32_t y = 16u;
-        const uint32_t height = 7u * scale + 12u;
-        const char *codec = overlay->codec == 1u   ? "H264"
-                            : overlay->codec == 2u ? (component_bytes == 2u ? "HEVC10" : "HEVC")
-                                                   : "VP9";
-        int bytes;
-        uint32_t width;
-        if (overlay->bitrate_kbps >= 1000u)
-            bytes = snprintf(text, sizeof(text), "%s %uX%u %u.%02u FPS %u.%02u MBPS", codec,
-                             overlay->width, overlay->height, overlay->fps_x100 / 100u,
-                             overlay->fps_x100 % 100u, overlay->bitrate_kbps / 1000u,
-                             (overlay->bitrate_kbps % 1000u) / 10u);
-        else
-            bytes = snprintf(text, sizeof(text), "%s %uX%u %u.%02u FPS %u KBPS", codec,
-                             overlay->width, overlay->height, overlay->fps_x100 / 100u,
-                             overlay->fps_x100 % 100u, overlay->bitrate_kbps);
-        if (bytes > 0 && x < visible_width && y < visible_height)
+        struct timespec now;
+        (void)clock_gettime(CLOCK_MONOTONIC, &now);
+        const int64_t now_ms = (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+        if (presenter.overlay_stats[0] && now_ms - presenter.overlay_stats_ms < 500)
         {
-            width = (uint32_t)bytes * 6u * scale + 12u;
-            if (width > visible_width - x)
-                width = visible_width - x;
-            for (uint32_t row = y; row < y + height && row < visible_height; ++row)
-                fill_luma(luma, (size_t)row * pitch + x, width, 32, component_bytes);
-            draw_text(luma, pitch, visible_width, visible_height, text, x + 6u, y + 6u, scale, 235,
-                      component_bytes);
-            flush_gpu_data(luma + ((size_t)y * pitch + x) * component_bytes,
-                           (size_t)height * pitch * component_bytes);
+            memcpy(stats, presenter.overlay_stats, sizeof(stats));
+        }
+        else
+        {
+            const char *codec = overlay->codec == 1u   ? "H.264"
+                                : overlay->codec == 2u ? (presenter.main10 ? "HEVC 10-bit" : "HEVC")
+                                                       : "VP9";
+            if (overlay->bitrate_kbps >= 1000u)
+                snprintf(stats, sizeof(stats), "%s  %ux%u  %u.%02u fps  %u.%02u Mbps", codec,
+                         overlay->width, overlay->height, overlay->fps_x100 / 100u,
+                         overlay->fps_x100 % 100u, overlay->bitrate_kbps / 1000u,
+                         (overlay->bitrate_kbps % 1000u) / 10u);
+            else
+                snprintf(stats, sizeof(stats), "%s  %ux%u  %u.%02u fps  %u kbps", codec,
+                         overlay->width, overlay->height, overlay->fps_x100 / 100u,
+                         overlay->fps_x100 % 100u, overlay->bitrate_kbps);
+            presenter.overlay_stats_ms = now_ms;
         }
     }
 
-    if (overlay->show_controls && visible_height > 56u)
+    if (presenter.overlay_valid && sequence == presenter.overlay_sequence &&
+        memcmp(stats, presenter.overlay_stats, sizeof(stats)) == 0)
+        return presenter.overlay_end > presenter.overlay_first;
+
+    const iptv_osd_surface_t surface = overlay_surface();
+    const uint32_t old_first = presenter.overlay_first;
+    const uint32_t old_end = presenter.overlay_end;
+    if (old_end > old_first)
+        iptv_osd_clear(&surface, old_first, old_end - old_first);
+    uint32_t first = UINT32_MAX;
+    uint32_t end = 0;
+    uint32_t drawn_first = 0;
+    uint32_t drawn_rows = 0;
+    if (iptv_osd_draw(&surface, &state, &drawn_first, &drawn_rows) == 0)
     {
-        static const char help[] = "CIRCLE OR OPTIONS  BACK    SELECT R1  STATS";
-        const uint32_t width = (uint32_t)(sizeof(help) - 1u) * 6u * scale + 24u;
-        const uint32_t x = visible_width > width ? (visible_width - width) / 2u : 0u;
-        const uint32_t y = visible_height - (7u * scale + 34u);
-        const uint32_t height = 7u * scale + 22u;
-        const uint32_t clipped_width = width < visible_width ? width : visible_width;
-        for (uint32_t row = y; row < y + height && row < visible_height; ++row)
-            fill_luma(luma, (size_t)row * pitch + x, clipped_width, 32, component_bytes);
-        draw_text(luma, pitch, visible_width, visible_height, help, x + 12u, y + 11u, scale, 235,
-                  component_bytes);
-        flush_gpu_data(luma + ((size_t)y * pitch + x) * component_bytes,
-                       (size_t)height * pitch * component_bytes);
+        first = drawn_first < first ? drawn_first : first;
+        end = drawn_first + drawn_rows > end ? drawn_first + drawn_rows : end;
     }
+    if (stats[0] && iptv_osd_draw_stats(&surface, stats, &drawn_first, &drawn_rows) == 0)
+    {
+        first = drawn_first < first ? drawn_first : first;
+        end = drawn_first + drawn_rows > end ? drawn_first + drawn_rows : end;
+    }
+    if (first >= end)
+        first = end = 0;
+    /* The GPU must see both what was cleared and what was drawn. */
+    const uint32_t flush_first = old_end > old_first && old_first < first ? old_first : first;
+    const uint32_t flush_end = old_end > end ? old_end : end;
+    if (flush_end > flush_first)
+        flush_overlay_rows(&surface, flush_first & ~1u, flush_end);
+
+    presenter.overlay_valid = 1;
+    presenter.overlay_sequence = sequence;
+    memcpy(presenter.overlay_stats, stats, sizeof(stats));
+    presenter.overlay_first = first & ~1u;
+    presenter.overlay_end = end;
+    return end > first;
 }
 
 static int shader_resource_offset(void *shader, unsigned kind, uint32_t *offset)
@@ -644,7 +717,8 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
                         void *vertex_shader, void *pixel_shader, const void *source,
                         size_t source_bytes, uint32_t pitch, uint32_t surface_height,
                         uint32_t visible_width, uint32_t visible_height, uint32_t output_width,
-                        uint32_t output_height, int64_t render_marker)
+                        uint32_t output_height, const int32_t viewport[4], int with_overlay,
+                        int64_t render_marker)
 {
     static const uint16_t target_offsets[16] = {0x318, 0x31b, 0x31c, 0x31d, 0x31e, 0x31f,
                                                 0x321, 0x323, 0x324, 0x325, 0x390, 0x398,
@@ -714,10 +788,15 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     {                                                                                              \
         cx[cx_count++] = (agc_register_t){(register_offset), 0, (register_value)};                 \
     } while (0)
-    ADD_REG(0x10f, float_bits(output_width * .5f));
-    ADD_REG(0x110, float_bits(output_width * .5f));
-    ADD_REG(0x111, float_bits(output_height * -.5f));
-    ADD_REG(0x112, float_bits(output_height * .5f));
+    /* The picture's rectangle on the screen (x, y, width, height); the screen scissor cuts
+     * off what a zoom pushes past the edges. */
+    ADD_REG(0x10f, float_bits((float)viewport[2] * .5f));
+    ADD_REG(0x110, float_bits((float)viewport[0] + (float)viewport[2] * .5f));
+    ADD_REG(0x111, float_bits((float)viewport[3] * -.5f));
+    ADD_REG(0x112, float_bits((float)viewport[1] + (float)viewport[3] * .5f));
+    /* The picture replaces what is there (CB_BLEND0_CONTROL, SX_MRT0_BLEND_OPT). */
+    ADD_REG(0x1e0, 0);
+    ADD_REG(0x1d8, 0);
     ADD_REG(0x113, float_bits(1));
     ADD_REG(0x114, 0);
     ADD_REG(0x0b4, 0);
@@ -788,9 +867,88 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
         descriptor[7] = (uint32_t)(vertex >> 32);
     }
     sceAgcCbSetShRegisterRangeDirect(&command, 0x8c + slot, descriptor, 8);
+    /* A picture that does not fill the screen: the whole screen is painted black first, so
+     * the bars never keep anything from earlier frames (the overlay is blended over them). */
+    const int bars = viewport[0] > 0 || viewport[1] > 0 ||
+                     viewport[0] + viewport[2] < (int32_t)output_width ||
+                     viewport[1] + viewport[3] < (int32_t)output_height;
+    if (bars && presenter.overlay)
+    {
+        uint8_t *black_cb = memory + 0xd300;
+        memcpy(black_cb, pixel_constants, sizeof(pixel_constants));
+        ((uint32_t *)black_cb)[12] = float_bits((float)BLACK_WIDTH);
+        ((uint32_t *)black_cb)[13] = float_bits((float)BLACK_HEIGHT);
+        ((uint32_t *)black_cb)[14] = BLACK_WIDTH;
+        ((uint32_t *)black_cb)[15] = BLACK_WIDTH / 2u;
+        agc_register_t *black_cx = (agc_register_t *)(memory + 0xd100);
+        const agc_register_t full[4] = {
+            {0x10f, 0, float_bits(output_width * .5f)},
+            {0x110, 0, float_bits(output_width * .5f)},
+            {0x111, 0, float_bits(output_height * -.5f)},
+            {0x112, 0, float_bits(output_height * .5f)},
+        };
+        memcpy(black_cx, full, sizeof(full));
+        sceAgcDcbSetCxRegistersIndirect(&command, black_cx, 4);
+        bind_pixel_source(&command, resources, black_surface(),
+                          (size_t)BLACK_WIDTH * BLACK_HEIGHT * component_bytes,
+                          (size_t)BLACK_WIDTH * (BLACK_HEIGHT / 2u) * component_bytes, black_cb,
+                          BLACK_WIDTH, BLACK_HEIGHT, presenter.main10);
+        sceAgcDcbDrawIndexAuto(&command, 4, 2);
+        /* Back to the picture's place. */
+        agc_register_t *picture_cx = (agc_register_t *)(memory + 0xd180);
+        const agc_register_t placed[4] = {
+            {0x10f, 0, float_bits((float)viewport[2] * .5f)},
+            {0x110, 0, float_bits((float)viewport[0] + (float)viewport[2] * .5f)},
+            {0x111, 0, float_bits((float)viewport[3] * -.5f)},
+            {0x112, 0, float_bits((float)viewport[1] + (float)viewport[3] * .5f)},
+        };
+        memcpy(picture_cx, placed, sizeof(placed));
+        sceAgcDcbSetCxRegistersIndirect(&command, picture_cx, 4);
+    }
     bind_pixel_source(&command, resources, source, y_bytes, uv_bytes, pixel_cb, visible_width,
                       visible_height, presenter.main10);
     sceAgcDcbDrawIndexAuto(&command, 4, 2);
+
+    if (with_overlay && presenter.overlay)
+    {
+        /* The overlay over the whole screen: first the mask darkens the picture
+         * (destination x (1 - source)), then the premultiplied colour is added
+         * (destination + source). Destination alpha is kept. */
+        static const uint32_t blends[2] = {
+            0x00000300u | (1u << 24) | (1u << 29) | (1u << 30),
+            0x00000101u | (1u << 24) | (1u << 29) | (1u << 30),
+        };
+        const size_t plane_y_bytes =
+            (size_t)OVERLAY_PITCH * OVERLAY_SURFACE_HEIGHT * component_bytes;
+        const size_t plane_uv_bytes =
+            (size_t)OVERLAY_PITCH * (OVERLAY_SURFACE_HEIGHT / 2u) * component_bytes;
+        uint8_t *overlay_cb = memory + 0xd200;
+        memcpy(overlay_cb, pixel_constants, sizeof(pixel_constants));
+        ((uint32_t *)overlay_cb)[12] = float_bits((float)IPTV_OSD_OVERLAY_WIDTH);
+        ((uint32_t *)overlay_cb)[13] = float_bits((float)IPTV_OSD_OVERLAY_HEIGHT);
+        ((uint32_t *)overlay_cb)[14] = OVERLAY_PITCH;
+        ((uint32_t *)overlay_cb)[15] = OVERLAY_PITCH / 2u;
+        for (unsigned pass = 0; pass < 2u; ++pass)
+        {
+            agc_register_t *pass_cx = (agc_register_t *)(memory + 0xd000 + pass * 0x80u);
+            const agc_register_t registers[6] = {
+                {0x10f, 0, float_bits(output_width * .5f)},
+                {0x110, 0, float_bits(output_width * .5f)},
+                {0x111, 0, float_bits(output_height * -.5f)},
+                {0x112, 0, float_bits(output_height * .5f)},
+                {0x1e0, 0, blends[pass]},
+                {0x1d8, 0, 0},
+            };
+            memcpy(pass_cx, registers, sizeof(registers));
+            sceAgcDcbSetCxRegistersIndirect(&command, pass_cx, 6);
+            const uint8_t *plane =
+                pass == 0u ? (uint8_t *)presenter.overlay + presenter.overlay_plane_bytes
+                           : (uint8_t *)presenter.overlay;
+            bind_pixel_source(&command, resources, plane, plane_y_bytes, plane_uv_bytes, overlay_cb,
+                              IPTV_OSD_OVERLAY_WIDTH, IPTV_OSD_OVERLAY_HEIGHT, presenter.main10);
+            sceAgcDcbDrawIndexAuto(&command, 4, 2);
+        }
+    }
     sceAgcDcbSetFlip(&command, (uint32_t)video, buffer_index, 1, render_marker);
 
     submit.words = words;
@@ -834,6 +992,19 @@ static int32_t teardown_presenter(int drain)
         if (first_result == 0 && result != 0)
             first_result = result;
     }
+    if (presenter.overlay)
+    {
+        result = sceKernelMunmap(presenter.overlay, presenter.overlay_pool_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
+    if (presenter.overlay_start >= 0)
+    {
+        result =
+            sceKernelReleaseDirectMemory(presenter.overlay_start, presenter.overlay_pool_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
     if (presenter.shader_memory)
     {
         result = sceKernelMunmap(presenter.shader_memory, SHADER_MEMORY_BYTES);
@@ -850,6 +1021,7 @@ static int32_t teardown_presenter(int drain)
     memset(&presenter, 0, sizeof(presenter));
     presenter.shader_start = -1;
     presenter.framebuffer_start = -1;
+    presenter.overlay_start = -1;
     presenter.video = -1;
     return first_result;
 }
@@ -959,6 +1131,37 @@ static int32_t initialize_presenter(const void *source, size_t source_bytes, uin
     }
     if (result != 0)
         goto fail;
+
+    /* The screen overlay, in the video's sample format. Without it the picture still plays,
+     * only without controls or subtitles. */
+    presenter.overlay_plane_bytes =
+        (size_t)OVERLAY_PITCH * OVERLAY_SURFACE_HEIGHT * 3u / 2u * (main10 ? 2u : 1u);
+    presenter.overlay_pool_bytes =
+        (presenter.overlay_plane_bytes * 2u + black_bytes() + 0x3fffu) & ~(size_t)0x3fffu;
+    if (sceKernelAllocateDirectMemory(0, direct_limit, presenter.overlay_pool_bytes, 0x4000,
+                                      DIRECT_MEMORY_TYPE, &presenter.overlay_start) != 0)
+        presenter.overlay_start = -1;
+    else if (sceKernelMapDirectMemory(&presenter.overlay, presenter.overlay_pool_bytes,
+                                      MAP_PROTECTION, 0, presenter.overlay_start, 0x4000) != 0)
+        presenter.overlay = NULL;
+    if (presenter.overlay)
+    {
+        const iptv_osd_surface_t surface = overlay_surface();
+        iptv_osd_clear(&surface, 0, OVERLAY_SURFACE_HEIGHT);
+        /* Transparent overlay colour is black: the same clear makes the black picture. */
+        const iptv_osd_surface_t black = {black_surface(),
+                                          black_bytes(),
+                                          BLACK_WIDTH,
+                                          BLACK_HEIGHT,
+                                          BLACK_WIDTH,
+                                          BLACK_HEIGHT,
+                                          presenter.main10 ? 2u : 1u,
+                                          0,
+                                          0,
+                                          black_surface()};
+        iptv_osd_clear(&black, 0, BLACK_HEIGHT);
+        flush_gpu_data(presenter.overlay, presenter.overlay_pool_bytes);
+    }
 
     presenter.ready = 1;
     return 0;
@@ -1166,13 +1369,17 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
     }
 
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
-    if (overlay && (iptv_native_agc_overlay_enabled() || overlay->show_controls))
-        draw_video_overlay((void *)source, source_bytes, pitch, surface_height, visible_width,
-                           visible_height, overlay, bit_depth == 10u ? 2u : 1u);
-    result = render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
-                          presenter.vertex_shader, presenter.pixel_shader, source, source_bytes,
-                          pitch, surface_height, visible_width, visible_height,
-                          presenter.output_width, presenter.output_height, render_marker);
+
+    /* The picture fills the screen. */
+    const int32_t viewport[4] = {0, 0, (int32_t)presenter.output_width,
+                                 (int32_t)presenter.output_height};
+
+    const int with_overlay = overlay ? compose_overlay(overlay) : 0;
+    result =
+        render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
+                     presenter.vertex_shader, presenter.pixel_shader, source, source_bytes, pitch,
+                     surface_height, visible_width, visible_height, presenter.output_width,
+                     presenter.output_height, viewport, with_overlay, render_marker);
     if (result != 0)
         return result;
     presenter.pending_marker = render_marker;

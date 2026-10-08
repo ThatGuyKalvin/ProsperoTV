@@ -177,6 +177,16 @@ extern "C"
                                              size_t frame_bytes, uint64_t pts_us);
     int32_t iptv_native_backend_disable_audio(iptv_native_backend_t *backend);
     int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend);
+    /* Holds the picture on screen and silences audio until resumed. */
+    int32_t iptv_native_backend_set_paused(iptv_native_backend_t *backend, int paused);
+    /* Drops everything queued for a seek and restarts once 0.5 s is buffered again. A
+     * non-zero audio_stream_type switches the audio decoder (another track). */
+    int32_t iptv_native_backend_seek_reset(iptv_native_backend_t *backend,
+                                           uint32_t audio_stream_type);
+    /* The PTS of the picture on screen, and the generation it belongs to. */
+    uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend,
+                                               uint32_t *generation);
+    uint32_t iptv_native_backend_generation(const iptv_native_backend_t *backend);
     void iptv_native_backend_request_stop(iptv_native_backend_t *backend);
     int iptv_native_backend_stop_requested(const iptv_native_backend_t *backend);
     int32_t iptv_native_backend_drain(iptv_native_backend_t *backend);

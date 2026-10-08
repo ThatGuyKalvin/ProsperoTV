@@ -444,6 +444,86 @@ Status ResolveRedirectUrl(const char *base_url, const char *location, char *reso
     return Status::ok;
 }
 
+namespace
+{
+
+// Reads a decimal number of at most 18 digits (well below INT64_MAX).
+bool ReadDecimal(const char *value, std::size_t bytes, std::size_t *position, std::int64_t *out)
+{
+    std::size_t index = *position;
+    std::int64_t number = 0;
+    std::size_t digits = 0;
+    while (index < bytes && value[index] >= '0' && value[index] <= '9')
+    {
+        if (++digits > 18u)
+            return false;
+        number = number * 10 + (value[index] - '0');
+        ++index;
+    }
+    if (!digits)
+        return false;
+    *position = index;
+    *out = number;
+    return true;
+}
+
+void SkipBlanks(const char *value, std::size_t bytes, std::size_t *position)
+{
+    while (*position < bytes && (value[*position] == ' ' || value[*position] == '\t'))
+        ++*position;
+}
+
+} // namespace
+
+bool ParseContentRange(const char *value, std::size_t bytes, std::int64_t *first,
+                       std::int64_t *last, std::int64_t *total)
+{
+    if (!value || !first || !last || !total)
+        return false;
+    std::size_t position = 0;
+    SkipBlanks(value, bytes, &position);
+    constexpr char kUnit[] = "bytes";
+    if (bytes - position < sizeof(kUnit) ||
+        !EqualsAsciiInsensitive(value + position, kUnit, sizeof(kUnit) - 1u))
+        return false;
+    position += sizeof(kUnit) - 1u;
+    SkipBlanks(value, bytes, &position);
+    std::int64_t start = 0;
+    std::int64_t end = 0;
+    std::int64_t size = -1;
+    if (!ReadDecimal(value, bytes, &position, &start) || position >= bytes ||
+        value[position++] != '-' || !ReadDecimal(value, bytes, &position, &end) || end < start ||
+        position >= bytes || value[position++] != '/')
+        return false;
+    if (position < bytes && value[position] == '*')
+        ++position;
+    else if (!ReadDecimal(value, bytes, &position, &size) || end >= size)
+        return false;
+    SkipBlanks(value, bytes, &position);
+    if (position != bytes)
+        return false;
+    *first = start;
+    *last = end;
+    *total = size;
+    return true;
+}
+
+bool ParseContentLength(const char *value, std::size_t bytes, std::int64_t *length)
+{
+    if (!value || !length)
+        return false;
+    std::size_t position = 0;
+    SkipBlanks(value, bytes, &position);
+    std::int64_t number = 0;
+    if (!ReadDecimal(value, bytes, &position, &number))
+        return false;
+    SkipBlanks(value, bytes, &position);
+    if (position != bytes)
+        return false;
+    *length = number;
+    return true;
+}
+
 bool ResponseIndicatesGeographicBlock(const char *response, std::size_t bytes)
 {
     if (!response || bytes == 0)
@@ -669,11 +749,15 @@ bool IsRedirectStatus(int status)
     return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
-bool ExtractLocation(int request, char *location, std::size_t capacity)
+// Copies the value of the single response header `name` (lower case). A header sent twice
+// is refused. The one call site keeps the number of system calls in this file fixed;
+// opengl-ui/ps5/patch_tree.py counts them when it renames them.
+bool FindResponseHeader(int request, const char *name, char *value, std::size_t capacity)
 {
-    if (!location || capacity == 0)
+    if (!value || capacity == 0 || !name)
         return false;
-    location[0] = '\0';
+    value[0] = '\0';
+    const std::size_t name_length = std::strlen(name);
     char *headers = nullptr;
     std::size_t size = 0;
     if (sceHttpGetAllResponseHeaders(request, &headers, &size) < 0 || !headers || size == 0 ||
@@ -698,9 +782,8 @@ bool ExtractLocation(int request, char *location, std::size_t capacity)
         std::size_t colon = line_start;
         while (colon < line_end && headers[colon] != ':')
             ++colon;
-        constexpr char kLocation[] = "location";
-        if (colon - line_start != sizeof(kLocation) - 1u ||
-            !EqualsAsciiInsensitive(headers + line_start, kLocation, sizeof(kLocation) - 1u))
+        if (colon - line_start != name_length ||
+            !EqualsAsciiInsensitive(headers + line_start, name, name_length))
         {
             continue;
         }
@@ -718,14 +801,45 @@ bool ExtractLocation(int request, char *location, std::size_t capacity)
             --line_end;
         }
         const std::size_t value_length = line_end - value_start;
-        if (value_length == 0 || value_length > kMaxUrlBytes ||
-            !CopyText(location, capacity, headers + value_start, value_length))
+        if (value_length == 0 || value_length >= capacity ||
+            !CopyText(value, capacity, headers + value_start, value_length))
         {
             return false;
         }
         found = true;
     }
     return found;
+}
+
+bool ExtractLocation(int request, char *location, std::size_t capacity)
+{
+    return FindResponseHeader(request, "location", location,
+                              capacity < kMaxUrlBytes + 1u ? capacity : kMaxUrlBytes + 1u);
+}
+
+// Records the body length, the first byte's offset and the file size of a 2xx response.
+void ReadBodyExtent(StreamRequest *stream)
+{
+    char value[96] = {};
+    std::int64_t length = -1;
+    if (FindResponseHeader(stream->request, "content-length", value, sizeof(value)) &&
+        ParseContentLength(value, std::strlen(value), &length))
+        stream->content_length = length;
+    std::int64_t first = 0;
+    std::int64_t last = 0;
+    std::int64_t total = -1;
+    if (stream->http_status == 206 &&
+        FindResponseHeader(stream->request, "content-range", value, sizeof(value)) &&
+        ParseContentRange(value, std::strlen(value), &first, &last, &total))
+    {
+        stream->range_start = first;
+        stream->total_length = total;
+    }
+    else if (stream->http_status != 206)
+    {
+        stream->range_start = 0;
+        stream->total_length = stream->content_length;
+    }
 }
 
 std::size_t ReadErrorResponse(int request, char *response, std::size_t capacity)
@@ -811,7 +925,7 @@ bool SafeHeaderValue(const char *value)
 }
 
 int ConfigureRequest(int request, const char *accept, std::uint32_t receive_timeout,
-                     const RequestHeaders *headers)
+                     const RequestHeaders *headers, const char *range = nullptr)
 {
     int result = sceHttpSetAutoRedirect(request, 0);
     if (result >= 0)
@@ -833,11 +947,19 @@ int ConfigureRequest(int request, const char *accept, std::uint32_t receive_time
         result =
             sceHttpAddRequestHeader(request, "User-Agent", headers->user_agent, kHeaderOverwrite);
     }
-    if (result >= 0 && headers && headers->referrer && *headers->referrer)
+    // One call site for the optional headers keeps the number of system calls in this file
+    // fixed; opengl-ui/ps5/patch_tree.py counts them when it renames them.
+    const char *const optional[][2] = {
+        {"Referer", headers ? headers->referrer : nullptr},
+        {"Range", range},
+    };
+    for (const auto &header : optional)
     {
-        if (!SafeHeaderValue(headers->referrer))
+        if (result < 0 || !header[1] || !*header[1])
+            continue;
+        if (!SafeHeaderValue(header[1]))
             return -1;
-        result = sceHttpAddRequestHeader(request, "Referer", headers->referrer, kHeaderOverwrite);
+        result = sceHttpAddRequestHeader(request, header[0], header[1], kHeaderOverwrite);
     }
     return result;
 }
@@ -1162,13 +1284,16 @@ FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes
 }
 
 Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
-                  const RequestHeaders *headers)
+                  const RequestHeaders *headers, std::int64_t range_start)
 {
     if (!stream)
         return Status::invalid_argument;
     *stream = {};
     if (!IsSupportedUrl(url))
         return Status::unsupported_url;
+    char range[48] = {};
+    if (range_start >= 0)
+        std::snprintf(range, sizeof(range), "bytes=%lld-", static_cast<long long>(range_start));
     RedirectHistory history;
     if (!history.Begin(url) || !CopyText(stream->effective_url, sizeof(stream->effective_url),
                                          history.Current(), std::strlen(history.Current())))
@@ -1199,8 +1324,8 @@ Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
             CloseStream(stream);
             return Status::request_failed;
         }
-        int result =
-            ConfigureRequest(stream->request, accepted, kStreamReceiveTimeoutUsec, headers);
+        int result = ConfigureRequest(stream->request, accepted, kStreamReceiveTimeoutUsec, headers,
+                                      range[0] ? range : nullptr);
         if (result >= 0)
             result = sceHttpSendRequest(stream->request, nullptr, 0);
         if (result >= 0)
@@ -1221,6 +1346,7 @@ Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
                 return Status::http_status_error;
             }
             stream->open = true;
+            ReadBodyExtent(stream);
             return Status::ok;
         }
 
@@ -1315,7 +1441,8 @@ FetchResult GetList(const char *url, const ListSink &sink, std::size_t max_bytes
     return {Status::platform_unavailable, 0, 0, 0};
 }
 
-Status OpenStream(const char *url, const char *, StreamRequest *stream, const RequestHeaders *)
+Status OpenStream(const char *url, const char *, StreamRequest *stream, const RequestHeaders *,
+                  std::int64_t)
 {
     if (!stream)
         return Status::invalid_argument;

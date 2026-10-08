@@ -459,6 +459,116 @@ TEST_F(IptvStoreTest, LibraryLimitsHoldAWholeLibrary)
     ExpectChannelEquals(catalog.back(), loaded.back());
 }
 
+TEST_F(IptvStoreTest, ResumePositionsRoundTripAndClearWhenStartedOrFinished)
+{
+    const std::string path = history_path_.string();
+    iptv::ResumeEntry entry;
+    EXPECT_EQ(iptv::LoadResumePosition(path, kSourceId, "movie-1", &entry),
+              iptv::StoreStatus::not_found);
+
+    ASSERT_EQ(iptv::SaveResumePosition(path, kSourceId, "movie-1", 1200u, 6000u),
+              iptv::StoreStatus::ok);
+    ASSERT_EQ(iptv::LoadResumePosition(path, kSourceId, "movie-1", &entry), iptv::StoreStatus::ok);
+    EXPECT_EQ(entry.channel_id, "movie-1");
+    EXPECT_EQ(entry.position_secs, 1200u);
+    EXPECT_EQ(entry.duration_secs, 6000u);
+    EXPECT_GT(entry.updated_unix, 0u);
+
+    // Updating replaces the stored position.
+    ASSERT_EQ(iptv::SaveResumePosition(path, kSourceId, "movie-1", 1800u, 6000u),
+              iptv::StoreStatus::ok);
+    ASSERT_EQ(iptv::LoadResumePosition(path, kSourceId, "movie-1", &entry), iptv::StoreStatus::ok);
+    EXPECT_EQ(entry.position_secs, 1800u);
+
+    // Another source's identical id is independent.
+    EXPECT_EQ(iptv::LoadResumePosition(path, kSourceId + 1u, "movie-1", &entry),
+              iptv::StoreStatus::not_found);
+
+    // Barely started, inside the final 30 seconds, and inside the last 5% all clear it.
+    for (const std::uint32_t position : {5u, 10u, 5975u, 5800u, 6000u, 7000u})
+    {
+        ASSERT_EQ(iptv::SaveResumePosition(path, kSourceId, "movie-1", 1800u, 6000u),
+                  iptv::StoreStatus::ok);
+        ASSERT_EQ(iptv::SaveResumePosition(path, kSourceId, "movie-1", position, 6000u),
+                  iptv::StoreStatus::ok)
+            << position;
+        EXPECT_EQ(iptv::LoadResumePosition(path, kSourceId, "movie-1", &entry),
+                  iptv::StoreStatus::not_found)
+            << position;
+    }
+
+    // An unknown duration only applies the "not started" rule.
+    ASSERT_EQ(iptv::SaveResumePosition(path, kSourceId, "movie-2", 4000u, 0u),
+              iptv::StoreStatus::ok);
+    EXPECT_EQ(iptv::LoadResumePosition(path, kSourceId, "movie-2", &entry), iptv::StoreStatus::ok);
+
+    EXPECT_EQ(iptv::SaveResumePosition(path, kSourceId, "", 100u, 200u),
+              iptv::StoreStatus::invalid_argument);
+}
+
+TEST_F(IptvStoreTest, ResumePositionsListNewestFirstAndStayBounded)
+{
+    const std::string path = history_path_.string();
+    std::vector<iptv::ResumeEntry> entries;
+    EXPECT_EQ(iptv::LoadResumePositions(path, kSourceId, 10u, &entries),
+              iptv::StoreStatus::not_found);
+
+    // Resume rows can share a database with playback results that already exist.
+    ASSERT_EQ(iptv::RecordPlaybackResult(path, kSourceId, "channel-0", true, 0),
+              iptv::StoreStatus::ok);
+    EXPECT_EQ(iptv::LoadResumePositions(path, kSourceId, 10u, &entries), iptv::StoreStatus::ok);
+    EXPECT_TRUE(entries.empty());
+
+    for (std::size_t index = 0; index < iptv::kMaxResumeEntries + 20u; ++index)
+        ASSERT_EQ(iptv::SaveResumePosition(path, kSourceId, "title-" + std::to_string(index),
+                                           100u + static_cast<std::uint32_t>(index), 100000u),
+                  iptv::StoreStatus::ok);
+    ASSERT_EQ(iptv::LoadResumePositions(path, kSourceId, 1000u, &entries), iptv::StoreStatus::ok);
+    EXPECT_EQ(entries.size(), iptv::kMaxResumeEntries);
+    // Saves in one second still come back strictly newest first.
+    const std::string newest = "title-" + std::to_string(iptv::kMaxResumeEntries + 19u);
+    EXPECT_EQ(entries.front().channel_id, newest);
+    EXPECT_EQ(entries.back().channel_id, "title-20");
+    for (std::size_t index = 1; index < entries.size(); ++index)
+        EXPECT_GE(entries[index - 1].updated_unix, entries[index].updated_unix);
+    iptv::ResumeEntry entry;
+    EXPECT_EQ(iptv::LoadResumePosition(path, kSourceId, newest, &entry), iptv::StoreStatus::ok);
+    EXPECT_EQ(iptv::LoadResumePosition(path, kSourceId, "title-0", &entry),
+              iptv::StoreStatus::not_found);
+
+    ASSERT_EQ(iptv::LoadResumePositions(path, kSourceId, 5u, &entries), iptv::StoreStatus::ok);
+    EXPECT_EQ(entries.size(), 5u);
+    EXPECT_EQ(iptv::LoadResumePositions(path, kSourceId, 0u, &entries),
+              iptv::StoreStatus::invalid_argument);
+
+    // The playback-result table in the same file is untouched.
+    iptv::Catalog catalog = MakeCatalog(1);
+    ASSERT_EQ(iptv::LoadPlaybackResults(path, kSourceId, &catalog), iptv::StoreStatus::ok);
+    EXPECT_EQ(catalog[0].playback_status, iptv::PlaybackStatus::playable);
+}
+TEST_F(IptvStoreTest, ResumePositionsWorkInAPlaybackHistoryFromThePreviousRelease)
+{
+    RunSql(history_path_,
+           "CREATE TABLE playback_results(source_id INTEGER NOT NULL,channel_id TEXT NOT NULL,"
+           "playable INTEGER NOT NULL CHECK(playable IN(0,1)),result INTEGER NOT NULL,"
+           "checked_unix INTEGER NOT NULL,PRIMARY KEY(source_id,channel_id)) WITHOUT ROWID;"
+           "INSERT INTO playback_results VALUES(1,'channel-0',1,0,1700000000);"
+           "PRAGMA user_version=1;");
+    const std::string path = history_path_.string();
+    std::vector<iptv::ResumeEntry> entries;
+    iptv::ResumeEntry entry;
+    EXPECT_EQ(iptv::LoadResumePositions(path, 1u, 10u, &entries), iptv::StoreStatus::not_found);
+    EXPECT_EQ(iptv::LoadResumePosition(path, 1u, "movie-1", &entry), iptv::StoreStatus::not_found);
+
+    ASSERT_EQ(iptv::SaveResumePosition(path, 1u, "movie-1", 600u, 7200u), iptv::StoreStatus::ok);
+    ASSERT_EQ(iptv::LoadResumePosition(path, 1u, "movie-1", &entry), iptv::StoreStatus::ok);
+    EXPECT_EQ(entry.position_secs, 600u);
+
+    // Existing playback results survive the table being added.
+    iptv::Catalog catalog = MakeCatalog(1, 1);
+    ASSERT_EQ(iptv::LoadPlaybackResults(path, 1u, &catalog), iptv::StoreStatus::ok);
+    EXPECT_EQ(catalog[0].playback_status, iptv::PlaybackStatus::playable);
+}
 TEST_F(IptvStoreTest, RoundTripsMoreThanAHundredThousandChannels)
 {
     constexpr std::size_t kChannelCount = 120000u;
