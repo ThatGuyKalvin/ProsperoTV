@@ -50,6 +50,32 @@ TEST(IptvHttpTest, PreservesNativeConnectionErrorForLogsAndUi)
               "connection failed (native error 0xFFFFFFD6)");
 }
 
+TEST(IptvHttpTest, PostFormValidatesItsArgumentsBeforeTheNetwork)
+{
+    using iptv::http::Status;
+    std::string buffer(65, '\0');
+    const auto post = [&](const char *url, const char *body, std::size_t bytes,
+                          std::size_t max_bytes = 64u) {
+        return iptv::http::PostForm(url, body, bytes, buffer.data(), buffer.size(), max_bytes)
+            .status;
+    };
+    constexpr char form[] = "username=a&password=b";
+    const std::size_t length = sizeof(form) - 1u;
+
+    // The host build has no network, so a valid request stops at platform_unavailable.
+    EXPECT_EQ(post("https://panel.example/play/b2c/v1/auth", form, length),
+              Status::platform_unavailable);
+    EXPECT_EQ(post("ftp://panel.example/auth", form, length), Status::unsupported_url);
+    EXPECT_EQ(post("https://panel.example/auth", nullptr, 0), Status::invalid_argument);
+    EXPECT_EQ(post("https://panel.example/auth", form, 0), Status::invalid_argument);
+    EXPECT_EQ(post("https://panel.example/auth", "user name=a", 11u), Status::invalid_argument);
+    EXPECT_EQ(post("https://panel.example/auth", "a=b\nc", 5u), Status::invalid_argument);
+    const std::string oversized(iptv::http::kMaxFormBodyBytes + 1u, 'a');
+    EXPECT_EQ(post("https://panel.example/auth", oversized.c_str(), oversized.size()),
+              Status::invalid_argument);
+    EXPECT_EQ(post("https://panel.example/auth", form, length, 65u), Status::invalid_argument);
+}
+
 TEST(IptvHttpTest, ParsesContentRangeAndLength)
 {
     std::int64_t first = 0;

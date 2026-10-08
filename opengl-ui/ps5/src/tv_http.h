@@ -10,7 +10,8 @@
  *
  * The calls take what src/iptv_http.cpp passed to the system's library, so
  * ps5/patch_tree.py only changes the names it calls. A template holds the
- * defaults, a connection one socket and its TLS session, a request one GET.
+ * defaults, a connection one socket and its TLS session, a request one GET or
+ * one form POST.
  * Ids are small positive numbers; a negative return is a failure. A failed
  * transfer returns -(10000 + the libcurl code): -10028 is a timeout, -10060 a
  * certificate that could not be verified, -10042 an abort. */

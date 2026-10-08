@@ -31,6 +31,7 @@ enum class SourceKind : std::uint8_t {
     BuiltIn,
     Custom,
     Xtream,
+    OneStream,
 };
 
 SourceStateStatus SaveCustomSourceUrl(

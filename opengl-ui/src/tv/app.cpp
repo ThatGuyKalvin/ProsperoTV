@@ -82,6 +82,8 @@ const char *source_label(iptv::SourceKind source)
         return "Your playlist";
     case iptv::SourceKind::Xtream:
         return "Your account";
+    case iptv::SourceKind::OneStream:
+        return "Your panel account";
     case iptv::SourceKind::BuiltIn:
         break;
     }

@@ -203,7 +203,8 @@ XtreamStatus FetchXtreamLibrary(const XtreamCredentials &credentials, std::uint6
                                 XtreamLibraryKind kind, const XtreamFetcher &fetcher,
                                 Catalog *library, XtreamLibraryReport *report = nullptr);
 
-// Reads the "info" object of an Xtream get_vod_info or get_series_info response. An "info": [] (no metadata)
+// Reads the "info" object of an Xtream get_vod_info or get_series_info response, or of a
+// OneStream content/vod/{id} or content/series/{id} response. An "info": [] (no metadata)
 // gives empty details.
 XtreamStatus ParseMediaInfo(std::string_view json, MediaDetails *details);
 

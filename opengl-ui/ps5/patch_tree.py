@@ -231,9 +231,9 @@ for folder in ("include", "src"):
             if placed != 1:
                 sys.exit(f"{file.name}: no place for tv_paths.h")
         file.write_text(patched, encoding="utf-8", newline="\n")
-# Upstream's nine, and the fork's provider panel.
-if constants != 10:
-    sys.exit(f"expected 10 fixed data paths in the copied sources, found {constants}")
+# Upstream's nine, and the fork's provider panel and OneStream account.
+if constants != 11:
+    sys.exit(f"expected 11 fixed data paths in the copied sources, found {constants}")
 swap("src/iptv_player.cpp", '"/download0/iptv-attempt-receipt.txt"',
      'tv_data_file("iptv-attempt-receipt.txt")', 2)
 swap("src/iptv_player.cpp", '#include "iptv_player.h"\n#include "tv_tuning.h"\n',

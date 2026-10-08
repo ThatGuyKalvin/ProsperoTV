@@ -45,6 +45,7 @@ const char *source_name(iptv::SourceKind source)
         return "your playlist";
     case iptv::SourceKind::Xtream:
         return "your Xtream account";
+    case iptv::SourceKind::OneStream: // not offered by this interface yet
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -181,6 +182,7 @@ std::string Model::cache_path(iptv::SourceKind source) const
         return cache_dir_ + "/prosperotv-custom-catalog.sqlite3";
     case iptv::SourceKind::Xtream:
         return cache_dir_ + "/prosperotv-xtream-catalog.sqlite3";
+    case iptv::SourceKind::OneStream: // not offered by this interface yet
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -195,6 +197,7 @@ std::uint64_t Model::source_id(iptv::SourceKind source) const
         return iptv::CustomSourceId(custom_url_);
     case iptv::SourceKind::Xtream:
         return iptv::XtreamSourceId(xtream_);
+    case iptv::SourceKind::OneStream: // not offered by this interface yet
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -226,6 +229,7 @@ bool Model::is_set_up(iptv::SourceKind source) const
         return !custom_url_.empty();
     case iptv::SourceKind::Xtream:
         return xtream_ready();
+    case iptv::SourceKind::OneStream: // not offered by this interface yet
         return false;
     case iptv::SourceKind::BuiltIn:
         break;

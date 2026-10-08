@@ -35,6 +35,8 @@ const char *title_of(iptv::SourceKind source)
         return "Custom playlist";
     case iptv::SourceKind::Xtream:
         return "Xtream Codes account";
+    case iptv::SourceKind::OneStream:
+        return "OneStream panel account";
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -238,6 +240,9 @@ void SourcesScreen::draw_row(ui::Canvas &canvas, const Rect &row, iptv::SourceKi
     case iptv::SourceKind::Xtream:
         line = set_up ? plain_address(model.xtream_server())
                       : "Add a server, a user name and a password";
+        break;
+    case iptv::SourceKind::OneStream:
+        line = "Not available in this interface yet";
         break;
     case iptv::SourceKind::BuiltIn:
         line = plain_address(Model::builtin_url());

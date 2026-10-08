@@ -30,7 +30,8 @@
 
 - Browse thousands of community-maintained IPTV channels from the iptv-org
   catalog, add a custom HTTP(S) M3U playlist, or connect an Xtream Codes
-  account and browse its movies and series.
+  account and browse its movies and series. OneStream panel accounts are
+  supported by the shared sources.
 - Search by name and filter by country, language, category, and advertised
   quality with continuous controller paging.
 - Decode H.264, HEVC, and VP9 through native PS5 video paths at resolutions up
@@ -306,11 +307,12 @@ favorites, history, and account the old one saved; it copies them to
 > the console online and leave ProsperoTV open until the catalog is ready.
 > Later launches load the local database immediately.
 
-Xtream support is for credentials supplied by the user. ProsperoTV does not
-include, sell, or discover provider accounts. The server, username, and
-password are stored in a local record beside the app's other data and are never written to the
-application log; the credential record is not encrypted, so do not share title
-data copied from the console.
+Xtream and OneStream support is for credentials supplied by the user.
+ProsperoTV does not include, sell, or discover provider accounts. The server,
+username, and password are stored in a local record beside the app's other data
+and are never written to the application log; the credential records are not
+encrypted, so do not share title data copied from the console. OneStream
+sign-in tokens are kept in memory only.
 
 
 ## Test and quality gates
@@ -345,6 +347,7 @@ opengl-ui/                    The released interface, its logic, tests, and cons
 src/main.cpp                  Earlier interface (retired, not built)
 src/iptv_xtream.cpp           Xtream credentials, Player API parsing, live, movie and series URLs
 src/iptv_panel.cpp            Provider panels' named server lists
+src/iptv_onestream.cpp        OneStream panel sign-in, catalog lists, and episodes
 src/iptv_player.cpp           Stream selection, buffering, playback, and errors
 src/iptv_stream.cpp           MPEG-TS demux and H.264/HEVC access-unit assembly
 src/iptv_native_backend.c     Native video/audio decode and presentation backend

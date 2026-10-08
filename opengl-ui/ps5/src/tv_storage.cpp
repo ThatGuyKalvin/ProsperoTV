@@ -41,7 +41,8 @@ constexpr const char *kCarried[] = {
     "iptv-favorites-v1.bin",
     "iptv-history-v1.bin",
     "prosperotv-playback-history.sqlite3",
-    // The fork's: the provider panel.
+    // The fork's: the OneStream account and the provider panel.
+    "prosperotv-onestream-v1.txt",
     "prosperotv-panel-v1.txt",
 };
 constexpr std::size_t kCarriedLimit = 4u * 1024u * 1024u;

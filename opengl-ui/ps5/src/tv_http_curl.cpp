@@ -36,6 +36,8 @@ constexpr int kRequestBase = 0x3000;
 // told to wait: a few seconds of a 4K channel.
 constexpr std::size_t kHighWater = 8u * 1024u * 1024u;
 constexpr int kErrorBase = 10000;
+// The system library's methods, as src/iptv_http.cpp passes them.
+constexpr int kMethodPost = 1;
 
 struct Settings
 {
@@ -65,6 +67,8 @@ struct Request
     curl_slist *header_list = nullptr;
     std::vector<std::pair<std::string, std::string>> headers;
     std::string url;
+    int method = 0;
+    std::string post_body; // a form POST's body, sent with the request
     std::string response_headers;
     std::string body; // received, not yet read: from `taken` on
     std::size_t taken = 0;
@@ -306,7 +310,7 @@ int tv_http_delete_connection(int id)
     return 0;
 }
 
-int tv_http_create_request(int connection_id, int, const char *url, std::uint64_t)
+int tv_http_create_request(int connection_id, int method, const char *url, std::uint64_t)
 {
     Connection *connection = get(g_connections, kConnectionBase, connection_id);
     if (connection == nullptr || url == nullptr)
@@ -315,6 +319,7 @@ int tv_http_create_request(int connection_id, int, const char *url, std::uint64_
     request->settings = connection->settings;
     request->connection = connection;
     request->url = url;
+    request->method = method;
     const int id = put(g_requests, kRequestBase, request);
     if (id < 0)
         delete request;
@@ -383,7 +388,8 @@ int tv_http_set_connect_timeout(int id, std::uint32_t usec)
 
 int tv_http_set_send_timeout(int id, std::uint32_t)
 {
-    return settings_of(id) != nullptr ? 0 : -1; // a GET has nothing to send after its headers
+    // A GET has nothing to send after its headers, and a form is a few hundred bytes.
+    return settings_of(id) != nullptr ? 0 : -1;
 }
 
 int tv_http_set_receive_timeout(int id, std::uint32_t usec)
@@ -400,11 +406,13 @@ int tv_http_set_block_size(int id, std::uint32_t)
     return settings_of(id) != nullptr ? 0 : -1;
 }
 
-int tv_http_send(int id, const void *, std::size_t)
+int tv_http_send(int id, const void *body, std::size_t size)
 {
     Request *request = get(g_requests, kRequestBase, id);
-    if (request == nullptr || request->sent)
+    if (request == nullptr || request->sent || (size != 0 && body == nullptr))
         return -1;
+    if (request->method == kMethodPost)
+        request->post_body.assign(static_cast<const char *>(body), size);
     request->sent = true;
     request->easy = curl_easy_init();
     if (request->easy == nullptr)
@@ -432,6 +440,13 @@ int tv_http_send(int id, const void *, std::size_t)
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, on_body);
     curl_easy_setopt(easy, CURLOPT_WRITEDATA, request);
     curl_easy_setopt(easy, CURLOPT_ERRORBUFFER, request->error);
+    if (request->method == kMethodPost)
+    {
+        // A sign-in form (OneStream panels); the body is ours until the request goes.
+        curl_easy_setopt(easy, CURLOPT_POST, 1L);
+        curl_easy_setopt(easy, CURLOPT_POSTFIELDS, request->post_body.data());
+        curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, static_cast<long>(request->post_body.size()));
+    }
     if (curl_multi_add_handle(request->connection->multi, easy) != CURLM_OK)
         return failure(CURLE_FAILED_INIT);
 
