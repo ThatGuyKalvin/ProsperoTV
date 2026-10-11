@@ -452,6 +452,8 @@ void Model::load_cache()
         iptv::LoadCatalog(cache_path(active_source_), &cached, {}, &report);
     catalog_loaded_ = status == iptv::StoreStatus::ok && report.catalog_version >= 5 &&
                       cached.source_id == wanted && !cached.empty();
+    playlist_cache_needs_refresh_ = catalog_loaded_ && active_source_ == iptv::SourceKind::Custom &&
+                                    report.catalog_version < 6;
     catalog_ = catalog_loaded_ ? std::move(cached) : iptv::Catalog{};
     saved_unix_ = catalog_loaded_ ? report.saved_unix : 0;
     if (catalog_loaded_)
@@ -470,6 +472,7 @@ void Model::load_cache()
 // The catalog and its index are new: everything counted from them follows.
 void Model::adopt_catalog()
 {
+    vod_.playlist_updated();
     hidden_categories_ = library_.hidden_categories(source_id(active_source_));
     category_rules_ = library_.category_rules(source_id(active_source_));
     folder_channels_ = library_.folder_channels(folder_);
@@ -805,7 +808,8 @@ std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) c
     if (sleep_timer.sleeping())
         return {};
     const auto index = catalog_.Find(channel_id);
-    if (index >= catalog_.size() || pin_prompt() || !content_allowed(catalog_[index]))
+    if (index >= catalog_.size() || pin_prompt() ||
+        catalog_[index].media_kind != iptv::MediaKind::live || !content_allowed(catalog_[index]))
         return {};
     const auto channel = catalog_[index];
     PlayRequest request;
@@ -857,6 +861,7 @@ std::optional<unsigned> Model::previous_channel(std::string_view current) const
 bool Model::play(unsigned catalog_index)
 {
     if (catalog_index >= channel_count() || pin_prompt() ||
+        catalog_[catalog_index].media_kind != iptv::MediaKind::live ||
         !content_allowed(catalog_[catalog_index]))
         return false;
     const iptv::ChannelView channel = catalog_[catalog_index];
@@ -1533,6 +1538,7 @@ void Model::consume_refresh()
         catalog_ = std::move(pending_catalog_);
         index_ = std::move(pending_index_);
         catalog_loaded_ = true;
+        playlist_cache_needs_refresh_ = false;
         catalog_failed_ = false;
         catalog_error_.clear();
         saved_unix_ = pending_saved_ ? platform::unix_time() : 0;

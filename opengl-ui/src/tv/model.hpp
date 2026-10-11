@@ -573,6 +573,7 @@ class Model
     iptv::Catalog catalog_;
     CatalogIndex index_; // of catalog_
     bool catalog_loaded_ = false;
+    bool playlist_cache_needs_refresh_ = false;
     std::uint64_t saved_unix_ = 0;
     iptv::UserState user_;
     std::vector<std::uint8_t> marks_; // by catalog index: a favorite, a recent channel

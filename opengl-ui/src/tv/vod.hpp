@@ -28,12 +28,14 @@ class VodLibrary
   public:
     ~VodLibrary();
     void configure(iptv::XtreamCredentials account, std::string cache, RefreshSchedule schedule);
+    void configure_playlist(const iptv::Catalog *playlist);
+    void playlist_updated();
     void select(VodKind kind, std::string series = {}, bool force = false);
     void poll(bool can_download);
     void stop();
     bool available() const
     {
-        return iptv::ValidateXtreamCredentials(account_);
+        return playlist_ != nullptr || iptv::ValidateXtreamCredentials(account_);
     }
     bool busy() const
     {
@@ -81,6 +83,7 @@ class VodLibrary
     std::string file() const;
     void note_scripts();
     iptv::XtreamCredentials account_;
+    const iptv::Catalog *playlist_ = nullptr;
     std::string cache_, series_, key_, status_;
     RefreshSchedule schedule_ = RefreshSchedule::daily;
     VodKind kind_ = VodKind::movies;

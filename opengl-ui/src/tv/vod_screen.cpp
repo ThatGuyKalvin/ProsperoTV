@@ -101,6 +101,11 @@ void VodScreen::update()
 }
 void VodScreen::refresh()
 {
+    if (shared_.model.active_source() == iptv::SourceKind::Custom)
+    {
+        shared_.model.refresh();
+        return;
+    }
     const auto &view = shared_.model.view;
     if (view.vod_kind >= 0)
         shared_.model.vod().select(static_cast<VodKind>(view.vod_kind), view.vod_series, true);

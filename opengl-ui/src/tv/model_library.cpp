@@ -79,6 +79,8 @@ void Model::select_source_record(const SavedSource &source)
         local_source_ = source;
     vod_.configure(source.kind == 2 ? xtream_ : iptv::XtreamCredentials{},
                    cache_path(active_source_), schedule_);
+    if (source.kind == 1)
+        vod_.configure_playlist(&catalog_);
     if (changed)
     {
         view.vod_kind = -1;
@@ -96,6 +98,8 @@ void Model::select_source_record(const SavedSource &source)
 
 bool Model::refresh_needed() const
 {
+    if (playlist_cache_needs_refresh_)
+        return true;
     if (catalog_loaded_ && schedule_ == RefreshSchedule::manual)
         return false;
     return !catalog_loaded_ || refresh_due(schedule_, saved_unix_, platform::unix_time());
@@ -362,6 +366,8 @@ bool Model::set_schedule(std::int64_t id, RefreshSchedule schedule)
         vod_.configure(active_source_ == iptv::SourceKind::Xtream ? xtream_
                                                                   : iptv::XtreamCredentials{},
                        cache_path(active_source_), schedule_);
+        if (active_source_ == iptv::SourceKind::Custom)
+            vod_.configure_playlist(&catalog_);
     }
     ++revision_;
     return true;
@@ -377,7 +383,12 @@ bool Model::play_vod(unsigned index)
     play_request_.channel_id = item.id;
     play_request_.channel_name = item.name;
     play_request_.urls = {std::string(item.url)};
+    for (const auto url : item.alternate_urls)
+        if (!url.empty())
+            play_request_.urls.emplace_back(url);
     play_request_.source_id = item.source_id;
+    play_request_.user_agent = item.http_user_agent;
+    play_request_.referrer = item.http_referrer;
     play_request_.record_channel_result = false;
     play_requested_ = true;
     return true;
@@ -456,7 +467,8 @@ void Model::mark_visibility()
     {
         marks_[i] &= static_cast<std::uint8_t>(~4u);
         const auto channel = catalog_[i];
-        const bool allowed = content_allowed(channel);
+        const bool allowed =
+            channel.media_kind == iptv::MediaKind::live && content_allowed(channel);
         if (allowed && !parental_.unlocked())
         {
             if (!channel.group_title.empty())

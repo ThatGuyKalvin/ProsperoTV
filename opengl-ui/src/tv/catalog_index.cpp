@@ -165,6 +165,8 @@ void CatalogIndex::build(const iptv::Catalog &catalog)
             trait |= kKids;
         traits[index] = trait;
 
+        if (channel.media_kind != iptv::MediaKind::live)
+            continue;
         country_tally.add(channel.tvg_country);
         category_tally.add(channel.group_title);
         if (!channel.group_title.empty())

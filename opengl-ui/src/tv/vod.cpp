@@ -225,20 +225,68 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
                            RefreshSchedule schedule)
 {
     schedule_ = schedule;
-    if (account.server_url == account_.server_url && account.username == account_.username &&
-        account.password == account_.password && cache == cache_)
+    if (!playlist_ && account.server_url == account_.server_url &&
+        account.username == account_.username && account.password == account_.password &&
+        cache == cache_)
         return;
     stop();
+    playlist_ = nullptr;
     account_ = std::move(account);
     cache_ = std::move(cache);
     key_.clear();
     catalog_.Clear();
     east_asian_ = korean_ = false;
     loaded_ = false;
-    status_ = available()
-                  ? tr("Choose Movies or TV shows.")
-                  : tr("Choose an Xtream account in Sources to browse its movies and TV shows.");
+    status_ =
+        available()
+            ? tr("Choose Movies or TV shows.")
+            : tr("Choose a playlist or Xtream account in Sources to browse on-demand titles.");
     ++revision_;
+}
+void VodLibrary::configure_playlist(const iptv::Catalog *playlist)
+{
+    stop();
+    playlist_ = playlist;
+    account_ = {};
+    key_.clear();
+    catalog_.Clear();
+    loaded_ = false;
+    east_asian_ = korean_ = false;
+    status_ = tr("Choose Movies or TV shows.");
+    ++revision_;
+}
+void VodLibrary::playlist_updated()
+{
+    if (!playlist_ || key_.empty())
+        return;
+    const auto kind = kind_;
+    const auto series = series_;
+    key_.clear();
+    select(kind, series);
+}
+
+// Providers commonly name episodes "Show S01E02"; unidentified episodes remain
+// individually selectable instead of guessing a show from a broad category.
+static std::string playlist_show(std::string_view name)
+{
+    for (std::size_t i = 1; i + 3 < name.size(); ++i)
+    {
+        if ((name[i] != 'S' && name[i] != 's') ||
+            (name[i - 1] != ' ' && name[i - 1] != '.' && name[i - 1] != '-'))
+            continue;
+        auto end = i + 1;
+        while (end < name.size() && name[end] >= '0' && name[end] <= '9')
+            ++end;
+        if (end == i + 1 || end + 1 >= name.size() || (name[end] != 'E' && name[end] != 'e') ||
+            name[end + 1] < '0' || name[end + 1] > '9')
+            continue;
+        auto cut = i;
+        while (cut && (name[cut - 1] == ' ' || name[cut - 1] == '.' || name[cut - 1] == '-'))
+            --cut;
+        if (cut)
+            return std::string(name.substr(0, cut));
+    }
+    return std::string(name);
 }
 std::string VodLibrary::file() const
 {
@@ -260,6 +308,47 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
     if (!available())
         return;
     const auto key = std::to_string(static_cast<int>(kind)) + ":" + series;
+    if (playlist_)
+    {
+        if (key == key_ && !force)
+            return;
+        kind_ = kind;
+        series_ = std::move(series);
+        key_ = key;
+        catalog_.Clear();
+        catalog_.source_id = playlist_->source_id;
+        std::unordered_set<std::string> shows;
+        for (std::size_t i = 0; i < playlist_->size(); ++i)
+        {
+            const auto entry = (*playlist_)[i];
+            if (entry.media_kind !=
+                (kind == VodKind::movies ? iptv::MediaKind::movie : iptv::MediaKind::episode))
+                continue;
+            auto item = entry.Copy();
+            if (kind != VodKind::movies)
+            {
+                const auto show = playlist_show(entry.name);
+                // Keep identically named shows from separate provider categories apart.
+                const auto show_id = std::string(entry.group_title) + "\n" + show;
+                if (kind == VodKind::episodes && show_id != series_)
+                    continue;
+                if (kind == VodKind::series)
+                {
+                    if (!shows.insert(show_id).second)
+                        continue;
+                    item.tvg_id = show_id;
+                    item.name = show;
+                }
+            }
+            catalog_.Add(item);
+        }
+        loaded_ = true;
+        note_scripts();
+        status_ = catalog_.empty() ? tr("The playlist has no titles in this list.")
+                                   : tr("On-demand titles from the playlist");
+        ++revision_;
+        return;
+    }
     if (key == key_ && busy())
         return;
     if (key != key_)
