@@ -28,13 +28,18 @@ class Multiview
     }
     void update(float dt);
     void draw(ui::Canvas &canvas) const;
+    void draw_picture_in_picture(ui::Canvas &canvas) const;
+    bool pinned() const
+    {
+        return active_ && pinned_;
+    }
     bool active() const
     {
         return active_;
     }
     bool is_open() const
     {
-        return active_ && !choosing_;
+        return active_ && !choosing_ && !pinned_;
     }
     bool choosing() const
     {
@@ -59,6 +64,6 @@ class Multiview
     std::array<LivePreview, 4> previews_;
     std::array<std::string, 4> channels_, names_;
     unsigned count_ = 2, selected_ = 0;
-    bool active_ = false, choosing_ = false, muted_ = false;
+    bool active_ = false, choosing_ = false, muted_ = false, pinned_ = false;
 };
 } // namespace ptv

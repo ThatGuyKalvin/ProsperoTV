@@ -542,3 +542,4 @@ tab offers Fit, Stretch, corrected 4:3 or 16:9, Fill (crop), and 125% or 150%
 zoom. Controls and captions stay within the visible crop. Text subtitles
 have Small/Medium/Large sizes and White/Yellow/Cyan colors; image subtitles
 retain the provider's artwork. These choices are saved for the next video.
+In multiview, Touchpad keeps the selected live channel playing in a corner while you browse lists or the programme guide. L3 in the live list closes picture in picture.

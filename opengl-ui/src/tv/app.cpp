@@ -531,6 +531,11 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     }
     if (browsing() && input.is_pressed(Action::l3))
     {
+        if (multiview_.pinned())
+        {
+            multiview_.stop();
+            return;
+        }
         const auto channel = browse_.focused();
         shared_.preview.clear();
         multiview_.open(channel ? std::string(channel->id) : std::string());
@@ -1266,8 +1271,10 @@ void App::draw_hints(ui::Canvas &canvas) const
         count = browse_.hints(hints, 5);
         hints[count++] = {ui::Button::touchpad,
                           tabs_.active() == kFavorites ? tr("Folders") : tr("Categories")};
-        hints[count++] = {ui::Button::left_stick,
-                          multiview_.choosing() ? tr("Back to multiview") : tr("Multiview")};
+        hints[count++] = {ui::Button::left_stick, multiview_.pinned()
+                                                      ? tr("Close picture in picture")
+                                                  : multiview_.choosing() ? tr("Back to multiview")
+                                                                          : tr("Multiview")};
         break;
     case kSources:
         count = sources_.hints(hints, 6);
@@ -1371,6 +1378,7 @@ void App::draw(Frame &frame, bool themed) const
     search_.draw(over);
     library_sheet_.draw(over);
     guide_sheet_.draw(over);
+    multiview_.draw_picture_in_picture(over);
     failure_.draw(over);
     update_.draw(over);
     storage_dialog_.draw(over);

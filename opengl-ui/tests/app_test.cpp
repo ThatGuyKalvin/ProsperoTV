@@ -1796,3 +1796,71 @@ TEST_F(AppTest, AppearanceChoicesAreReachableAndChangeTheRenderedPalette)
         app_->update({}, 10, feedback_);
     EXPECT_FALSE(app_->screensaver_active());
 }
+
+TEST_F(AppTest, PictureInPictureKeepsSelectedStreamAndReleasesOtherTiles)
+{
+    host::set_preview(true);
+    ptv::Shared shared(*model_, font_set().fonts, {});
+    ptv::Multiview view(shared);
+    unsigned created = 0, released = 0;
+    view.configure([&](unsigned old, const ptv::ImagePixels &) { return old ? old : ++created; },
+                   [&](unsigned) { ++released; });
+    view.open(std::string(model_->channel(0).id));
+    hui::InputFrame input;
+    input.nav = Direction::right;
+    view.handle(input, feedback_);
+    ASSERT_TRUE(view.choose(std::string(model_->channel(1).id)));
+    const auto settle = [&]
+    {
+        for (int i = 0; i < 30; ++i)
+        {
+            view.update(kDt);
+            EXPECT_LE(view.audible_count(), 1u);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    };
+    settle();
+    EXPECT_EQ(host::preview_starts(), 2u);
+    input = {};
+    input.pressed = hui::action_bit(Action::touch);
+    view.handle(input, feedback_);
+    ASSERT_TRUE(view.pinned());
+    EXPECT_FALSE(view.is_open());
+    EXPECT_FALSE(view.choosing());
+    settle();
+    EXPECT_EQ(host::preview_starts(), 2u);
+    EXPECT_EQ(host::preview_stops(), 1u);
+    EXPECT_EQ(view.audible_count(), 1u);
+    hui::gfx::DrawList list;
+    hui::ui::Canvas canvas{list, font_set().fonts, 0, 0};
+    view.draw_picture_in_picture(canvas);
+    EXPECT_FALSE(list.empty());
+    view.stop();
+    EXPECT_FALSE(view.pinned());
+    EXPECT_EQ(host::preview_stops(), 2u);
+    EXPECT_EQ(created, released);
+    EXPECT_EQ(view.audible_count(), 0u);
+    host::set_preview(false);
+}
+
+TEST_F(AppTest, PictureInPictureAllowsBrowsingAndGuideWithoutForegroundPlayback)
+{
+    host::set_preview(true);
+    app_->configure_preview([](unsigned old, const ptv::ImagePixels &) { return old ? old : 91u; },
+                            [](unsigned) {});
+    press(Action::l3);
+    press(Action::touch);
+    move(Direction::right);
+    EXPECT_EQ(position(), 1);
+    press(Action::r3);
+    EXPECT_TRUE(app_->guide_open());
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model_->take_play_request(&request));
+    press(Action::back);
+    press(Action::l3);
+    move(Direction::right);
+    EXPECT_EQ(position(), 2);
+    app_->stop_preview();
+    EXPECT_EQ(host::preview_starts(), host::preview_stops());
+    host::set_preview(false);
+}

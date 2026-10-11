@@ -28,7 +28,7 @@ void Multiview::open(std::string channel)
 }
 void Multiview::stop()
 {
-    active_ = choosing_ = false;
+    active_ = choosing_ = pinned_ = false;
     // Cancel every connection before joining any worker.
     for (auto &preview : previews_)
         preview.request_stop();
@@ -64,6 +64,14 @@ void Multiview::handle(const InputFrame &input, ui::Feedback &feedback)
     {
         stop();
         feedback.play(audio::Cue::back);
+        return;
+    }
+    if (input.is_pressed(Action::touch) && !channels_[selected_].empty())
+    {
+        pinned_ = true;
+        for (unsigned i = 0; i < 4; ++i)
+            if (i != selected_)
+                previews_[i].request_stop();
         return;
     }
     if (input.is_pressed(Action::north))
@@ -106,9 +114,15 @@ void Multiview::update(float dt)
     std::array<std::optional<PlayRequest>, 4> requests;
     for (unsigned i = 0; i < count_; ++i)
     {
-        requests[i] = shared_.model.preview_request(channels_[i]);
+        if (!pinned_ || i == selected_)
+            requests[i] = shared_.model.preview_request(channels_[i]);
         if (requests[i])
             names_[i] = requests[i]->channel_name;
+    }
+    if (pinned_ && !requests[selected_])
+    {
+        stop();
+        return;
     }
     bool previous_audio = false;
     for (unsigned i = 0; i < 4; ++i)
@@ -168,6 +182,7 @@ void Multiview::draw(ui::Canvas &canvas) const
     }
     const ui::Hint hints[] = {
         {ui::Button::cross, tr("Full screen")},
+        {ui::Button::touchpad, tr("Picture in picture")},
         {ui::Button::square, tr("Choose channel")},
         {ui::Button::triangle, count_ == 2 ? tr("Four channels") : tr("Two channels")},
         {ui::Button::right_stick, muted_ ? tr("Unmute") : tr("Mute")},
@@ -175,6 +190,31 @@ void Multiview::draw(ui::Canvas &canvas) const
     ui::HintLayout layout;
     layout.cy = 1028;
     layout.text_size = 21;
-    ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 5, kWidth - 48, true, layout);
+    ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 6, kWidth - 48, true, layout);
+}
+void Multiview::draw_picture_in_picture(ui::Canvas &canvas) const
+{
+    if (!pinned())
+        return;
+    auto &list = canvas.list;
+    const Rect tile{1416, 72, 456, 300};
+    list.bordered_rect(tile, 12, Color::rgb(0x050508), 2, tone::accent);
+    const Rect picture{tile.x + 8, tile.y + 8, tile.w - 16, 240};
+    const auto texture = previews_[selected_].find(channels_[selected_]);
+    if (texture.id)
+    {
+        const float scale = std::min(picture.w / texture.width, picture.h / texture.height);
+        const float w = texture.width * scale, h = texture.height * scale;
+        list.image(texture.id, {picture.cx() - w / 2, picture.cy() - h / 2, w, h}, {0, 0, 1, 1},
+                   kWhite);
+    }
+    else
+        ui::text(list, canvas.fonts.regular,
+                 previews_[selected_].finished() ? tr("Channel unavailable")
+                                                 : tr("Opening channel..."),
+                 picture.cx(), picture.cy(), 22, kWhite, gfx::Align::center);
+    const auto &face = face_for(canvas.fonts, canvas.fonts.semibold, names_[selected_]);
+    const auto name = face.font->fit(readable(face, names_[selected_]), 20, tile.w - 24);
+    ui::text(list, face, name, tile.x + 12, tile.y + 274, 20, kWhite);
 }
 } // namespace ptv
