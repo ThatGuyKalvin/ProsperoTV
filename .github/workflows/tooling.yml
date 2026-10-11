@@ -221,7 +221,7 @@ jobs:
       - name: Install the toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build ccache cmake libsqlite3-dev libpng-dev libjpeg-dev zlib1g-dev make pkg-config curl tar unzip wget xz-utils
+          sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build meson ccache cmake libsqlite3-dev libpng-dev libjpeg-dev zlib1g-dev make pkg-config curl tar unzip wget xz-utils
 
       - name: Restore compiler cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -279,7 +279,9 @@ jobs:
           fi
 
       - name: Test the interface and its logic
-        run: HOST_CXX=clang++-18 bash opengl-ui/tools/run-tests.sh
+        run: |
+          HOST_CXX=clang++-18 bash opengl-ui/tools/run-tests.sh
+          HOST_CXX=clang++-18 bash opengl-ui/tools/check-font-shaping.sh
 
       # Everything the app is built from is fetched here at a pinned version and
       # checked: the UI kit, the OpenGL SDK, the payload SDK, the ports, the

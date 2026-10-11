@@ -402,8 +402,8 @@ TEST(InterfaceLanguage, BulkCategoryGeometryMatchesIndividualTabs)
     hui::ui::TabBar tabs;
     std::vector<hui::ui::TabItem> labels;
     for (unsigned i = 0; i < 1000; ++i)
-        labels.push_back({(i & 1 ? std::string("????? ") : std::string("Sports ")) +
-                          std::to_string(i)});
+        labels.push_back(
+            {(i & 1 ? std::string("رياضة ") : std::string("Sports ")) + std::to_string(i)});
     tabs.set_tabs(std::move(labels));
     tabs.set_bounds({96, 440, 1000, 56});
     tabs.set_active(777, true);
@@ -425,53 +425,71 @@ TEST(InterfaceLanguage, BulkCategoryGeometryMatchesIndividualTabs)
 
 TEST_F(AppTest, RtlCatalogGlyphsNavigationAndPlayerSeekAreConsistent)
 {
-    struct Reset { ~Reset(){ptv::set_console_language(1);} } reset;
-    struct Entry { const char *english; std::array<const char *,2> texts; };
-    const Entry entries[]={
+    struct Reset
+    {
+        ~Reset()
+        {
+            ptv::set_console_language(1);
+        }
+    } reset;
+    struct Entry
+    {
+        const char *english;
+        std::array<const char *, 2> texts;
+    };
+    const Entry entries[] = {
 #include "tv/translations_rtl.inc"
     };
-    for (const auto &entry:entries)
-        for (const auto *text:entry.texts)
-            for (std::size_t at=0;at<std::string_view(text).size();)
+    for (const auto &entry : entries)
+        for (const auto *text : entry.texts)
+            for (std::size_t at = 0; at < std::string_view(text).size();)
             {
-                const auto point=hui::gfx::next_codepoint(text,&at);
-                if (point>0x20) EXPECT_TRUE(font_set().fonts.regular.font->has_glyph(point))<<entry.english<<" U+"<<std::hex<<point;
+                const auto point = hui::gfx::next_codepoint(text, &at);
+                if (point > 0x20)
+                    EXPECT_TRUE(font_set().fonts.regular.font->has_glyph(point))
+                        << entry.english << " U+" << std::hex << point;
             }
     ptv::set_interface_language(8);
     ASSERT_TRUE(ptv::interface_rtl());
     make_app();
-    ASSERT_EQ(position(),0);
+    ASSERT_EQ(position(), 0);
     move(Direction::left);
-    EXPECT_EQ(position(),1);
+    EXPECT_EQ(position(), 1);
     move(Direction::right);
-    EXPECT_EQ(position(),0);
-    EXPECT_EQ(frame_.scene.rtl_width(),0);
-    EXPECT_EQ(frame_.overlay.rtl_width(),0);
-    ptv::VideoPanel panel; panel.reset(80,100,820,860);
-    EXPECT_EQ(panel.x,1020u);
-    panel.text(*font_set().fonts.regular.font,"192.168.4.30:63614",30,60,24,760);
-    ptv::PlayRequest request; request.record_channel_result=false;
-    ptv::PlaybackOsd osd(*model_,request);
-    iptv_player_media_state_t media{}; media.available=true; media.seekable=true;
-    media.position_us=30000000; media.duration_us=120000000;
+    EXPECT_EQ(position(), 0);
+    EXPECT_EQ(frame_.scene.rtl_width(), 0);
+    EXPECT_EQ(frame_.overlay.rtl_width(), 0);
+    ptv::VideoPanel panel;
+    panel.reset(80, 100, 820, 860);
+    EXPECT_EQ(panel.x, 1020u);
+    panel.text(*font_set().fonts.regular.font, "192.168.4.30:63614", 30, 60, 24, 760);
+    ptv::PlayRequest request;
+    request.record_channel_result = false;
+    ptv::PlaybackOsd osd(*model_, request);
+    iptv_player_media_state_t media{};
+    media.available = true;
+    media.seekable = true;
+    media.position_us = 30000000;
+    media.duration_us = 120000000;
     osd.set_media_state(media);
-    EXPECT_EQ(osd.input(IPTV_INPUT_LEFT,1000000),1);
-    EXPECT_EQ(osd.take_media_seek(),20000000u);
-    EXPECT_EQ(osd.input(IPTV_INPUT_RIGHT,2000000),1);
-    EXPECT_EQ(osd.take_media_seek(),40000000u);
-    ptv::Settings settings; settings.interface_language=9;
-    ASSERT_TRUE(ptv::save_settings(dir_,settings));
-    EXPECT_EQ(ptv::load_settings(dir_).interface_language,9);
+    EXPECT_EQ(osd.input(IPTV_INPUT_LEFT, 1000000), 1);
+    EXPECT_EQ(osd.take_media_seek(), 20000000u);
+    EXPECT_EQ(osd.input(IPTV_INPUT_RIGHT, 2000000), 1);
+    EXPECT_EQ(osd.take_media_seek(), 40000000u);
+    ptv::Settings settings;
+    settings.interface_language = 9;
+    ASSERT_TRUE(ptv::save_settings(dir_, settings));
+    EXPECT_EQ(ptv::load_settings(dir_).interface_language, 9);
     ptv::set_interface_language(9);
-    EXPECT_STREQ(ptv::interface_language(),"he");
+    EXPECT_STREQ(ptv::interface_language(), "he");
     EXPECT_TRUE(ptv::interface_rtl());
     ptv::set_console_language(21);
-    EXPECT_STREQ(ptv::interface_language(),"ar");
+    EXPECT_STREQ(ptv::interface_language(), "ar");
     ptv::set_interface_language(1);
     EXPECT_FALSE(ptv::interface_rtl());
-    EXPECT_STREQ(ptv::interface_language(),"en");
+    EXPECT_STREQ(ptv::interface_language(), "en");
     ptv::set_interface_language(0);
-    EXPECT_STREQ(ptv::interface_language(),"ar");
+    EXPECT_STREQ(ptv::interface_language(), "ar");
 }
 
 TEST_F(AppTest, OpensOnLiveTvWithTheWholeCatalog)

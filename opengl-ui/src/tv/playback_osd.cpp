@@ -17,7 +17,7 @@ namespace ptv
 {
 void VideoPanel::reset(unsigned left, unsigned top, unsigned w, unsigned h)
 {
-    x = interface_rtl() && left<=1920 && w<=1920-left ? 1920-left-w : left;
+    x = interface_rtl() && left <= 1920 && w <= 1920 - left ? 1920 - left - w : left;
     y = top;
     width = w;
     height = h;
@@ -32,9 +32,8 @@ void VideoPanel::text(const hui::gfx::Font &font, std::string_view value, float 
     if (font.atlas().empty() || size <= 0 || max_width <= 0)
         return;
     std::vector<hui::gfx::GlyphQuad> quads;
-    font.layout(font.fit(value, size, max_width), interface_rtl()?width-left:left, baseline, size,
-                interface_rtl()?hui::gfx::Align::right:hui::gfx::Align::left,
-                quads);
+    font.layout(font.fit(value, size, max_width), interface_rtl() ? width - left : left, baseline,
+                size, interface_rtl() ? hui::gfx::Align::right : hui::gfx::Align::left, quads);
     const int aw = font.atlas_width(), ah = font.atlas_height();
     const auto sample = [&](int sx, int sy)
     {
@@ -351,7 +350,8 @@ std::optional<std::uint32_t> PlaybackOsd::take_subtitle_selection()
 void PlaybackOsd::set_live_state(const iptv_player_live_state_t &state)
 {
     std::lock_guard lock(mutex_);
-    const auto behind = [](const iptv_player_live_state_t &value) {
+    const auto behind = [](const iptv_player_live_state_t &value)
+    {
         return value.last_us > value.position_us ? (value.last_us - value.position_us) / 1000000
                                                  : 0;
     };
@@ -470,8 +470,10 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         if (interface_rtl())
         {
-            if (action==IPTV_INPUT_LEFT) action=IPTV_INPUT_RIGHT;
-            else if (action==IPTV_INPUT_RIGHT) action=IPTV_INPUT_LEFT;
+            if (action == IPTV_INPUT_LEFT)
+                action = IPTV_INPUT_RIGHT;
+            else if (action == IPTV_INPUT_RIGHT)
+                action = IPTV_INPUT_LEFT;
         }
         if (action == IPTV_INPUT_L1 || action == IPTV_INPUT_R1)
         {

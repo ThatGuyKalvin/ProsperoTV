@@ -175,7 +175,7 @@ TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
     hui::gfx::Font font;
     std::string font_data;
     ASSERT_TRUE(hui::save::read_file(
-        std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont", &font_data));
+        std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont", &font_data, 64u << 20));
     ASSERT_TRUE(font.load(font_data));
     std::vector<std::uint8_t> video(1920 * 1088 * 3 / 2, 100);
     const auto capture = [&](const char *suffix)

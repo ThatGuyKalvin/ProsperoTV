@@ -234,7 +234,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
         std::string(tr("Records playback and decoder details for a problem report.")) + " " +
         diag::destination();
     form_.add_action(kRowReport, tr("Export failure report to USB")).description =
-        tr("Saves the most recent playback failure or crash without account details or stream addresses.");
+        tr("Saves the most recent playback failure or crash without account details or stream "
+           "addresses.");
     form_.add_header(tr("HOUSEHOLD"));
     form_.add_value(kRowProfile, tr("Console profile"), tr("Current console user"))
         .description = tr(tr(
@@ -265,9 +266,12 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_action(kRowRestore, tr("Restore from USB"));
     form_.add_action(kRowShare, tr("Share with another console"));
     form_.add_header(tr("APPEARANCE AND ACCESSIBILITY"));
-    form_.add_choice(kRowLanguage,tr("Interface language"),
-        {tr("System language"),"English","Español","Français","Deutsch","Italiano","Português","Nederlands","العربية","עברית"},settings.interface_language)
-        .description=tr("Restart to apply language");
+    form_
+        .add_choice(kRowLanguage, tr("Interface language"),
+                    {tr("System language"), "English", "Español", "Français", "Deutsch", "Italiano",
+                     "Português", "Nederlands", "العربية", "עברית"},
+                    settings.interface_language)
+        .description = tr("Restart to apply language");
     form_.add_choice(kRowTheme, tr("Theme"), {tr("Dusk"), tr("Ocean"), tr("Forest")},
                      settings.theme);
     form_.add_toggle(kRowLargeText, tr("Larger text"), settings.larger_text).description =
@@ -819,17 +823,24 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 
 void App::step(const InputFrame &physical, float dt, ui::Feedback &feedback)
 {
-    InputFrame input=physical;
+    InputFrame input = physical;
     if (interface_rtl())
     {
-        if (input.nav==Direction::left) input.nav=Direction::right;
-        else if (input.nav==Direction::right) input.nav=Direction::left;
-        const auto swap=[](std::uint32_t bits) {
-            const auto left=1u<<static_cast<unsigned>(Action::left),right=1u<<static_cast<unsigned>(Action::right);
-            return (bits&~(left|right))|((bits&left)?right:0)|((bits&right)?left:0);
+        if (input.nav == Direction::left)
+            input.nav = Direction::right;
+        else if (input.nav == Direction::right)
+            input.nav = Direction::left;
+        const auto swap = [](std::uint32_t bits)
+        {
+            const auto left = 1u << static_cast<unsigned>(Action::left),
+                       right = 1u << static_cast<unsigned>(Action::right);
+            return (bits & ~(left | right)) | ((bits & left) ? right : 0) |
+                   ((bits & right) ? left : 0);
         };
-        input.pressed=swap(input.pressed); input.released=swap(input.released); input.held=swap(input.held);
-        input.stick_x=-input.stick_x;
+        input.pressed = swap(input.pressed);
+        input.released = swap(input.released);
+        input.held = swap(input.held);
+        input.stick_x = -input.stick_x;
     }
     if (storage_busy_)
     {
@@ -1240,7 +1251,8 @@ void App::draw_about(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, words, x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
         y += 36.0f;
     };
-    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
+    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f)
+    {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
     const auto rule = [&]()
@@ -1476,8 +1488,8 @@ void App::draw_hints(ui::Canvas &canvas) const
 void App::draw(Frame &frame, bool themed) const
 {
     frame.reset();
-    gfx::ScopedRtl scene_direction(frame.scene,interface_rtl()?kWidth:0);
-    gfx::ScopedRtl overlay_direction(frame.overlay,interface_rtl()?kWidth:0);
+    gfx::ScopedRtl scene_direction(frame.scene, interface_rtl() ? kWidth : 0);
+    gfx::ScopedRtl overlay_direction(frame.overlay, interface_rtl() ? kWidth : 0);
     frame.glass_texture = glass_texture_;
     if (sleeping_)
     {
