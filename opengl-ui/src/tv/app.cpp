@@ -1295,7 +1295,7 @@ void App::draw_hints(ui::Canvas &canvas) const
         count = sources_.hints(hints, 6);
         break;
     case kVod:
-        count = vod_.hints(hints, 6);
+        count = vod_.hints(hints, 7);
         break;
     case kSettings:
         if (form_.uses_horizontal())

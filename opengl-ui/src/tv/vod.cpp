@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -44,6 +45,113 @@ bool fetch(const std::string &url, std::string *reply, const iptv::http::Request
     reply->assign(buffer.get(), result.bytes);
     return true;
 }
+bool detail_field(const std::string &key, JsonReader *value, VodDetails &details)
+{
+    if (key == "info" && value->Peek() == '{')
+        return ReadObject(value, [&](const std::string &nested, JsonReader *item)
+                          { return detail_field(nested, item, details); });
+    std::string *target =
+        key == "plot" || key == "description" ? &details.plot
+        : key == "cast" || key == "actors"    ? &details.cast
+        : key == "genre"                      ? &details.genre
+        : key == "year" || key == "releaseDate" || key == "releasedate" || key == "release_date"
+            ? &details.year
+        : key == "rating" || key == "rating_5based" ? &details.rating
+        : key == "movie_image" || key == "cover_big" || key == "cover" || key == "stream_icon"
+            ? &details.poster
+            : nullptr;
+    if (!target)
+        return value->SkipValue();
+    std::string text;
+    if (value->Peek() == '[')
+    {
+        if (!ReadArray(value,
+                       [&](JsonReader *entry)
+                       {
+                           std::string part;
+                           if (!entry->StringOrScalar(&part, 256))
+                               return entry->SkipValue();
+                           if (part != "null" && text.size() + part.size() + 2 <= 1024)
+                           {
+                               if (!text.empty())
+                                   text += ", ";
+                               text += part;
+                           }
+                           return true;
+                       }))
+            return false;
+    }
+    else if (!value->StringOrScalar(&text, target == &details.plot || target == &details.poster
+                                               ? 4096
+                                           : target == &details.cast ? 1024
+                                                                     : 256))
+        return false;
+    if (text == "null")
+        text.clear();
+    if (target == &details.year)
+    {
+        if (text.size() < 4 || integer(std::string_view(text).substr(0, 4)) < 1880 ||
+            integer(std::string_view(text).substr(0, 4)) > 2200)
+            text.clear();
+        else
+            text.resize(4);
+    }
+    if (target == &details.rating &&
+        (text.size() > 16 || text.find_first_not_of("0123456789.") != std::string::npos))
+        text.clear();
+    if (target == &details.rating && !text.empty())
+    {
+        char *end = nullptr;
+        const double rating = std::strtod(text.c_str(), &end);
+        const bool five_based = key == "rating_5based";
+        if (!end || *end != '\0' || rating < 0 || rating > (five_based ? 5 : 10))
+            text.clear();
+        else
+        {
+            if (five_based && !details.rating.empty())
+                return true;
+            char normalized[24];
+            std::snprintf(normalized, sizeof(normalized), "%.2f", rating * (five_based ? 2 : 1));
+            text = normalized;
+            while (!text.empty() && text.back() == '0')
+                text.pop_back();
+            if (!text.empty() && text.back() == '.')
+                text.pop_back();
+        }
+    }
+    if (target == &details.poster)
+    {
+        std::string canonical;
+        if (iptv::CanonicalizeStreamUrl(text, &canonical))
+            text = std::move(canonical);
+        else
+            text.clear();
+    }
+    if (!text.empty())
+        *target = std::move(text);
+    return true;
+}
+void fill_missing(VodDetails &value, const VodDetails &fallback)
+{
+    if (value.plot.empty())
+        value.plot = fallback.plot;
+    if (value.cast.empty())
+        value.cast = fallback.cast;
+    if (value.genre.empty())
+        value.genre = fallback.genre;
+    if (value.year.empty())
+        value.year = fallback.year;
+    if (value.rating.empty())
+        value.rating = fallback.rating;
+    if (!fallback.poster.empty() && (value.poster.empty() || fallback.complete))
+        value.poster = fallback.poster;
+    value.complete = value.complete || fallback.complete;
+}
+std::size_t detail_bytes(const VodDetails &value)
+{
+    return value.plot.size() + value.cast.size() + value.genre.size() + value.year.size() +
+           value.rating.size() + value.poster.size();
+}
 struct Parser
 {
     const iptv::XtreamCredentials &account;
@@ -53,9 +161,13 @@ struct Parser
     std::unordered_set<std::string> ids;
     std::size_t text_bytes = 0;
     bool full = false;
+    VodMetadata *metadata = nullptr;
+    std::size_t metadata_bytes = 0;
+    VodDetails series_details{};
     bool item(JsonReader *reader, std::string_view season = {})
     {
         std::string id, name, logo, category, extension, episode, season_number(season), adult;
+        VodDetails details;
         if (!ReadObject(reader,
                         [&](const std::string &key, JsonReader *value)
                         {
@@ -77,7 +189,7 @@ struct Parser
                                 return value->StringOrScalar(&episode, 12);
                             if (key == "season")
                                 return value->StringOrScalar(&season_number, 12);
-                            return value->SkipValue();
+                            return detail_field(key, value, details);
                         }))
             return false;
         if (id.empty() || id == "null" || name.empty() || name == "null")
@@ -86,6 +198,8 @@ struct Parser
             extension.clear();
         iptv::Channel item;
         item.source_id = catalog.source_id;
+        item.media_kind =
+            kind == VodKind::movies ? iptv::MediaKind::movie : iptv::MediaKind::episode;
         item.id = identifier(item.source_id, kind, id);
         item.tvg_id = id;
         item.name = std::move(name);
@@ -123,14 +237,29 @@ struct Parser
             return false;
         }
         text_bytes += bytes;
+        fill_missing(details, series_details);
+        if (details.poster.empty())
+            details.poster = item.tvg_logo;
+        if (metadata)
+        {
+            const auto size = detail_bytes(details) + item.id.size();
+            if (size <= 32u * 1024u * 1024u - metadata_bytes)
+            {
+                metadata_bytes += size;
+                metadata->emplace(item.id, std::move(details));
+            }
+        }
         return catalog.Add(item);
     }
 };
 } // namespace
 
 bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_view series,
-              iptv::Catalog *catalog, const iptv::http::RequestControl *control, std::string *error)
+              iptv::Catalog *catalog, const iptv::http::RequestControl *control, std::string *error,
+              VodMetadata *metadata)
 {
+    if (metadata)
+        metadata->clear();
     if (!catalog || !error)
         return false;
     catalog->Clear();
@@ -142,6 +271,7 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
     }
     catalog->source_id = iptv::XtreamSourceId(account);
     Parser parser{account, kind, *catalog, {}, {}};
+    parser.metadata = metadata;
     std::string url, reply;
     bool ok = false;
     if (kind == VodKind::episodes)
@@ -150,35 +280,39 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
         {
             JsonReader reader(reply);
             bool found = false;
-            ok = ReadObject(&reader,
-                            [&](const std::string &key, JsonReader *value)
-                            {
-                                if (key != "episodes")
-                                    return value->SkipValue();
-                                found = true;
-                                if (value->Peek() == '[')
-                                {
-                                    unsigned season = 0;
-                                    return ReadArray(
-                                        value,
-                                        [&](JsonReader *episode)
-                                        {
-                                            const auto number = std::to_string(season++);
-                                            if (episode->Peek() == '[')
-                                                return ReadArray(
-                                                    episode, [&](JsonReader *item)
-                                                    { return parser.item(item, number); });
-                                            return parser.item(episode);
-                                        });
-                                }
-                                return ReadObject(
-                                    value,
-                                    [&](const std::string &season, JsonReader *episodes)
-                                    {
-                                        return ReadArray(episodes, [&](JsonReader *episode)
-                                                         { return parser.item(episode, season); });
-                                    });
-                            }) &&
+            ok = ReadObject(
+                     &reader,
+                     [&](const std::string &key, JsonReader *value)
+                     {
+                         if (key == "info" && value->Peek() == '{')
+                             return ReadObject(
+                                 value, [&](const std::string &field, JsonReader *part)
+                                 { return detail_field(field, part, parser.series_details); });
+                         if (key != "episodes")
+                             return value->SkipValue();
+                         found = true;
+                         if (value->Peek() == '[')
+                         {
+                             unsigned season = 0;
+                             return ReadArray(value,
+                                              [&](JsonReader *episode)
+                                              {
+                                                  const auto number = std::to_string(season++);
+                                                  if (episode->Peek() == '[')
+                                                      return ReadArray(
+                                                          episode, [&](JsonReader *item)
+                                                          { return parser.item(item, number); });
+                                                  return parser.item(episode);
+                                              });
+                         }
+                         return ReadObject(value,
+                                           [&](const std::string &season, JsonReader *episodes)
+                                           {
+                                               return ReadArray(
+                                                   episodes, [&](JsonReader *episode)
+                                                   { return parser.item(episode, season); });
+                                           });
+                     }) &&
                  reader.Finished() && found;
         }
     }
@@ -219,15 +353,52 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
                  splitter.found();
         }
     }
+    if (ok && metadata && kind == VodKind::episodes)
+    {
+        std::size_t bytes = 0;
+        for (auto it = metadata->begin(); it != metadata->end();)
+        {
+            fill_missing(it->second, parser.series_details);
+            const auto size = it->first.size() + detail_bytes(it->second);
+            if (size > 32u * 1024u * 1024u - bytes)
+                it = metadata->erase(it);
+            else
+            {
+                bytes += size;
+                ++it;
+            }
+        }
+    }
     if (control && control->cancelled && control->cancelled(control->context))
         ok = false;
     if (!ok)
     {
         catalog->Clear();
+        if (metadata)
+            metadata->clear();
         *error = parser.full ? tr("This on-demand list is too large to load.")
                              : tr("The provider's on-demand list could not be downloaded.");
     }
     return ok;
+}
+
+const VodDetails &VodLibrary::details(std::string_view id) const
+{
+    static const VodDetails empty;
+    const auto found = metadata_.find(std::string(id));
+    return found == metadata_.end() ? empty : found->second;
+}
+void VodLibrary::request_details(unsigned index)
+{
+    if (playlist_ || kind_ != VodKind::movies || busy() || requested_ || index >= catalog_.size())
+        return;
+    const auto item = catalog_[index];
+    if (details(item.id).complete)
+        return;
+    detail_id_ = item.id;
+    detail_provider_id_ = item.tvg_id;
+    requested_ = true;
+    status_ = tr("Loading title details...");
 }
 
 VodLibrary::~VodLibrary()
@@ -248,6 +419,8 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
     cache_ = std::move(cache);
     key_.clear();
     catalog_.Clear();
+    metadata_.clear();
+    detail_id_.clear();
     east_asian_ = korean_ = false;
     loaded_ = false;
     status_ =
@@ -269,6 +442,8 @@ void VodLibrary::configure_playlist(const iptv::Catalog *playlist)
     account_ = {};
     key_.clear();
     catalog_.Clear();
+    metadata_.clear();
+    detail_id_.clear();
     loaded_ = false;
     east_asian_ = korean_ = false;
     status_ = tr("Choose Movies or TV shows.");
@@ -320,6 +495,10 @@ void VodLibrary::note_scripts()
     {
         ptv::note_scripts(catalog_[i].name, &east_asian_, &korean_);
         ptv::note_scripts(catalog_[i].group_title, &east_asian_, &korean_);
+        const auto &detail = details(catalog_[i].id);
+        ptv::note_scripts(detail.plot, &east_asian_, &korean_);
+        ptv::note_scripts(detail.cast, &east_asian_, &korean_);
+        ptv::note_scripts(detail.genre, &east_asian_, &korean_);
     }
 }
 void VodLibrary::select(VodKind kind, std::string series, bool force)
@@ -335,6 +514,7 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
         series_ = std::move(series);
         key_ = key;
         catalog_.Clear();
+        metadata_.clear();
         catalog_.source_id = playlist_->source_id;
         std::unordered_set<std::string> shows;
         for (std::size_t i = 0; i < playlist_->size(); ++i)
@@ -382,9 +562,15 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
                   catalog_.source_id == iptv::XtreamSourceId(account_);
         if (!loaded_)
             catalog_.Clear();
+        metadata_ = loaded_ ? load_vod_metadata(file(), catalog_) : VodMetadata{};
         saved_ = loaded_ ? report.saved_unix : 0;
         note_scripts();
         ++revision_;
+    }
+    if (force)
+    {
+        detail_id_.clear();
+        detail_provider_id_.clear();
     }
     if (force || !loaded_ || refresh_due(schedule_, saved_, platform::unix_time()))
         requested_ = true;
@@ -401,10 +587,13 @@ void VodLibrary::poll(bool can_download)
         thread_ = nullptr;
         if (ok_)
         {
-            catalog_ = std::move(pending_);
+            metadata_ = std::move(pending_metadata_);
+            if (detail_id_.empty())
+                catalog_ = std::move(pending_);
             loaded_ = true;
             note_scripts();
-            saved_ = platform::unix_time();
+            if (detail_id_.empty())
+                saved_ = platform::unix_time();
             status_ = catalog_.empty() ? tr("The provider has no titles in this list.")
                       : saved_ok_      ? tr("On-demand list up to date")
                                        : tr("List loaded, but it could not be saved.");
@@ -412,6 +601,9 @@ void VodLibrary::poll(bool can_download)
         else
             status_ = error_ + (loaded_ ? tr(" Showing the saved titles.") : "");
         pending_.Clear();
+        pending_metadata_.clear();
+        detail_id_.clear();
+        detail_provider_id_.clear();
         ++revision_;
     }
     if (!can_download || thread_ || !requested_)
@@ -423,6 +615,8 @@ void VodLibrary::poll(bool can_download)
     thread_ = platform::thread_start(work, this, 2u * 1024u * 1024u, "ptv-vod");
     if (!thread_)
     {
+        detail_id_.clear();
+        detail_provider_id_.clear();
         status_ = tr("The on-demand download could not start.");
         ++revision_;
     }
@@ -431,7 +625,11 @@ void VodLibrary::stop()
 {
     requested_ = false;
     if (!thread_)
+    {
+        detail_id_.clear();
+        detail_provider_id_.clear();
         return;
+    }
     stop_.store(true);
     while (!done_.load())
     {
@@ -447,9 +645,86 @@ void *VodLibrary::work(void *self)
         [](void *self) { return static_cast<VodLibrary *>(self)->stop_.load(); }, &v};
     if (platform::network_init() == iptv::http::Status::ok)
     {
-        v.ok_ = load_vod(v.account_, v.kind_, v.series_, &v.pending_, &control, &v.error_);
-        if (v.ok_)
-            v.saved_ok_ = iptv::SaveCatalog(v.file(), v.pending_) == iptv::StoreStatus::ok;
+        if (!v.detail_id_.empty())
+        {
+            v.pending_metadata_ = v.metadata_;
+            std::string url, reply;
+            iptv::BuildXtreamApiUrl(v.account_, "get_vod_info", &url);
+            url += "&vod_id=";
+            constexpr char hex[] = "0123456789ABCDEF";
+            for (const unsigned char c : v.detail_provider_id_)
+            {
+                if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    c == '-' || c == '_')
+                    url += c;
+                else
+                {
+                    url += '%';
+                    url += hex[c >> 4];
+                    url += hex[c & 15];
+                }
+            }
+            VodDetails detail = v.details(v.detail_id_);
+            if (fetch(url, &reply, &control))
+            {
+                JsonReader reader(reply);
+                bool found = false;
+                v.ok_ = ReadObject(
+                            &reader,
+                            [&](const std::string &key, JsonReader *value)
+                            {
+                                if ((key == "info" || key == "movie_data") && value->Peek() == '{')
+                                {
+                                    found = true;
+                                    return ReadObject(
+                                        value, [&](const std::string &field, JsonReader *part)
+                                        { return detail_field(field, part, detail); });
+                                }
+                                return value->SkipValue();
+                            }) &&
+                        reader.Finished() && found && !v.stop_.load();
+            }
+            if (v.ok_)
+            {
+                detail.complete = true;
+                v.pending_metadata_[v.detail_id_] = std::move(detail);
+                std::size_t bytes = 0;
+                for (const auto &[id, value] : v.pending_metadata_)
+                    bytes += id.size() + detail_bytes(value);
+                if (bytes > 32u * 1024u * 1024u)
+                {
+                    v.ok_ = false;
+                    v.error_ = tr("The provider metadata cache is full.");
+                }
+                else
+                    v.saved_ok_ = save_vod_metadata(v.file(), v.pending_metadata_);
+            }
+            else
+                v.error_ = tr("Title details could not be downloaded.");
+        }
+        else
+        {
+            v.ok_ = load_vod(v.account_, v.kind_, v.series_, &v.pending_, &control, &v.error_,
+                             &v.pending_metadata_);
+            if (v.ok_)
+            {
+                std::size_t bytes = 0;
+                for (auto it = v.pending_metadata_.begin(); it != v.pending_metadata_.end();)
+                {
+                    fill_missing(it->second, v.details(it->first));
+                    const auto size = it->first.size() + detail_bytes(it->second);
+                    if (size > 32u * 1024u * 1024u - bytes)
+                        it = v.pending_metadata_.erase(it);
+                    else
+                    {
+                        bytes += size;
+                        ++it;
+                    }
+                }
+                v.saved_ok_ = iptv::SaveCatalog(v.file(), v.pending_) == iptv::StoreStatus::ok &&
+                              save_vod_metadata(v.file(), v.pending_metadata_);
+            }
+        }
         platform::network_shutdown();
     }
     else

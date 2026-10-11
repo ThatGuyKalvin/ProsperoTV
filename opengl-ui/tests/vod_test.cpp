@@ -542,3 +542,142 @@ TEST_F(VodTest, EmptyListsAreValidAndCancellationStopsTheWorker)
     model.close();
 }
 } // namespace
+
+TEST_F(VodTest, ProviderMetadataSurvivesCacheAndSeriesInfoInheritsIntoEpisodes)
+{
+    response(
+        "get_vod_streams",
+        R"([{"stream_id":10,"name":"Alpha","genre":"Drama / Mystery","releaseDate":"2024-03-09","rating":"8.2","rating_5based":1,"plot":"Provider synopsis","cast":["One","Two"]}])");
+    iptv::Catalog catalog;
+    ptv::VodMetadata metadata;
+    std::string error;
+    ASSERT_TRUE(
+        ptv::load_vod(account, ptv::VodKind::movies, {}, &catalog, nullptr, &error, &metadata));
+    ASSERT_EQ(catalog.size(), 1u);
+    const auto id = std::string(catalog[0].id);
+    ASSERT_EQ(metadata.at(id).year, "2024");
+    EXPECT_EQ(catalog[0].media_kind, iptv::MediaKind::movie);
+    EXPECT_EQ(metadata.at(id).cast, "One, Two");
+    EXPECT_EQ(ptv::vod_genres(metadata.at(id).genre).size(), 2u);
+    ASSERT_EQ(iptv::SaveCatalog(dir + "/details.sqlite3", catalog), iptv::StoreStatus::ok);
+    ASSERT_TRUE(ptv::save_vod_metadata(dir + "/details.sqlite3", metadata));
+    const auto cached = ptv::load_vod_metadata(dir + "/details.sqlite3", catalog);
+    EXPECT_EQ(cached.at(id).plot, "Provider synopsis");
+    EXPECT_EQ(cached.at(id).rating, "8.2");
+    std::string url;
+    ASSERT_TRUE(iptv::BuildXtreamSeriesUrl(account, "20", &url));
+    reply(
+        url,
+        R"({"episodes":{"1":[{"id":200,"title":"Pilot","info":{"plot":"Episode synopsis"}},{"id":201,"title":"Return","info":null}]},"info":{"plot":"Show synopsis","cast":"Actor","genre":"Comedy","rating_5based":4.5,"releaseDate":"2022-01-01","cover":"https://image.invalid/show.png"}})");
+    ASSERT_TRUE(
+        ptv::load_vod(account, ptv::VodKind::episodes, "20", &catalog, nullptr, &error, &metadata));
+    ASSERT_EQ(catalog.size(), 2u);
+    EXPECT_EQ(metadata.at(std::string(catalog[0].id)).plot, "Episode synopsis");
+    EXPECT_EQ(metadata.at(std::string(catalog[1].id)).plot, "Show synopsis");
+    EXPECT_EQ(metadata.at(std::string(catalog[1].id)).year, "2022");
+    EXPECT_EQ(metadata.at(std::string(catalog[1].id)).rating, "9");
+    EXPECT_EQ(catalog[1].media_kind, iptv::MediaKind::episode);
+    EXPECT_EQ(metadata.at(std::string(catalog[1].id)).poster, "https://image.invalid/show.png");
+}
+TEST_F(VodTest, MovieDetailsFetchLazilyAndRemainAvailableOfflineAfterRefresh)
+{
+    std::string info;
+    ASSERT_TRUE(iptv::BuildXtreamApiUrl(account, "get_vod_info", &info));
+    reply(
+        info + "&vod_id=10",
+        R"({"info":{"plot":"Full plot","cast":"Actor A","genre":"Drama","releasedate":"2023-05-02","rating":7.5,"movie_image":"https://image.invalid/poster.jpg"},"movie_data":{"stream_id":10}})");
+    std::string id;
+    {
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        model.vod().select(ptv::VodKind::movies);
+        ASSERT_TRUE(settle(model));
+        id = model.vod().catalog()[0].id;
+        EXPECT_FALSE(model.vod().details(id).complete);
+        model.vod().request_details(0);
+        ASSERT_TRUE(settle(model));
+        EXPECT_TRUE(model.vod().details(id).complete);
+        EXPECT_EQ(model.vod().details(id).plot, "Full plot");
+        model.vod().select(ptv::VodKind::movies, {}, true);
+        ASSERT_TRUE(settle(model));
+        EXPECT_EQ(model.vod().details(id).plot, "Full plot");
+        model.close();
+    }
+    host::set_network(false, "");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.vod().details(id).genre, "Drama");
+    EXPECT_EQ(model.vod().details(id).year, "2023");
+    EXPECT_EQ(model.vod().details(id).poster, "https://image.invalid/poster.jpg");
+    model.close();
+}
+TEST_F(VodTest, ControllerFiltersByProviderGenreAndYearSortsAndOpensDetails)
+{
+    response(
+        "get_vod_streams",
+        R"([{"stream_id":10,"name":"Alpha","genre":"Drama","year":"2020","rating":"5"},{"stream_id":11,"name":"Beta","genre":"Comedy","year":"2024","rating":"9"}])");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.view.vod_kind = static_cast<int>(ptv::VodKind::movies);
+    model.view.vod_all = true;
+    hui::gfx::Font font;
+    std::ifstream font_file(std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont",
+                            std::ios::binary);
+    const std::string font_bytes{std::istreambuf_iterator<char>(font_file), {}};
+    ASSERT_TRUE(font.load(font_bytes));
+    hui::ui::Fonts fonts{};
+    fonts.regular.font = &font;
+    fonts.regular.texture = 1;
+    fonts.semibold = fonts.display = fonts.mono = fonts.hand = fonts.pixel = fonts.regular;
+    ptv::Shared shared(model, fonts, {});
+    ptv::VodScreen screen(shared);
+    hui::ui::Feedback feedback;
+    const auto press = [&](hui::Action action)
+    {
+        hui::InputFrame input;
+        input.pressed = hui::action_bit(action);
+        screen.handle(input, feedback);
+    };
+    const auto move = [&](hui::Direction direction)
+    {
+        hui::InputFrame input;
+        input.nav = direction;
+        screen.handle(input, feedback);
+    };
+    screen.enter();
+    ASSERT_TRUE(settle(model));
+    screen.update();
+    ASSERT_EQ(screen.result_count(), 2u);
+    press(hui::Action::r3);
+    ASSERT_TRUE(screen.filters_open());
+    hui::gfx::DrawList list;
+    hui::ui::Canvas canvas{list, fonts, 0, 0};
+    screen.draw(canvas);
+    EXPECT_FALSE(list.empty());
+    move(hui::Direction::right);
+    EXPECT_EQ(model.view.vod_genre, "Comedy");
+    EXPECT_EQ(screen.result_count(), 1u);
+    press(hui::Action::west);
+    move(hui::Direction::down);
+    move(hui::Direction::right);
+    EXPECT_EQ(model.view.vod_year, "2020");
+    EXPECT_EQ(screen.result_count(), 1u);
+    press(hui::Action::west);
+    move(hui::Direction::down);
+    move(hui::Direction::right);
+    move(hui::Direction::right);
+    EXPECT_EQ(model.view.vod_sort, 2);
+    press(hui::Action::confirm);
+    press(hui::Action::west);
+    EXPECT_TRUE(screen.details_open());
+    screen.draw(canvas);
+    ASSERT_TRUE(screen.back());
+    EXPECT_FALSE(screen.details_open());
+    press(hui::Action::confirm);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.channel_name, "Beta");
+    model.close();
+}

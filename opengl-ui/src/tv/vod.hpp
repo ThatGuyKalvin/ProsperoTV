@@ -8,6 +8,7 @@
 #include "tv/library.hpp"
 #include <atomic>
 #include <string>
+#include <map>
 
 namespace ptv
 {
@@ -17,9 +18,18 @@ enum class VodKind
     series,
     episodes
 };
+struct VodDetails
+{
+    std::string plot, cast, genre, year, rating, poster;
+    bool complete = false;
+};
+using VodMetadata = std::map<std::string, VodDetails>;
+bool save_vod_metadata(const std::string &path, const VodMetadata &metadata);
+VodMetadata load_vod_metadata(const std::string &path, const iptv::Catalog &catalog);
+std::vector<std::string> vod_genres(std::string_view genres);
 bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_view series,
-              iptv::Catalog *catalog, const iptv::http::RequestControl *control,
-              std::string *error);
+              iptv::Catalog *catalog, const iptv::http::RequestControl *control, std::string *error,
+              VodMetadata *metadata = nullptr);
 
 // Shares the app's network time with live-list and programme-guide downloads.
 // The Model grants that time through poll(can_download).
@@ -34,6 +44,8 @@ class VodLibrary
     void select(VodKind kind, std::string series = {}, bool force = false);
     void poll(bool can_download);
     void stop();
+    const VodDetails &details(std::string_view id) const;
+    void request_details(unsigned index);
     bool available() const
     {
         return playlist_ != nullptr || iptv::ValidateXtreamCredentials(account_);
@@ -89,6 +101,8 @@ class VodLibrary
     RefreshSchedule schedule_ = RefreshSchedule::daily;
     VodKind kind_ = VodKind::movies;
     iptv::Catalog catalog_, pending_;
+    VodMetadata metadata_, pending_metadata_;
+    std::string detail_id_, detail_provider_id_;
     std::uint64_t saved_ = 0;
     unsigned revision_ = 0;
     bool requested_ = false, loaded_ = false, ok_ = false, saved_ok_ = false;
