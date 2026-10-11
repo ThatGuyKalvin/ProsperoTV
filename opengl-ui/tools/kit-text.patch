@@ -214,3 +214,32 @@ index 0c52b44..0c2d31c 100644
      const font_format::Glyph *find(std::uint32_t codepoint) const;
      float kern(std::uint32_t first, std::uint32_t second) const;
  
+diff --git a/src/ui/components/tabs.cpp b/src/ui/components/tabs.cpp
+index 773e88e..a151beb 100644
+--- a/src/ui/components/tabs.cpp
++++ b/src/ui/components/tabs.cpp
+@@ -258,6 +258,12 @@ Rect TabBar::tab_rect(const Fonts &fonts, int index) const
+     return layout(paint).tabs[static_cast<std::size_t>(index)];
+ }
+ 
++std::vector<Rect> TabBar::tab_rects(const Fonts &fonts) const
++{
++    gfx::DrawList scratch;
++    return layout(Painter(scratch, fonts, style.theme)).tabs;
++}
++
+ void TabBar::draw(Canvas &canvas) const
+ {
+     const Theme &theme = style.theme;
+diff --git a/src/ui/components/tabs.hpp b/src/ui/components/tabs.hpp
+index ebaa8ec..7b47f68 100644
+--- a/src/ui/components/tabs.hpp
++++ b/src/ui/components/tabs.hpp
+@@ -136,6 +136,7 @@ class TabBar
+     // Where a tab is on screen right now (scroll applied). Tabs are sized by
+     // their labels, so this needs the fonts the bar is drawn with.
+     gfx::Rect tab_rect(const Fonts &fonts, int index) const;
++    std::vector<gfx::Rect> tab_rects(const Fonts &fonts) const;
+ 
+   private:
+     struct Layout

@@ -44,6 +44,7 @@ for tool in build.sh build-host-tools.sh ninja-build.sh prepare-opengl.sh fetch-
     cp "$kit/tools/$tool" "$out/tools/$tool"
 done
 cp "$proto/ps5/Makefile" "$out/Makefile"
+cp "$proto/tools/setup-native-text.sh" "$out/tools/"
 # The two programs the app sends to the payload loader: upstream Lapy's
 # helper (fetched and built at its pinned commit) and the self-update helper.
 cp "$proto"/tools/{build-lapy-helper.py,validate-loader-elf.py,package-extras.sh} "$out/tools/"

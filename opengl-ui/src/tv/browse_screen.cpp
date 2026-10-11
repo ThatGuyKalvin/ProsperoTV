@@ -860,9 +860,8 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
     else
     {
         // Every list wears a hairline; the cream plate of the bar marks the one in use.
-        for (int i = 0; i < static_cast<int>(groups_.tabs().size()); ++i)
+        for (const Rect &chip : groups_.tab_rects(fonts))
         {
-            const Rect chip = groups_.tab_rect(fonts, i);
             if (chip.x + chip.w < kMargin || chip.x > kMargin + 1000.0f)
                 continue; // scrolled out of the row
             list.bordered_rect(chip, chip.h * 0.5f, kWhite.with_alpha(0.05f), 1.5f,
