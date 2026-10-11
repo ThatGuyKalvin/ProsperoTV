@@ -75,6 +75,7 @@ enum FormRow : int
     kRowWake,
     kRowViewingRemaining,
     kRowViewingClock,
+    kRowShare,
 };
 
 constexpr unsigned kAllowances[] = {0, 15, 30, 60, 90, 120, 180};
@@ -141,7 +142,7 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
     : shared_(model, fonts, settings), multiview_(shared_), browse_(shared_), sources_(shared_),
       vod_(shared_), home_(shared_), search_(shared_), library_sheet_(shared_),
-      guide_sheet_(shared_), update_(shared_), glass_texture_(glass_texture),
+      guide_sheet_(shared_), share_sheet_(shared_), update_(shared_), glass_texture_(glass_texture),
       version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
@@ -261,6 +262,7 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_header(tr("BACKUP AND RESTORE"));
     form_.add_action(kRowBackup, tr("Back up to USB"));
     form_.add_action(kRowRestore, tr("Restore from USB"));
+    form_.add_action(kRowShare, tr("Share with another console"));
     form_.add_header(tr("APPEARANCE AND ACCESSIBILITY"));
     form_.add_choice(kRowTheme, tr("Theme"), {tr("Dusk"), tr("Ocean"), tr("Forest")},
                      settings.theme);
@@ -724,6 +726,11 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             open_storage(StorageAction::restore, feedback);
         else if (event == ui::Event::activated && form_.changed_id() == kRowReport)
             open_storage(StorageAction::report, feedback);
+        else if (event == ui::Event::activated && form_.changed_id() == kRowShare)
+        {
+            stop_preview();
+            share_sheet_.open(pair_url_);
+        }
         break;
     }
     default:
@@ -755,7 +762,7 @@ void App::play_intro()
 
 bool App::accepts_remote_search() const
 {
-    return !shared_.model.pin_prompt() && !storage_busy_ && !storage_dialog_.is_open() &&
+    return !shared_.model.pin_prompt() && !storage_busy_ && !storage_open() &&
            (browsing() || tabs_.active() == kHome) && !update_.is_open() && !failure_.is_open() &&
            !library_sheet_.is_open() && !guide_sheet_.is_open();
 }
@@ -890,6 +897,18 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     {
         // Native IME owns the input; suppress underlying navigation and diagnostic input logs.
     }
+    else if (share_sheet_.is_open())
+    {
+        share_sheet_.handle(input);
+        auto request = share_sheet_.take_request();
+        if (request.action != StorageAction::none)
+        {
+            storage_request_ = std::move(request);
+            storage_busy_ = true;
+            stop_preview();
+            return;
+        }
+    }
     else if (storage_dialog_.is_open())
     {
         const auto event = storage_dialog_.handle(input, feedback);
@@ -973,7 +992,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     browse_.set_selection_mode(multiview_.choosing());
     if (intro_ < 0 && !multiview_.active() && !update_.is_open() && !failure_.is_open() &&
         !library_sheet_.is_open() && !guide_sheet_.is_open() && !search_.is_open() &&
-        !pairing_open_ && !storage_dialog_.is_open() && !was_pin_prompt && !model.pin_prompt())
+        !pairing_open_ && !storage_open() && !was_pin_prompt && !model.pin_prompt())
         model.resume_last(shared_.settings.resume_last && input.pressed == 0 &&
                           input.nav == Direction::none);
 
@@ -1023,8 +1042,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
                                  shared_.settings.live_preview && intro_ < 0 &&
                                  !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
                                  !library_sheet_.is_open() && !guide_sheet_.is_open() &&
-                                 !pairing_open_ && !storage_dialog_.is_open();
-    model.block_source_check(preview_allowed || multiview_.active());
+                                 !pairing_open_ && !storage_open();
+    model.block_source_check(preview_allowed || multiview_.active() || share_sheet_.is_open());
     const auto focused = preview_allowed ? browse_.focused() : std::nullopt;
     auto preview_request = focused ? model.preview_request(focused->id) : std::nullopt;
     if (!model.viewing_tick(shared_.preview.running() || multiview_.viewing()))
@@ -1491,6 +1510,7 @@ void App::draw(Frame &frame, bool themed) const
     failure_.draw(over);
     update_.draw(over);
     storage_dialog_.draw(over);
+    share_sheet_.draw(over);
     if (storage_busy_)
     {
         over.list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.94f));

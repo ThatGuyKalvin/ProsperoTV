@@ -7,6 +7,7 @@
 // renderer is in use, so it runs unchanged in tests and on a PC.
 
 #pragma once
+#include "tv/share_bundle.hpp"
 
 #include "iptv_catalog.h"
 #include "iptv_http.h"
@@ -168,6 +169,7 @@ class Model
     void close();
     // A backup/restore ends this model's lifetime. Recreate it before browsing again.
     bool close_for_storage();
+    bool export_shared_library(SharedLibrary &out);
     // Once per frame: keyboard answers, the steps of the account form, and
     // the result of a download.
     void poll();
