@@ -325,6 +325,7 @@ struct Record
     std::uint16_t bytes[kCoreFieldCount];
     std::uint8_t playback;
     std::uint8_t adult;
+    std::uint8_t media_kind;
     std::uint32_t source_line;
     std::uint32_t urls;   // its first other address, or kNone
     std::uint32_t groups; // its first other category, or kNone
@@ -609,6 +610,7 @@ ChannelView Catalog::operator[](std::size_t index) const
         view.portal_command = archive->second[3];
     }
     view.adult = record.adult != 0;
+    view.media_kind = static_cast<MediaKind>(record.media_kind);
     view.source_line = record.source_line;
     view.playback_status = static_cast<PlaybackStatus>(record.playback);
     if (view.playback_status != PlaybackStatus::unknown)
@@ -645,6 +647,8 @@ ChannelView Catalog::Iterator::operator*() const
 
 bool Catalog::Add(const ChannelView &channel)
 {
+    if (channel.media_kind > MediaKind::episode)
+        return false;
     const std::string_view texts[kFieldCount] = {
         channel.id,
         channel.name,
@@ -713,6 +717,7 @@ bool Catalog::Add(const ChannelView &channel)
         }
     }
     record.adult = channel.adult;
+    record.media_kind = static_cast<std::uint8_t>(channel.media_kind);
     record.source_line = channel.source_line;
     record.urls = kNone;
     record.groups = kNone;
@@ -918,7 +923,7 @@ ChannelView::ChannelView(const Channel &channel)
       tvg_language(channel.tvg_language), http_user_agent(channel.http_user_agent),
       http_referrer(channel.http_referrer), catchup(channel.catchup),
       catchup_source(channel.catchup_source), catchup_days(channel.catchup_days),
-      portal_command(channel.portal_command), adult(channel.adult),
+      portal_command(channel.portal_command), adult(channel.adult), media_kind(channel.media_kind),
       source_line(channel.source_line), playback_status(channel.playback_status),
       playback_result(channel.playback_result), playback_checked_unix(channel.playback_checked_unix)
 {
@@ -946,6 +951,7 @@ Channel ChannelView::Copy() const
     channel.catchup_days = catchup_days;
     channel.portal_command = portal_command;
     channel.adult = adult;
+    channel.media_kind = media_kind;
     channel.source_line = source_line;
     channel.playback_status = playback_status;
     channel.playback_result = playback_result;
@@ -971,6 +977,9 @@ struct EntryMetadata
     std::string http_referrer;
     std::string catchup, catchup_source, catchup_days, guide_urls;
     bool adult = false;
+    MediaKind media_kind = MediaKind::live;
+    bool explicit_kind = false;
+    bool positive_duration = false;
 };
 
 struct PendingEntry
@@ -1027,6 +1036,18 @@ bool IsAttributeKeyChar(char value)
 
 void SetAttribute(std::string_view key, std::string &&value, EntryMetadata *metadata)
 {
+    if (key == "type" || key == "stream-type" || key == "tvg-type")
+    {
+        const std::string kind = LowerTrimmed(value);
+        if (kind == "live" || kind == "movie" || kind == "vod" || kind == "series" ||
+            kind == "episode")
+        {
+            metadata->explicit_kind = true;
+            metadata->media_kind = kind == "live"                          ? MediaKind::live
+                                   : kind == "series" || kind == "episode" ? MediaKind::episode
+                                                                           : MediaKind::movie;
+        }
+    }
     if (key == "catchup")
         metadata->catchup = std::move(value);
     else if (key == "catchup-source")
@@ -1092,6 +1113,30 @@ bool SetHttpOption(std::string_view line, std::size_t max_field_bytes, EntryMeta
     return true;
 }
 
+MediaKind ClassifyMedia(const EntryMetadata &metadata, std::string_view url)
+{
+    if (metadata.explicit_kind)
+        return metadata.media_kind;
+    url = url.substr(0, url.find_first_of("?#"));
+    const auto authority = url.find("://");
+    const auto path_start = url.find('/', authority == std::string_view::npos ? 0 : authority + 3);
+    std::string path =
+        path_start == std::string_view::npos ? "" : LowerTrimmed(url.substr(path_start));
+    if (path.find("/series/") != std::string::npos)
+        return MediaKind::episode;
+    if (path.find("/live/") != std::string::npos)
+        return MediaKind::live;
+    if (path.find("/movie/") != std::string::npos || metadata.positive_duration)
+        return MediaKind::movie;
+    const auto dot = path.rfind('.');
+    const std::string_view extension =
+        dot == std::string::npos ? std::string_view() : std::string_view(path).substr(dot);
+    if (extension == ".mp4" || extension == ".mkv" || extension == ".avi" || extension == ".mov" ||
+        extension == ".webm" || extension == ".m4v")
+        return MediaKind::movie;
+    return MediaKind::live;
+}
+
 bool ParseExtinf(std::string_view line, std::size_t max_field_bytes, EntryMetadata *metadata,
                  ParseIssueCode *error)
 {
@@ -1139,6 +1184,9 @@ bool ParseExtinf(std::string_view line, std::size_t max_field_bytes, EntryMetada
     }
 
     EntryMetadata parsed;
+    const std::string_view duration = prefix.substr(0, duration_end);
+    parsed.positive_duration =
+        duration.front() != '-' && duration.find_first_of("123456789") != std::string_view::npos;
     const std::string_view title = Trim(body.substr(comma + 1));
     if (title.size() > max_field_bytes)
     {
@@ -1477,9 +1525,14 @@ struct M3uParser::State
         }
 
         const EntryMetadata &metadata = entry.metadata;
-        const std::string normalized_tvg_id = LowerTrimmed(metadata.tvg_id);
-        const std::uint64_t tvg_key = KeyOf(normalized_tvg_id);
-        const std::uint64_t url_key = KeyOf(canonical_url);
+        const MediaKind media_kind = ClassifyMedia(metadata, canonical_url);
+        const std::string kind_prefix = media_kind == MediaKind::movie     ? "movie:"
+                                        : media_kind == MediaKind::episode ? "episode:"
+                                                                           : "";
+        const std::string normalized_tvg_id =
+            media_kind == MediaKind::live ? LowerTrimmed(metadata.tvg_id) : "";
+        const std::uint64_t tvg_key = KeyOf(kind_prefix + normalized_tvg_id);
+        const std::uint64_t url_key = KeyOf(kind_prefix + canonical_url);
         std::uint32_t existing = kNone;
         if (!normalized_tvg_id.empty())
             existing = by_tvg_id.Find(tvg_key);
@@ -1500,9 +1553,9 @@ struct M3uParser::State
             return;
         }
 
-        const std::string id =
-            StableId(source_id, normalized_tvg_id.empty() ? "url:" + canonical_url
-                                                          : "tvg:" + normalized_tvg_id);
+        const std::string id = StableId(
+            source_id, kind_prefix + (normalized_tvg_id.empty() ? "url:" + canonical_url
+                                                                : "tvg:" + normalized_tvg_id));
         ChannelView channel;
         channel.id = id;
         channel.source_id = source_id;
@@ -1522,6 +1575,7 @@ struct M3uParser::State
                        : !metadata.tvg_name.empty() ? std::string_view(metadata.tvg_name)
                                                     : std::string_view(canonical_url);
         channel.adult = metadata.adult;
+        channel.media_kind = media_kind;
         channel.source_line = entry.line;
         const std::uint32_t inserted = static_cast<std::uint32_t>(catalog->size());
         if (!catalog->Add(channel))

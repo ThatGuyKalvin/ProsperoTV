@@ -26,6 +26,52 @@ bool HasIssue(const iptv::ParseReport &report, iptv::ParseIssueCode code)
                        { return diagnostic.code == code; });
 }
 
+TEST(IptvCatalogTest, ClassifiesMixedMediaWithoutGuessingFromGroupNames)
+{
+    const std::vector<std::pair<std::string, iptv::MediaKind>> cases = {
+        {"-1 group-title=\"Movies\",Live\nhttps://host/live.ts", iptv::MediaKind::live},
+        {"-1,Live HLS\nhttps://host/live.m3u8", iptv::MediaKind::live},
+        {"-1,Film\nhttps://host/movie/user/password/1.ts", iptv::MediaKind::movie},
+        {"-1,Episode\nhttps://host/series/user/password/2.m3u8", iptv::MediaKind::episode},
+        {"-1,File\nhttps://host/Film.MKV?token=1", iptv::MediaKind::movie},
+        {"+0.1,Duration\nhttps://host/video", iptv::MediaKind::movie},
+        {"0,Zero\nhttps://host/video", iptv::MediaKind::live},
+        {"3600 TYPE=\"Live\",Explicit live\nhttps://host/movie/a.mp4", iptv::MediaKind::live},
+        {"-1 stream-type=\"vod\",Explicit VOD\nhttps://host/a.m3u8", iptv::MediaKind::movie},
+        {"-1 type=\"series\",Explicit episode\nhttps://host/a.ts", iptv::MediaKind::episode},
+        {"-1 type=\"unknown\",Unknown\nhttps://host/a.ts", iptv::MediaKind::live},
+        {"-1,Query path\nhttps://host?redirect=/movie/a.mp4", iptv::MediaKind::live},
+        {"30,Provider live\nhttps://host/live/u/p/a.mp4", iptv::MediaKind::live},
+    };
+    for (const auto &[entry, expected] : cases)
+    {
+        iptv::Catalog catalog;
+        catalog = iptv::ParseExtendedM3u("#EXTM3U\n#EXTINF:" + entry + "\n", kSourceId);
+        ASSERT_EQ(catalog.size(), 1u) << entry;
+        EXPECT_EQ(catalog[0].media_kind, expected) << entry;
+        EXPECT_EQ(catalog[0].Copy().media_kind, expected);
+        const iptv::Catalog copied = catalog;
+        EXPECT_EQ(copied[0].media_kind, expected);
+    }
+}
+
+TEST(IptvCatalogTest, KeepsVodEntriesWithSharedGuideIdsAndDeduplicatesTheirUrls)
+{
+    iptv::Catalog catalog;
+    iptv::ParseReport report;
+    catalog = iptv::ParseExtendedM3u(
+        "#EXTINF:-1 tvg-id=\"shared\",Live\nhttps://host/live/u/p/1.ts\n"
+        "#EXTINF:-1 tvg-id=\"shared\",Movie\nhttps://host/movie/u/p/2.ts\n"
+        "#EXTINF:-1 tvg-id=\"shared\",Episode 1\nhttps://host/series/u/p/3.ts\n"
+        "#EXTINF:-1 tvg-id=\"shared\",Episode 2\nhttps://host/series/u/p/4.ts\n"
+        "#EXTINF:-1 tvg-id=\"other\",Duplicate\nhttps://host/series/u/p/4.ts\n",
+        kSourceId, {}, &report);
+    ASSERT_EQ(catalog.size(), 4u);
+    EXPECT_EQ(report.duplicates, 1u);
+    EXPECT_NE(catalog[0].id, catalog[1].id);
+    EXPECT_NE(catalog[2].id, catalog[3].id);
+}
+
 TEST(IptvCatalogTest, ParsesCrLfHttpOptionsAndSearchMetadata)
 {
     const std::string playlist = "\xef\xbb\xbf#EXTM3U\r\n"

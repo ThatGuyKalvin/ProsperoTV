@@ -56,6 +56,7 @@ iptv::Catalog MakeCatalog(std::size_t count, std::uint64_t source_id = kSourceId
 
 void ExpectChannelEquals(const iptv::ChannelView &expected, const iptv::ChannelView &actual)
 {
+    EXPECT_EQ(actual.media_kind, expected.media_kind);
     EXPECT_EQ(actual.id, expected.id);
     EXPECT_EQ(actual.source_id, expected.source_id);
     EXPECT_EQ(actual.name, expected.name);
@@ -117,6 +118,56 @@ class IptvStoreTest : public ::testing::Test
     fs::path path_;
     fs::path history_path_;
 };
+
+TEST_F(IptvStoreTest, RoundTripsMediaKindsAndReadsVersionFiveAsLive)
+{
+    iptv::Catalog catalog;
+    catalog.source_id = kSourceId;
+    for (int kind = 0; kind < 3; ++kind)
+    {
+        auto channel = MakeChannel(kind);
+        channel.media_kind = static_cast<iptv::MediaKind>(kind);
+        ASSERT_TRUE(catalog.Add(channel));
+    }
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), catalog), iptv::StoreStatus::ok);
+    iptv::Catalog loaded;
+    iptv::StoreReport report;
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &loaded, {}, &report), iptv::StoreStatus::ok);
+    ASSERT_EQ(loaded.size(), 3u);
+    EXPECT_EQ(report.catalog_version, 6u);
+    for (std::size_t i = 0; i < loaded.size(); ++i)
+        ExpectChannelEquals(catalog[i], loaded[i]);
+
+    sqlite3 *database = nullptr;
+    ASSERT_EQ(sqlite3_open(path_.string().c_str(), &database), SQLITE_OK);
+    const int result = sqlite3_exec(
+        database, "ALTER TABLE channels DROP COLUMN media_kind; PRAGMA user_version=5;", nullptr,
+        nullptr, nullptr);
+    sqlite3_close(database);
+    ASSERT_EQ(result, SQLITE_OK);
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &loaded, {}, &report), iptv::StoreStatus::ok);
+    EXPECT_EQ(report.catalog_version, 5u);
+    ASSERT_EQ(loaded.size(), 3u);
+    for (const auto channel : loaded)
+        EXPECT_EQ(channel.media_kind, iptv::MediaKind::live);
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), loaded), iptv::StoreStatus::ok);
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &loaded, {}, &report), iptv::StoreStatus::ok);
+    EXPECT_EQ(report.catalog_version, 6u);
+}
+
+TEST_F(IptvStoreTest, RejectsInvalidStoredMediaKind)
+{
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), MakeCatalog(1)), iptv::StoreStatus::ok);
+    sqlite3 *database = nullptr;
+    ASSERT_EQ(sqlite3_open(path_.string().c_str(), &database), SQLITE_OK);
+    const int result = sqlite3_exec(
+        database, "PRAGMA ignore_check_constraints=ON; UPDATE channels SET media_kind=4294967296;",
+        nullptr, nullptr, nullptr);
+    sqlite3_close(database);
+    ASSERT_EQ(result, SQLITE_OK);
+    iptv::Catalog loaded;
+    EXPECT_EQ(iptv::LoadCatalog(path_.string(), &loaded), iptv::StoreStatus::corrupt);
+}
 
 TEST_F(IptvStoreTest, RoundTripsEveryChannelFieldAlternatesAndHttpHeaders)
 {

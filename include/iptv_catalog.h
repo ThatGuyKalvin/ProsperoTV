@@ -79,6 +79,13 @@ enum class PlaybackStatus : std::uint8_t
     failed,
 };
 
+enum class MediaKind : std::uint8_t
+{
+    live,
+    movie,
+    episode,
+};
+
 // One channel with texts of its own: what a test or a form fills in. A catalog
 // does not hold these (see Catalog); it reads them through a ChannelView.
 struct Channel
@@ -103,6 +110,7 @@ struct Channel
     // Opaque portal command sent only to the provider's create_link API.
     std::string portal_command;
     bool adult = false;
+    MediaKind media_kind = MediaKind::live;
     std::uint32_t source_line = 0;
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
@@ -194,6 +202,7 @@ struct ChannelView
     std::string_view catchup_days;
     std::string_view portal_command;
     bool adult = false;
+    MediaKind media_kind = MediaKind::live;
     std::uint32_t source_line = 0;
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
