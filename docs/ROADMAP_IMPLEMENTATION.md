@@ -295,3 +295,29 @@ playback history wins. These files never replace or evict normal playback histor
 classification, first-frame evidence, cancellation, policy changes, batching, caps and precedence.
 Preview codec coverage remains narrower than full playback; skipped counts make this explicit.
 Physical console decoder/provider acceptance is pending, so the roadmap remains unchecked.
+### Kids viewing limits (host implementation; native verification pending)
+
+The current console profile can set a daily viewing-session allowance and a bedtime/wake
+window in Settings after unlocking the parent PIN. Limits apply only in kids mode and
+remain active during a session PIN unlock. Turning kids mode off requires that unlock.
+The displayed wake time starts each allowance day. The console's local clock is displayed
+beside the controls; an overnight bedtime window does not reopen at midnight.
+
+Session time includes pauses, buffering, tuning and visible previews. A mosaic or PiP
+session counts once, not once per channel. Menu browsing, source health checks and background
+recording do not consume viewing time. All normal playback requests, phone-selected channels,
+Home resumes, automatic episode continuation and quality switches share the same check.
+
+Allowance accounting reserves at most 30 seconds in the profile's atomic parental file
+before viewing. An orderly stop returns whole unused seconds; a crash/power loss can lose
+up to 30 seconds. Reopening cannot recover a committed reservation. Backup stops preview
+sessions and settles their reservation before copying settings. Invalid settings or failed
+usage writes block viewing rather than resetting the allowance.
+
+The console clock is not trusted time. Missing/invalid time or a backward jump exceeding
+two minutes blocks configured limits; repeating a local day never resets its allowance.
+A forward clock change across app restarts cannot be distinguished reliably from elapsed
+time; backward changes that stay after the last persisted clock observation can also go
+undetected after a restart. This is a household convenience, not tamper-proof enforcement against a user with
+console clock or profile-file access. Native local timezone/DST and real playback stop
+behavior still require console testing. No roadmap completion box has been changed.

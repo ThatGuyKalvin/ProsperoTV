@@ -26,6 +26,7 @@
 
 #include <array>
 #include <atomic>
+#include <mutex>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -192,6 +193,15 @@ class Model
         return pin_step_ != PinStep::none;
     }
     bool require_parent();
+    bool playback_allowed() const;
+    bool viewing_tick(bool active);
+    // Installed even without OSD fonts; 2 asks the native player to stop.
+    int viewing_control()
+    {
+        return viewing_tick(true) ? 0 : 2;
+    }
+    bool set_viewing_limits(unsigned minutes, int bedtime, unsigned wake);
+
     bool content_allowed(const iptv::ChannelView &channel) const;
     bool vod_allowed(unsigned index) const;
     int category_rule(std::string_view category, bool inherited = true) const;
@@ -517,6 +527,8 @@ class Model
     bool take_play_request(PlayRequest *request);
     // The focused live channel without changing history or playback health.
     std::optional<PlayRequest> preview_request(std::string_view channel_id) const;
+    // Source health checks decode without showing video and do not spend viewing time.
+    std::optional<PlayRequest> probe_request(std::string_view channel_id) const;
     // Called when the menu reopens after a channel that would not play.
     void report_watch(std::string_view channel_id);
     void report_playback_failure(const char *channel_id, const char *channel_name, int result,
@@ -633,6 +645,7 @@ class Model
     void clear_pin();
     void parental_changed();
     static void on_pin(const char *text, void *self);
+    mutable std::mutex viewing_mutex_;
     Parental parental_;
     PinStep pin_step_ = PinStep::none;
     bool pin_pending_ = false;

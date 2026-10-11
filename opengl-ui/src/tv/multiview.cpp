@@ -14,7 +14,8 @@ void Multiview::configure(LivePreview::Upload upload, ImageCache::Release releas
 {
     stop();
     for (auto &preview : previews_)
-        preview.configure(upload, release, true);
+        preview.configure(upload, release, true,
+                          [this] { return shared_.model.viewing_tick(true); });
 }
 void Multiview::open(std::string channel)
 {
@@ -48,6 +49,13 @@ bool Multiview::choose(std::string channel)
     names_[selected_] = request->channel_name;
     choosing_ = false;
     return true;
+}
+bool Multiview::viewing() const
+{
+    for (const auto &preview : previews_)
+        if (preview.running())
+            return true;
+    return false;
 }
 unsigned Multiview::audible_count() const
 {

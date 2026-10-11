@@ -517,6 +517,8 @@ bool Model::play_vod(unsigned index)
 }
 bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series, bool inherit_series)
 {
+    if (!playback_allowed())
+        return false;
     if (inherit_series)
         clear_home_playback();
     auto snapshot = item.Copy();

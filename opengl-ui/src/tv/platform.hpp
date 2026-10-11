@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,8 @@ void sleep_ms(unsigned milliseconds);
 // Seconds since 1970, or 0 when the clock is not set.
 std::uint64_t unix_time();
 std::uint64_t monotonic_us();
+// Copy calendar fields while holding the platform's libc conversion lock.
+bool calendar_time(std::uint64_t seconds, bool local, std::tm &result);
 
 // The network, as the catalog worker uses it. Always called from that thread,
 // except network_cancel(), which interrupts it from the frame loop.

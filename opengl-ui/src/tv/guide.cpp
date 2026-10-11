@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/guide.hpp"
+#include "tv/platform.hpp"
 #include "tv/channel_text.hpp"
 #include <expat.h>
 #include <sqlite3.h>
@@ -126,11 +127,10 @@ std::int64_t xmltv_time(std::string_view value)
 
 std::string programme_time(std::int64_t value, bool date)
 {
-    const auto seconds = static_cast<std::time_t>(value);
-    const std::tm *parts = std::localtime(&seconds);
+    std::tm parts{};
     char text[64]{};
-    if (parts)
-        std::strftime(text, sizeof(text), date ? "%Y-%m-%d  %H:%M" : "%H:%M", parts);
+    if (value >= 0 && platform::calendar_time(value, true, parts))
+        std::strftime(text, sizeof(text), date ? "%Y-%m-%d  %H:%M" : "%H:%M", &parts);
     return text;
 }
 
@@ -141,11 +141,9 @@ std::string catchup_url(const iptv::ChannelView &channel, const Programme &p, st
         now - p.start > static_cast<std::int64_t>(days) * 86400)
         return {};
     std::string url(channel.catchup_source);
-    const auto seconds = static_cast<std::time_t>(p.start);
-    const auto *time = std::gmtime(&seconds);
-    if (!time)
+    std::tm utc{};
+    if (!platform::calendar_time(p.start, false, utc))
         return {};
-    const std::tm utc = *time;
     if (channel.catchup == "xc")
     {
         // /live/user/pass/id.ts -> /timeshift/user/pass/minutes/YYYY-MM-DD:HH-MM/id.ts

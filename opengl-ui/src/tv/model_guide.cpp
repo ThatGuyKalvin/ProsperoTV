@@ -190,7 +190,8 @@ void Model::run_guide()
 
 bool Model::play_programme(unsigned index, const Programme &programme)
 {
-    if (index >= channel_count() || pin_prompt() || !content_allowed(catalog_[index]))
+    if (!playback_allowed() || index >= channel_count() || pin_prompt() ||
+        !content_allowed(catalog_[index]))
         return false;
     const auto now = static_cast<std::int64_t>(platform::unix_time());
     if (programme.start <= now && programme.end > now)

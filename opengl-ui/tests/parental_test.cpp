@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/model.hpp"
 #include "tv/parental.hpp"
+#include "tv/preview.hpp"
+#include "host_preview.hpp"
 #include "tv/backup.hpp"
 #include "host_platform.hpp"
 #include "iptv_store.h"
@@ -10,6 +12,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -227,5 +230,261 @@ TEST_F(ParentalTest, AdultMetadataMergesAndSurvivesCatalogCopiesAndCache)
     EXPECT_TRUE(ptv::adult_category("US / 18+ / Movies"));
     EXPECT_FALSE(ptv::adult_category("Adult Swim"));
     EXPECT_FALSE(ptv::kids_category("Kidnap movies"));
+}
+
+std::uint64_t local_clock(int day, int hour, int minute = 0)
+{
+    std::tm value{};
+    value.tm_year = 126;
+    value.tm_mon = 9;
+    value.tm_mday = day;
+    value.tm_hour = hour;
+    value.tm_min = minute;
+    value.tm_isdst = -1;
+    return std::mktime(&value);
+}
+TEST_F(ParentalTest, ViewingReservationsSurviveRestartAndRefundOnlyOnOrderlyStop)
+{
+    const auto now = local_clock(10, 12);
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(file));
+    ASSERT_TRUE(pin.set_pin("836295"));
+    EXPECT_FALSE(pin.set_limits(1, -1, 360));
+    ASSERT_TRUE(pin.unlock("836295", now));
+    ASSERT_TRUE(pin.set_limits(1, -1, 360));
+    ASSERT_TRUE(pin.set_kids(true));
+    ASSERT_TRUE(pin.viewing_tick(now, 1000000, true));
+    EXPECT_EQ(pin.remaining_seconds(), 60u);
+    ptv::Parental crashed;
+    ASSERT_TRUE(crashed.load(file));
+    EXPECT_EQ(crashed.remaining_seconds(), 30u);
+    ASSERT_TRUE(pin.viewing_tick(now + 10, 11000000, false));
+    ASSERT_TRUE(crashed.load(file));
+    EXPECT_EQ(crashed.remaining_seconds(), 50u);
+    ASSERT_TRUE(crashed.viewing_tick(now + 10, 1000000, true));
+    // A stalled UI/control poll still charges all elapsed session time.
+    EXPECT_FALSE(crashed.viewing_tick(now + 65, 56000000, true));
+    EXPECT_FALSE(crashed.viewing_allowed(now + 65));
+    ASSERT_TRUE(pin.load(file));
+    EXPECT_EQ(pin.remaining_seconds(), 0u);
+    // Another profile has independent allowance.
+    ptv::Parental other;
+    ASSERT_TRUE(other.load(dir + "/other"));
+    EXPECT_TRUE(other.viewing_allowed(now));
+}
+TEST_F(ParentalTest, BedtimeWakeClockRollbackAndNewDay)
+{
+    const auto noon = local_clock(10, 12);
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(file));
+    ASSERT_TRUE(pin.set_pin("836295"));
+    ASSERT_TRUE(pin.unlock("836295", noon));
+    EXPECT_FALSE(pin.set_limits(1, 360, 360));
+    ASSERT_TRUE(pin.set_limits(1, 1200, 360));
+    ASSERT_TRUE(pin.set_kids(true));
+    EXPECT_FALSE(pin.viewing_allowed(0));
+    ASSERT_TRUE(pin.viewing_tick(noon, 1000000, false));
+    EXPECT_FALSE(pin.viewing_allowed(noon - 121)); // Idle menu time also detects rollback.
+
+    ASSERT_TRUE(pin.viewing_tick(noon, 1000000, true));
+    EXPECT_FALSE(pin.viewing_tick(noon + 60, 61000000, true));
+    EXPECT_FALSE(pin.viewing_allowed(local_clock(10, 20)));
+    EXPECT_FALSE(pin.viewing_allowed(local_clock(11, 0)));
+    EXPECT_FALSE(pin.viewing_allowed(local_clock(11, 5, 59)));
+    ASSERT_TRUE(pin.viewing_tick(local_clock(11, 6), 62000000, true));
+    EXPECT_EQ(pin.remaining_seconds(), 60u);
+    EXPECT_FALSE(pin.viewing_allowed(noon));
+    ASSERT_TRUE(pin.viewing_tick(local_clock(11, 6), 63000000, false));
+    ASSERT_TRUE(pin.load(file));
+    EXPECT_FALSE(pin.viewing_allowed(noon));
+    // Small clock adjustment does not reset or add quota.
+    EXPECT_TRUE(pin.viewing_allowed(local_clock(11, 6) + 30));
+}
+TEST_F(ParentalTest, ViewingWriteFailureAndMalformedLimitRecordFailClosed)
+{
+    const auto now = local_clock(10, 12);
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(file));
+    ASSERT_TRUE(pin.set_pin("836295"));
+    ASSERT_TRUE(pin.unlock("836295", now));
+    ASSERT_TRUE(pin.set_limits(1, -1, 360));
+    ASSERT_TRUE(pin.set_kids(true));
+    std::filesystem::create_directory(file + ".tmp");
+    EXPECT_FALSE(pin.viewing_tick(now, 1000000, true));
+    EXPECT_FALSE(pin.valid());
+    EXPECT_FALSE(pin.viewing_allowed(now));
+    std::filesystem::remove(file + ".tmp");
+    std::ofstream(file, std::ios::app) << "junk";
+    EXPECT_FALSE(pin.load(file));
+    EXPECT_FALSE(pin.viewing_allowed(now));
+}
+TEST_F(ParentalTest, ViewingQuotaBlocksLivePreviewQueuedResumeAndPhoneWithoutHidingLists)
+{
+    const auto now = local_clock(10, 12);
+    host::set_unix_time(now);
+    host::set_monotonic_us(1000000);
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(file));
+    ASSERT_TRUE(pin.set_pin("836295"));
+    ASSERT_TRUE(pin.unlock("836295", now));
+    ASSERT_TRUE(pin.set_limits(1, -1, 360));
+    ASSERT_TRUE(pin.set_kids(true));
+    const auto playlist = dir + "/list.m3u";
+    std::ofstream(playlist)
+        << "#EXTM3U\n#EXTINF:-1 group-title=\"Kids\",Cartoon\nhttps://test.invalid/b\n";
+    host::set_network(true, playlist);
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    ASSERT_EQ(model.visible_count(), 1u);
+    ASSERT_TRUE(model.play(0));
+    EXPECT_TRUE(model.preview_request(model.channel(0).id));
+    std::vector<std::thread> ticks;
+    for (int i = 0; i < 4; ++i)
+        ticks.emplace_back([&] { EXPECT_EQ(model.viewing_control(), 0); });
+    for (auto &thread : ticks)
+        thread.join();
+    host::set_monotonic_us(61000000);
+    host::set_unix_time(now + 60);
+    EXPECT_FALSE(model.viewing_tick(true));
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model.take_play_request(&request));
+    EXPECT_FALSE(model.play(0));
+    EXPECT_FALSE(model.preview_request(model.channel(0).id));
+    EXPECT_EQ(model.visible_count(), 1u);
+    EXPECT_TRUE(model.probe_request(model.channel(0).id));
+    model.resume_last(true);
+    EXPECT_FALSE(model.take_play_request(&request));
+    auto phone = model.remote_browse_view();
+    phone.selected = model.channel(0).id;
+    std::string response;
+    EXPECT_EQ(model.remote_browse(phone.selection_request(), response), 409);
+    EXPECT_EQ(response, "The channel could not be opened.");
+    ptv::Programme current;
+    current.start = now;
+    current.end = now + 120;
+    EXPECT_FALSE(model.play_programme(0, current));
+    model.close();
+}
+
+TEST_F(ParentalTest, LegacyParentalFileMigratesWithoutResettingPolicy)
+{
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(file));
+    ASSERT_TRUE(pin.set_pin("836295"));
+    ASSERT_TRUE(pin.unlock("836295", 1000));
+    ASSERT_TRUE(pin.set_kids(true));
+    // Keep the original kids/failure row, discard only v2 limits.
+    std::ifstream fresh(file);
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(fresh, line);)
+        lines.push_back(line);
+    std::ofstream out(file);
+    out << "PTV_PARENTAL_1\n" << lines[1] << '\n' << lines[2] << '\n' << lines[3] << '\n';
+    out.close();
+    ASSERT_TRUE(pin.load(file));
+    EXPECT_TRUE(pin.kids_only());
+    EXPECT_EQ(pin.allowance(), 0u);
+    EXPECT_EQ(pin.bedtime(), -1);
+    ASSERT_TRUE(pin.unlock("836295", 1001));
+    ASSERT_TRUE(pin.set_limits(30, -1, 360));
+    ASSERT_TRUE(pin.load(file));
+    EXPECT_EQ(pin.allowance(), 30u);
+}
+
+TEST_F(ParentalTest, ShortPreviewFocusChangesAreFreeAndWorkerStartReservesBeforeDecoding)
+{
+    const auto wall = local_clock(10, 12);
+    std::uint64_t mono = 1000000;
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(file));
+    ASSERT_TRUE(pin.set_pin("836295"));
+    ASSERT_TRUE(pin.unlock("836295", wall));
+    ASSERT_TRUE(pin.set_limits(1, -1, 360));
+    ASSERT_TRUE(pin.set_kids(true));
+    host::set_preview(true);
+    ptv::LivePreview preview;
+    unsigned reservations = 0;
+    preview.configure([](auto, const auto &) { return 1u; }, [](auto) {}, false,
+                      [&]
+                      {
+                          ++reservations;
+                          return pin.viewing_tick(wall, mono, true);
+                      });
+    ptv::PlayRequest request;
+    request.urls = {"https://test.invalid/channel.ts"};
+    for (unsigned i = 0; i < 20; ++i)
+    {
+        request.channel_id = std::to_string(i);
+        preview.update(request, .6f);
+        mono += 600000;
+    }
+    EXPECT_EQ(reservations, 0u);
+    EXPECT_EQ(host::preview_starts(), 0u);
+    EXPECT_EQ(pin.remaining_seconds(), 60u);
+    preview.update(request, .6f);
+    ASSERT_EQ(reservations, 1u);
+    ptv::Parental disk;
+    ASSERT_TRUE(disk.load(file));
+    EXPECT_EQ(disk.remaining_seconds(), 30u); // Committed before the worker starts.
+    ASSERT_TRUE(preview.running());
+    mono += 10000000;
+    ASSERT_TRUE(pin.viewing_tick(wall + 10, mono, true));
+    preview.clear();
+    ASSERT_TRUE(pin.viewing_tick(wall + 10, mono, false));
+    ASSERT_TRUE(disk.load(file));
+    EXPECT_EQ(disk.remaining_seconds(), 50u);
+    // No worker starts if the reservation cannot be acquired.
+    const auto started = host::preview_starts();
+    preview.configure([](auto, const auto &) { return 1u; }, [](auto) {}, true,
+                      [] { return false; });
+    preview.update(request, 0);
+    EXPECT_FALSE(preview.running());
+    EXPECT_EQ(host::preview_starts(), started);
+}
+TEST_F(ParentalTest, RepeatedDstHourDoesNotReopenBedtimeAndOrderlyStopRefunds)
+{
+    struct RestoreTimezone
+    {
+        bool present = std::getenv("TZ") != nullptr;
+        std::string value = present ? std::getenv("TZ") : "";
+        ~RestoreTimezone()
+        {
+            if (present)
+                setenv("TZ", value.c_str(), 1);
+            else
+                unsetenv("TZ");
+            tzset();
+        }
+    } restore;
+    setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0/2", 1);
+    tzset();
+    std::tm time{};
+    time.tm_year = 126;
+    time.tm_mon = 10;
+    time.tm_mday = 1;
+    time.tm_hour = 1;
+    time.tm_min = 29;
+    time.tm_sec = 50;
+    time.tm_isdst = 1;
+    const auto first = std::uint64_t(std::mktime(&time));
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(file));
+    ASSERT_TRUE(pin.set_pin("836295"));
+    ASSERT_TRUE(pin.unlock("836295", first));
+    ASSERT_TRUE(pin.set_limits(1, 90, 360));
+    ASSERT_TRUE(pin.set_kids(true));
+    ASSERT_TRUE(pin.viewing_tick(first, 1000000, true));
+    EXPECT_FALSE(pin.viewing_tick(first + 10, 11000000, true));
+    EXPECT_EQ(pin.remaining_seconds(), 50u);
+    ASSERT_TRUE(pin.load(file));
+    EXPECT_EQ(pin.remaining_seconds(), 50u);
+    EXPECT_FALSE(pin.viewing_allowed(first + 2420)); // 01:10 again after DST ends.
+    time.tm_hour = 6;
+    time.tm_min = time.tm_sec = 0;
+    time.tm_isdst = 0;
+    const auto wake = std::uint64_t(std::mktime(&time));
+    EXPECT_TRUE(pin.viewing_allowed(wake));
+    EXPECT_EQ(pin.remaining_seconds(wake), 60u);
 }
 } // namespace

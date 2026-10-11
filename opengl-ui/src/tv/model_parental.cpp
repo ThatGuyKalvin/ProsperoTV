@@ -10,6 +10,31 @@
 
 namespace ptv
 {
+bool Model::playback_allowed() const
+{
+    const std::lock_guard lock(viewing_mutex_);
+    return parental_.viewing_allowed(platform::unix_time());
+}
+bool Model::viewing_tick(bool active)
+{
+    const std::lock_guard lock(viewing_mutex_);
+    const bool allowed =
+        parental_.viewing_tick(platform::unix_time(), platform::monotonic_us(), active);
+    return allowed;
+}
+bool Model::set_viewing_limits(unsigned minutes, int bedtime, unsigned wake)
+{
+    if (!require_parent())
+        return false;
+    (void)viewing_tick(false);
+    if (!parental_.set_limits(minutes, bedtime, wake))
+    {
+        notify(Level::error, tr("Parental settings could not be saved"));
+        return false;
+    }
+    parental_changed();
+    return true;
+}
 bool Model::require_parent()
 {
     if (parental_.unlocked())
@@ -39,6 +64,7 @@ int Model::category_rule(std::string_view category, bool inherited) const
 }
 bool Model::content_allowed(const iptv::ChannelView &channel) const
 {
+    const std::lock_guard lock(viewing_mutex_);
     if (!parental_.valid() || (parental_.enabled() && !library_.ready()))
         return false;
     if (!parental_.enabled())

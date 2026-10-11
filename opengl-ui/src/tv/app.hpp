@@ -49,13 +49,15 @@ class App
     }
     void configure_preview(LivePreview::Upload upload, ImageCache::Release release)
     {
-        shared_.preview.configure(upload, release);
+        shared_.preview.configure(upload, release, false,
+                                  [this] { return shared_.model.viewing_tick(true); });
         multiview_.configure(std::move(upload), std::move(release));
     }
     void stop_preview()
     {
         shared_.preview.clear();
         multiview_.stop();
+        (void)shared_.model.viewing_tick(false);
     }
     bool screensaver_active() const
     {

@@ -70,7 +70,27 @@ enum FormRow : int
     kRowLargeText,
     kRowContrast,
     kRowScreensaver,
+    kRowAllowance,
+    kRowBedtime,
+    kRowWake,
+    kRowViewingRemaining,
+    kRowViewingClock,
 };
+
+constexpr unsigned kAllowances[] = {0, 15, 30, 60, 90, 120, 180};
+std::vector<std::string> clock_choices(bool off)
+{
+    std::vector<std::string> choices;
+    if (off)
+        choices.emplace_back(tr("Off"));
+    for (unsigned minute = 0; minute < 1440; minute += 30)
+    {
+        char text[6];
+        std::snprintf(text, sizeof(text), "%02u:%02u", minute / 60, minute % 60);
+        choices.emplace_back(text);
+    }
+    return choices;
+}
 
 constexpr const char *kTabNames[] = {"Home",    "Live TV",  "On demand", "Favorites",
                                      "Sources", "Settings", "About"};
@@ -226,6 +246,18 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_action(kRowKids, tr("Toggle kids-only mode")).description =
         tr("Only Kids categories and categories you approve. Provider labels should be reviewed.");
     form_.add_action(kRowRemovePin, tr("Remove parent PIN"));
+    form_
+        .add_choice(kRowAllowance, tr("Daily viewing-session allowance"),
+                    {tr("Off"), tr("15 minutes"), tr("30 minutes"), tr("60 minutes"),
+                     tr("90 minutes"), tr("120 minutes"), tr("180 minutes")},
+                    0)
+        .description =
+        tr("Kids mode: includes pauses, buffering and previews. Multiview counts once.");
+    form_.add_choice(kRowBedtime, tr("Bedtime"), clock_choices(true), 0);
+    form_.add_choice(kRowWake, tr("Wake and daily reset"), clock_choices(false), 12).description =
+        tr("Console local time. Viewing is blocked from bedtime until wake time.");
+    form_.add_value(kRowViewingRemaining, tr("Viewing time left"), "");
+    form_.add_value(kRowViewingClock, tr("Console clock"), "");
     form_.add_header(tr("BACKUP AND RESTORE"));
     form_.add_action(kRowBackup, tr("Back up to USB"));
     form_.add_action(kRowRestore, tr("Restore from USB"));
@@ -657,6 +689,15 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         if (event == ui::Event::changed && form_.changed_id() == kRowSleep)
             shared_.model.sleep_timer.arm(static_cast<unsigned>(form_.choice_index(kRowSleep)),
                                           platform::monotonic_us());
+        else if (event == ui::Event::changed && form_.changed_id() >= kRowAllowance &&
+                 form_.changed_id() <= kRowWake)
+        {
+            shared_.model.set_viewing_limits(kAllowances[form_.choice_index(kRowAllowance)],
+                                             form_.choice_index(kRowBedtime) == 0
+                                                 ? -1
+                                                 : (form_.choice_index(kRowBedtime) - 1) * 30,
+                                             form_.choice_index(kRowWake) * 30);
+        }
         else if (event == ui::Event::changed)
             apply_settings();
         else if (event == ui::Event::activated && form_.changed_id() == kRowUpdate)
@@ -953,6 +994,21 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
                                           : parental.kids_only() ? tr("Kids only")
                                           : parental.unlocked()  ? tr("Unlocked this session")
                                                                  : tr("Adult content locked"));
+    for (unsigned i = 0; i < std::size(kAllowances); ++i)
+        if (kAllowances[i] == parental.allowance())
+            form_.set_choice(kRowAllowance, i);
+    form_.set_choice(kRowBedtime, parental.bedtime() < 0 ? 0 : parental.bedtime() / 30 + 1);
+    form_.set_choice(kRowWake, parental.wake() / 30);
+    for (int row : {kRowAllowance, kRowBedtime, kRowWake})
+        form_.set_disabled(row, !parental.enabled() || !parental.unlocked());
+    const auto *limit_reason = parental.viewing_reason(platform::unix_time());
+    form_.set_value_text(
+        kRowViewingRemaining,
+        limit_reason ? tr(limit_reason)
+        : parental.limits_enabled() && parental.allowance()
+            ? std::to_string((parental.remaining_seconds(platform::unix_time()) + 59) / 60) + " min"
+            : tr("Off"));
+    form_.set_value_text(kRowViewingClock, programme_time(platform::unix_time(), true));
     form_.set_disabled(kRowRemovePin, !parental.enabled() || !parental.unlocked());
     form_.set_disabled(kRowKids, !parental.enabled());
     form_.set_disabled(kRowParentUnlock, !parental.enabled() || parental.unlocked());
@@ -970,7 +1026,13 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
                                  !pairing_open_ && !storage_dialog_.is_open();
     model.block_source_check(preview_allowed || multiview_.active());
     const auto focused = preview_allowed ? browse_.focused() : std::nullopt;
-    shared_.preview.update(focused ? model.preview_request(focused->id) : std::nullopt, dt);
+    auto preview_request = focused ? model.preview_request(focused->id) : std::nullopt;
+    if (!model.viewing_tick(shared_.preview.running() || multiview_.viewing()))
+    {
+        preview_request.reset();
+        multiview_.stop();
+    }
+    shared_.preview.update(std::move(preview_request), dt);
     multiview_.update(dt);
     if (tabs_.active() == kVod)
         vod_.update();

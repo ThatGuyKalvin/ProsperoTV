@@ -75,12 +75,14 @@ LivePreview::~LivePreview()
 {
     clear();
 }
-void LivePreview::configure(Upload upload, ImageCache::Release release, bool multiview)
+void LivePreview::configure(Upload upload, ImageCache::Release release, bool multiview,
+                            std::function<bool()> permit_start)
 {
     clear();
     upload_ = std::move(upload);
     release_ = std::move(release);
     multiview_ = multiview;
+    permit_start_ = std::move(permit_start);
 }
 void LivePreview::release_texture()
 {
@@ -134,6 +136,8 @@ void LivePreview::update(std::optional<PlayRequest> request, float dt)
     if (!thread_ && wanted_ && !attempted_ && delay_ >= (multiview_ ? 0.0f : 1.2f))
     {
         attempted_ = true;
+        if (permit_start_ && !permit_start_())
+            return;
         playing_ = *wanted_;
         stop_.store(false);
         done_.store(false);

@@ -25,10 +25,10 @@ std::string account_date(std::int64_t stamp)
         return tr("Not supplied");
     if (stamp == 0)
         return tr("No expiry reported");
-    const auto seconds = static_cast<std::time_t>(stamp);
     char text[32]{};
-    const auto *utc = std::gmtime(&seconds);
-    if (utc && std::strftime(text, sizeof(text), "%Y-%m-%d UTC", utc))
+    std::tm utc{};
+    if (platform::calendar_time(stamp, false, utc) &&
+        std::strftime(text, sizeof(text), "%Y-%m-%d UTC", &utc))
         return text;
     return tr("Not supplied");
 }

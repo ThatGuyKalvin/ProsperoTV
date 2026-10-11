@@ -41,6 +41,30 @@ class Parental
     }
     bool set_kids(bool enabled);
     bool remove();
+    bool set_limits(unsigned minutes, int bedtime, unsigned wake);
+    // Session time includes pauses and buffering; one meter covers all visible video.
+    bool viewing_tick(std::uint64_t wall, std::uint64_t mono, bool active);
+    bool viewing_allowed(std::uint64_t wall) const;
+    unsigned allowance() const
+    {
+        return allowance_;
+    }
+    int bedtime() const
+    {
+        return bedtime_;
+    }
+    unsigned wake() const
+    {
+        return wake_;
+    }
+    unsigned remaining_seconds() const;
+    unsigned remaining_seconds(std::uint64_t wall) const;
+    bool limits_enabled() const
+    {
+        return enabled_ && kids_ && (allowance_ || bedtime_ >= 0);
+    }
+    const char *viewing_reason(std::uint64_t wall) const;
+
     std::uint64_t wait_until() const
     {
         return until_;
@@ -49,6 +73,14 @@ class Parental
 
   private:
     bool save();
+    bool clock_day(std::uint64_t wall, std::int64_t &day, unsigned &minute) const;
+    bool save_usage();
+    unsigned allowance_ = 0, wake_ = 360, used_ = 0;
+    int bedtime_ = -1;
+    std::int64_t day_ = -1, bedtime_day_ = -1;
+    std::uint64_t last_wall_ = 0, last_mono_ = 0, credit_us_ = 0;
+    bool viewing_ = false;
+
     std::string file_;
     std::array<unsigned char, 16> salt_{};
     std::array<unsigned char, 32> hash_{};

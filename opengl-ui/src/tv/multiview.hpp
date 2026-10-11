@@ -54,6 +54,7 @@ class Multiview
         return selected_;
     }
     unsigned audible_count() const;
+    bool viewing() const;
     std::string_view channel(unsigned slot) const
     {
         return slot < channels_.size() ? std::string_view(channels_[slot]) : std::string_view();
