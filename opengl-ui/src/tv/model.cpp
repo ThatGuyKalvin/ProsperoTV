@@ -496,6 +496,8 @@ void Model::adopt_catalog()
     if (!channel_names_.empty())
         index_.build(catalog_, channel_names_);
     vod_.playlist_updated();
+    search_movies_.playlist_updated();
+    search_shows_.playlist_updated();
     if (!catalog_.empty())
         (void)library_.observe_channels(selected_source_id_, catalog_, platform::unix_time());
     channel_history_ = library_.channel_history(selected_source_id_, catalog_);
