@@ -168,7 +168,7 @@ void Model::poll_source_check()
             ++revision_;
             continue;
         }
-        const auto request = preview_request(catalog_[next].id);
+        const auto request = probe_request(catalog_[next].id);
         if (!request)
         {
             ++check_skipped_;

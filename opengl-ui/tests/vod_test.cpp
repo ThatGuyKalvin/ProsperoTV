@@ -1279,3 +1279,42 @@ TEST(VodLibrary, PlaylistParentLookupUsesExactGroupingKeyAndSource)
     EXPECT_EQ(vod.find_series("Kids\nShow", 124), iptv::Catalog::npos);
     EXPECT_EQ(vod.find_series("Show", 123), iptv::Catalog::npos);
 }
+
+TEST_F(VodTest, ViewingLimitStopsFontlessControlsQualityReopenHomeAndNextEpisode)
+{
+    const auto wall = ptv::platform::unix_time();
+    host::set_unix_time(wall);
+    host::set_monotonic_us(1000000);
+    ptv::Parental pin;
+    ASSERT_TRUE(pin.load(dir + "/prosperotv-parental-v1.txt"));
+    ASSERT_TRUE(pin.set_pin("1234"));
+    ASSERT_TRUE(pin.unlock("1234", wall));
+    ASSERT_TRUE(pin.set_limits(1, -1, 0));
+    ASSERT_TRUE(pin.set_kids(true));
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play_vod(0));
+    ptv::PlayRequest movie;
+    ASSERT_TRUE(model.take_play_request(&movie));
+    EXPECT_FALSE(model.finish_vod(movie, 12000000, 100000000, false));
+    model.view.vod_series_group = "Kids";
+    model.vod().select(ptv::VodKind::episodes, "20");
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play_vod(2));
+    ptv::PlayRequest episode;
+    ASSERT_TRUE(model.take_play_request(&episode));
+    // The native callback invokes this before touching fonts or quality controls.
+    EXPECT_EQ(model.viewing_control(), 0);
+    host::set_unix_time(wall + 60);
+    host::set_monotonic_us(61000000);
+    EXPECT_EQ(model.viewing_control(), 2);
+    EXPECT_FALSE(model.finish_vod(episode, 100000000, 100000000, true));
+    EXPECT_FALSE(model.take_play_request(&episode));
+    EXPECT_FALSE(model.play_home(movie.channel_id, true));
+    // A quality reopen reuses the current request but must acquire the same meter again.
+    EXPECT_FALSE(model.viewing_tick(true));
+    EXPECT_EQ(model.viewing_control(), 2);
+    model.close();
+}

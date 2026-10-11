@@ -5,6 +5,8 @@
 #include "tv/platform.hpp"
 
 #include <ctime>
+#include <limits>
+#include <mutex>
 #include <pthread.h>
 
 extern "C" int scePthreadCreate(void **thread, const void *attributes, void *(*entry)(void *),
@@ -44,6 +46,20 @@ int thread_detach(void *thread)
 void sleep_ms(unsigned milliseconds)
 {
     sceKernelUsleep(milliseconds * 1000u);
+}
+
+bool calendar_time(std::uint64_t seconds, bool local, std::tm &result)
+{
+    if (seconds > std::uint64_t(std::numeric_limits<std::time_t>::max()))
+        return false;
+    static std::mutex calendar_mutex;
+    const std::lock_guard lock(calendar_mutex);
+    const auto stamp = static_cast<std::time_t>(seconds);
+    const auto *converted = local ? std::localtime(&stamp) : std::gmtime(&stamp);
+    if (!converted)
+        return false;
+    result = *converted;
+    return true;
 }
 
 std::uint64_t unix_time()

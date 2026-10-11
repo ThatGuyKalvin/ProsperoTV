@@ -39,7 +39,12 @@ class LivePreview
   public:
     using Upload = std::function<std::uint32_t(std::uint32_t, const ImagePixels &)>;
     ~LivePreview();
-    void configure(Upload upload, ImageCache::Release release, bool multiview = false);
+    void configure(Upload upload, ImageCache::Release release, bool multiview = false,
+                   std::function<bool()> permit_start = {});
+    bool running() const
+    {
+        return thread_ && !done_.load() && !stop_.load();
+    }
     void update(std::optional<PlayRequest> request, float dt);
     ImageTexture find(std::string_view channel) const;
     // Focus changes cancel asynchronously. Closing the menu joins its worker.
@@ -69,6 +74,7 @@ class LivePreview
   private:
     static void *work(void *self);
     void release_texture();
+    std::function<bool()> permit_start_;
     Upload upload_;
     ImageCache::Release release_;
     ImageTexture texture_;

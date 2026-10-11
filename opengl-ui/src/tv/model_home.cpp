@@ -151,7 +151,7 @@ bool Model::queue_home_vod(ResumeItem item)
 }
 bool Model::play_home(std::string_view id, bool on_demand)
 {
-    if (pin_prompt())
+    if (!playback_allowed() || pin_prompt())
         return false;
     clear_home_playback();
     if (!on_demand)
