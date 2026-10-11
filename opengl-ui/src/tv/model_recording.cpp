@@ -134,6 +134,12 @@ void Model::poll_programme_jobs()
             programme_jobs_.finish(job.id, 3, "Parental controls locked this programme");
             continue;
         }
+        const auto *source = saved_source(job.source);
+        if (!source)
+        {
+            programme_jobs_.finish(job.id, 3, "This source was removed");
+            continue;
+        }
         if (!job.recording)
         {
             if (programme_jobs_.finish(job.id, 2, "Reminder shown"))
@@ -146,14 +152,6 @@ void Model::poll_programme_jobs()
             notice(false, "Recording conflict", job.title);
             continue;
         }
-        const auto drives = usb_drives();
-        if (std::find(drives.begin(), drives.end(), job.drive) == drives.end())
-        {
-            programme_jobs_.finish(job.id, 3, "The selected USB drive is unavailable");
-            notice(false, "Recording failed", "Connect the selected USB drive");
-            continue;
-        }
-        const auto *source = saved_source(job.source);
         iptv::Catalog cache;
         const iptv::Catalog *channels = &catalog_;
         if (job.source != selected_source_id_)
@@ -170,10 +168,30 @@ void Model::poll_programme_jobs()
             }
             channels = &cache;
         }
+        const auto expected_source =
+            source->kind == 1 ? iptv::CustomSourceId(source->url)
+            : source->kind == 2
+                ? iptv::XtreamSourceId({source->url, source->username, source->password})
+            : source->kind == 3 ? portal_source_id({source->url, source->mac})
+            : source->kind >= 4 ? local_tv_source_id(*source)
+                                : source_id(iptv::SourceKind::BuiltIn);
+        if (channels->source_id != expected_source)
+        {
+            programme_jobs_.finish(job.id, 3,
+                                   "The source changed since this programme was scheduled");
+            continue;
+        }
         const auto index = channels->Find(job.channel);
-        if (!source || index == iptv::Catalog::npos)
+        if (index == iptv::Catalog::npos)
         {
             programme_jobs_.finish(job.id, 3, "This source or channel was removed");
+            continue;
+        }
+        const auto drives = usb_drives();
+        if (std::find(drives.begin(), drives.end(), job.drive) == drives.end())
+        {
+            programme_jobs_.finish(job.id, 3, "The selected USB drive is unavailable");
+            notice(false, "Recording failed", "Connect the selected USB drive");
             continue;
         }
         const auto channel = (*channels)[index];
