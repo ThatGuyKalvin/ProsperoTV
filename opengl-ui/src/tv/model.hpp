@@ -43,7 +43,7 @@ struct PlayRequest
     std::vector<std::string> urls;
     std::string user_agent;
     std::string referrer;
-    std::string authorization, credential_origin;
+    std::string authorization, credential_origin, extra_headers;
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
     bool live = false;
@@ -610,6 +610,7 @@ class Model
         local_password,
         http_user_agent,
         http_referrer,
+        http_extra,
     };
 
     std::string path(const char *name) const;
@@ -627,6 +628,7 @@ class Model
     void apply_source_http(PlayRequest &request) const;
     static void on_http_user_agent(const char *text, void *self);
     static void on_http_referrer(const char *text, void *self);
+    static void on_http_extra(const char *text, void *self);
 
     void apply_custom_url(const char *url);
     void apply_account_server(const char *server);

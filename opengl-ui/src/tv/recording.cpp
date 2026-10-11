@@ -254,9 +254,9 @@ void *Recorder::run(void *context)
         ready = platform::network_init() == iptv::http::Status::ok;
         if (ready)
         {
-            PortalClient portal(
-                {r.input_.portal_url, r.input_.portal_mac, r.input_.user_agent, r.input_.referrer},
-                &control);
+            PortalClient portal({r.input_.portal_url, r.input_.portal_mac, r.input_.user_agent,
+                                 r.input_.referrer, r.input_.extra_headers},
+                                &control);
             ready = portal.sign_in() && portal.resolve(r.input_.portal_command, &r.input_.url);
             platform::network_shutdown();
         }

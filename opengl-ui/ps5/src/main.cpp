@@ -908,13 +908,14 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
         }
         std::remove(kLatestReceiptPath);
         iptv_player_set_start_position(request.start_position_us);
-        outcome.result = iptv_player_run_authenticated(
+        outcome.result = iptv_player_run_configured(
             request.urls[candidate].c_str(), request.channel_name.c_str(),
             request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
             request.referrer.empty() ? nullptr : request.referrer.c_str(),
             request.authorization.empty() ? nullptr : request.authorization.c_str(),
             request.credential_origin.empty() ? nullptr : request.credential_origin.c_str(),
-            stop_after_ms, request.reconnect_live ? 1 : 0, request.live ? 1 : 0);
+            request.extra_headers.empty() ? nullptr : request.extra_headers.c_str(), stop_after_ms,
+            request.reconnect_live ? 1 : 0, request.live ? 1 : 0);
         if (archive_path != nullptr)
         {
             append_autotest_receipt(archive_path, kLatestReceiptPath);

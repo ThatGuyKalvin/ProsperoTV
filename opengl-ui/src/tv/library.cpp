@@ -109,6 +109,8 @@ bool valid_source(const SavedSource &source)
         source.schedule < RefreshSchedule::daily || source.schedule > RefreshSchedule::manual)
         return false;
     std::string referer_url;
+    if (!iptv::http::ParseExtraHeaders(source.extra_headers))
+        return false;
     if ((!source.user_agent.empty() && !valid_text(source.user_agent, 512)) ||
         (!source.referrer.empty() && (!valid_text(source.referrer, 2048) ||
                                       !iptv::CanonicalizeStreamUrl(source.referrer, &referer_url))))
@@ -200,6 +202,9 @@ bool Library::open(const std::string &path)
         "CREATE TABLE IF NOT EXISTS sources (id INTEGER PRIMARY KEY,kind INTEGER NOT NULL,"
         "name TEXT NOT NULL,url TEXT NOT NULL,username TEXT NOT NULL,password TEXT NOT NULL,"
         "mac TEXT NOT NULL,schedule INTEGER NOT NULL CHECK(schedule BETWEEN 0 AND 2));"
+        "CREATE TABLE IF NOT EXISTS source_extra_headers (source INTEGER PRIMARY KEY REFERENCES "
+        "sources(id)"
+        " ON DELETE CASCADE,headers TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS source_http (source INTEGER PRIMARY KEY REFERENCES sources(id)"
         " ON DELETE CASCADE,user_agent TEXT NOT NULL,referrer TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS account_info (source INTEGER PRIMARY KEY REFERENCES sources(id)"
@@ -365,6 +370,9 @@ std::vector<SavedSource> Library::sources() const
                            query.string(5),
                            query.string(6),
                            static_cast<RefreshSchedule>(sqlite3_column_int(query.stmt, 7))};
+        Statement extra(db_, "SELECT headers FROM source_extra_headers WHERE source=?1");
+        if (extra.integer(1, source.id) && extra.row())
+            source.extra_headers = extra.string(0);
         Statement http(db_, "SELECT user_agent,referrer FROM source_http WHERE source=?1");
         if (http.integer(1, source.id) && http.row())
         {
@@ -424,6 +432,9 @@ bool Library::save_source(SavedSource *source)
                         "DO UPDATE SET user_agent=excluded.user_agent,referrer=excluded.referrer");
     saved = saved && http.integer(1, id) && http.text(2, source->user_agent) &&
             http.text(3, source->referrer) && http.done();
+    Statement extra(db_, "INSERT INTO source_extra_headers VALUES(?1,?2) ON CONFLICT(source) "
+                         "DO UPDATE SET headers=excluded.headers");
+    saved = saved && extra.integer(1, id) && extra.text(2, source->extra_headers) && extra.done();
     if (saved && sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr) == SQLITE_OK)
     {
         source->id = id;

@@ -72,7 +72,8 @@ void record_request(const char *url, const iptv::http::RequestHeaders *headers)
     g_network.requests.push_back({url ? url : "", headers && headers->cookie ? headers->cookie : "",
                                   headers && headers->authorization ? headers->authorization : "",
                                   headers && headers->user_agent ? headers->user_agent : "",
-                                  headers && headers->referrer ? headers->referrer : ""});
+                                  headers && headers->referrer ? headers->referrer : "",
+                                  headers && headers->extra_headers ? headers->extra_headers : ""});
 }
 
 void request(const char *title, iptv_ime_result_fn callback, void *user_data)
@@ -527,6 +528,7 @@ int record_stream(const RecordingInput &input, const iptv::http::ListSink &sink,
     iptv::http::RequestHeaders headers{};
     headers.user_agent = input.user_agent.c_str();
     headers.referrer = input.referrer.c_str();
+    headers.extra_headers = input.extra_headers.c_str();
     headers.authorization = input.authorization.c_str();
     headers.credential_origin = input.credential_origin.c_str();
     const auto result =

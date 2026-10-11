@@ -1273,13 +1273,65 @@ TEST_F(ModelTest, SourceHttpControllerFormSavesBothFieldsTogether)
     load(model);
     model.edit_source_http(2);
     model.poll();
-    EXPECT_EQ(host::keyboard_title(), "Source user agent (1 of 2)");
+    EXPECT_EQ(host::keyboard_title(), "Source user agent (1 of 3)");
     host::set_keyboard_text("RemotePlayer/2");
     model.poll();
-    EXPECT_EQ(host::keyboard_title(), "Source referrer (2 of 2)");
+    EXPECT_EQ(host::keyboard_title(), "Source referrer (2 of 3)");
     host::set_keyboard_text("https://provider.invalid/watch");
     model.poll();
+    EXPECT_EQ(host::keyboard_title(), "Custom HTTP header");
+    host::set_keyboard_text("X-Key: secret");
+    model.poll();
+    host::set_keyboard_text("x-key: replacement");
+    model.poll();
+    host::set_keyboard_text("Host: bad");
+    model.poll();
+    host::set_keyboard_text("X-Bad: one\r\nInjected: value");
+    model.poll();
+    host::set_keyboard_text("");
+    model.poll();
+    EXPECT_EQ(model.saved_source(2)->extra_headers, "x-key: replacement");
     EXPECT_EQ(model.saved_source(2)->user_agent, "RemotePlayer/2");
     EXPECT_EQ(model.saved_source(2)->referrer, "https://provider.invalid/watch");
+    model.close();
+}
+
+TEST_F(ModelTest, PhoneCustomHeadersPreserveSecretsAndRejectEscapedInjection)
+{
+    ptv::Model model(dir_);
+    load(model);
+    std::string output;
+    const std::string prefix =
+        R"({"operation":"save","id":2,"kind":1,"name":"Custom","url":"https://source.invalid/list.m3u","schedule":2)";
+    host::set_network_response("https://source.invalid/list.m3u", playlist_);
+    for (const auto *bad :
+         {R"(X-Key: a\r\nBad: b)", R"(X-Key: a\u0000b)", R"(X-Key: a\nBad)", "Host: bad"})
+    {
+        EXPECT_EQ(model.remote_sources(prefix + ",\"extraHeaders\":\"" + bad + "\"}", output), 400);
+        EXPECT_TRUE(model.saved_source(2)->extra_headers.empty());
+    }
+    ASSERT_EQ(
+        model.remote_sources(prefix + R"(,"extraHeaders":"X-Key: secret\nX-Device: tv"})", output),
+        200);
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.saved_source(2)->extra_headers, "X-Key: secret\nX-Device: tv");
+    ASSERT_EQ(model.remote_sources("", output), 200);
+    EXPECT_EQ(output.find("secret"), std::string::npos);
+    EXPECT_NE(output.find("\"extraHeadersSet\":true"), std::string::npos);
+    ASSERT_TRUE(model.play(0));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.extra_headers, "X-Key: secret\nX-Device: tv");
+    EXPECT_EQ(request.credential_origin, "https://source.invalid/list.m3u");
+    const auto preview = model.preview_request(request.channel_id);
+    ASSERT_TRUE(preview);
+    EXPECT_EQ(preview->extra_headers, request.extra_headers);
+    EXPECT_EQ(preview->credential_origin, request.credential_origin);
+    EXPECT_EQ(model.remote_sources(prefix + "}", output), 200);
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.saved_source(2)->extra_headers, request.extra_headers);
+    EXPECT_EQ(model.remote_sources(prefix + R"(,"extraHeaders":""})", output), 200);
+    ASSERT_TRUE(settle(model));
+    EXPECT_TRUE(model.saved_source(2)->extra_headers.empty());
     model.close();
 }

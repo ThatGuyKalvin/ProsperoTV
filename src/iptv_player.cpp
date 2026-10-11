@@ -2838,7 +2838,8 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
 static int RunPlayerOnce(const char *url, const char *channel_name, const char *user_agent,
                          const char *referrer, unsigned stop_after_ms, bool reconnect_live,
                          bool live, const char *authorization = nullptr,
-                         const char *credential_origin = nullptr)
+                         const char *credential_origin = nullptr,
+                         const char *extra_headers = nullptr)
 {
     const std::uint64_t playback_started_us = MonotonicUsec();
     {
@@ -2885,7 +2886,8 @@ static int RunPlayerOnce(const char *url, const char *channel_name, const char *
 
     iptv::http::RequestHeaders headers{user_agent, referrer};
     headers.authorization = authorization;
-    headers.credential_origin = credential_origin;
+    headers.credential_origin = credential_origin ? credential_origin : url;
+    headers.extra_headers = extra_headers;
     auto *runner = new (std::nothrow) StreamRunner{};
     auto *read_buffer = new (std::nothrow) std::uint8_t[kNetworkReadBytes];
     auto *playlist_data = new (std::nothrow) char[kPlaylistBytes + 1u];
@@ -2901,7 +2903,8 @@ static int RunPlayerOnce(const char *url, const char *channel_name, const char *
         runner->SetLive(live);
 #if IPTV_PROBE
         if (!UrlLooksLikeHls(url) && !UrlLooksLikeWebm(url))
-            RunCurlDownloadProbe(url, headers, runner);
+            if (!headers.extra_headers || !*headers.extra_headers)
+                RunCurlDownloadProbe(url, headers, runner);
 #endif
         if (runner->PlaybackStopRequested())
             result = 1;
@@ -3011,7 +3014,8 @@ static int RunPlayerOnce(const char *url, const char *channel_name, const char *
 
 static int RunPlayer(const char *url, const char *channel_name, const char *user_agent,
                      const char *referrer, unsigned stop_after_ms, bool reconnect_live, bool live,
-                     const char *authorization = nullptr, const char *credential_origin = nullptr)
+                     const char *authorization = nullptr, const char *credential_origin = nullptr,
+                     const char *extra_headers = nullptr)
 {
     const auto began = MonotonicUsec();
     for (;;)
@@ -3024,8 +3028,9 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
                 return 1;
             remaining -= static_cast<unsigned>(elapsed);
         }
-        const int result = RunPlayerOnce(url, channel_name, user_agent, referrer, remaining,
-                                         reconnect_live, live, authorization, credential_origin);
+        const int result =
+            RunPlayerOnce(url, channel_name, user_agent, referrer, remaining, reconnect_live, live,
+                          authorization, credential_origin, extra_headers);
         const auto target = gMediaSeekRequest.exchange(-1, std::memory_order_acq_rel);
         iptv_player_media_state_t media{};
         iptv_player_media_state(&media);
@@ -3114,6 +3119,15 @@ int iptv_player_run_authenticated(const char *url, const char *channel_name, con
 {
     return RunPlayer(url, channel_name, user_agent, referrer, stop_after_ms, reconnect_live != 0,
                      live != 0, authorization, credential_origin);
+}
+
+int iptv_player_run_configured(const char *url, const char *channel_name, const char *user_agent,
+                               const char *referrer, const char *authorization,
+                               const char *credential_origin, const char *extra_headers,
+                               unsigned stop_after_ms, int reconnect_live, int live)
+{
+    return RunPlayer(url, channel_name, user_agent, referrer, stop_after_ms, reconnect_live != 0,
+                     live != 0, authorization, credential_origin, extra_headers);
 }
 
 const char *iptv_player_last_error(void)

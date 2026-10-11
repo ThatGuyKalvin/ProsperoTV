@@ -82,7 +82,15 @@ bool download(const std::string &original, const iptv::http::RequestHeaders &hea
             return false;
         Transfer transfer{control, sink, poll};
         const auto scoped = iptv::http::HeadersForUrl(original.c_str(), url.c_str(), headers);
+        std::vector<iptv::http::NamedHeader> extra;
+        if (!iptv::http::ExtraHeadersForRequest(scoped, &extra))
+        {
+            curl_easy_cleanup(curl);
+            return false;
+        }
         curl_slist *fields = nullptr;
+        for (const auto &field : extra)
+            fields = curl_slist_append(fields, (field.name + ": " + field.value).c_str());
         for (const auto &[name, value] :
              {std::pair{"Cookie", scoped.cookie}, std::pair{"Authorization", scoped.authorization}})
             if (value && *value)
@@ -300,9 +308,10 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
     auto decoder = std::make_unique<Decoder>(control, picture, context, audio, request.channel_id);
     const auto poll = [&] { decoder->sync_audio(); };
     iptv::http::RequestHeaders headers{request.user_agent.c_str(), request.referrer.c_str()};
+    headers.extra_headers = request.extra_headers.c_str();
     headers.authorization = request.authorization.c_str();
-    headers.credential_origin =
-        request.credential_origin.empty() ? nullptr : request.credential_origin.c_str();
+    const std::string origin = request.credential_origin.empty() ? url : request.credential_origin;
+    headers.credential_origin = origin.c_str();
     bool first = true, have_sequence = false;
     std::uint64_t next_sequence = 0;
     unsigned masters = 0;

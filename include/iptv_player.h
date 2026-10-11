@@ -20,6 +20,11 @@ extern "C"
                                      const char *user_agent, const char *referrer,
                                      int reconnect_live);
     /* Live history is independent of reconnect policy; disable it for VOD/catch-up. */
+    int iptv_player_run_configured(const char *url, const char *channel_name,
+                                   const char *user_agent, const char *referrer,
+                                   const char *authorization, const char *credential_origin,
+                                   const char *extra_headers, unsigned stop_after_ms,
+                                   int reconnect_live, int live);
     int iptv_player_run_authenticated(const char *url, const char *channel_name,
                                       const char *user_agent, const char *referrer,
                                       const char *authorization, const char *credential_origin,

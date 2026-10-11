@@ -84,6 +84,13 @@
   its subcategories.
 - Add and edit playlists and accounts from a phone or a computer with the
   [phone remote](#phone-remote), instead of the on-screen keyboard.
+- In Sources, R2 opens per-source HTTP settings: user agent, referrer and custom
+  request headers. Enter one `Name: value` at a time on TV (empty saves, `-`
+  clears all), or paste up to 16 lines / 4 KiB in the paired phone editor.
+  Saved custom values stay hidden on the phone; a blank field keeps them.
+  Channel user agents/referrers and built-in authentication take precedence.
+  Custom headers stay on the source's HTTP origin and are removed on redirects
+  to another origin. USB playlists use each initial stream URL as their origin.
 
 ### Browsing
 

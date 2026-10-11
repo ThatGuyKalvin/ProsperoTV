@@ -69,6 +69,10 @@ input[type=range]{padding:0;min-height:44px;accent-color:#ff9445;cursor:pointer}
 <p id="source-portal"><label for="source-mac">MAC CODE</label><input id="source-mac" maxlength="17" placeholder="00:1A:79:12:34:56" autocomplete="off"></p>
 <p><label for="source-agent">USER AGENT (OPTIONAL)</label><input id="source-agent" maxlength="512" autocomplete="off" placeholder="Default when empty"></p>
 <p><label for="source-referrer">REFERRER (OPTIONAL)</label><input id="source-referrer" type="url" maxlength="2048" autocomplete="off" placeholder="https://provider.example/"></p>
+<p><label for="source-headers">CUSTOM HEADERS (OPTIONAL)</label><textarea id="source-headers" maxlength="4096" rows="4" autocomplete="off" placeholder="X-Token: value"></textarea></p>
+<p><label><input id="source-headers-clear" type="checkbox"> Clear saved custom headers</label></p>
+<p id="source-headers-state" class="muted"></p>
+<p class="muted">One Name: value per line, up to 16. Blank keeps saved values. Custom headers stay on the source origin; built-in fields take priority.</p>
 <p class="muted">Used for this source's downloads and playback. A channel's own user agent or referrer takes priority.</p>
 <p><label for="source-schedule">REFRESH</label><select id="source-schedule"><option value="0">Daily</option><option value="1">Weekly</option><option value="2">Only when asked</option></select></p>
 <div class="row"><button id="source-save" class="primary" type="submit">Save on TV</button><button id="source-select" type="button">Use on TV</button></div>
@@ -142,6 +146,7 @@ function sourceFields(){
 function editSource(){
  const source=sourceRows.find(s=>String(s.id)===$('source-list').value);
  $('source-kind').value=source&&source.kind?source.kind:1;$('source-kind').disabled=!!source;
+ $('source-headers').value='';$('source-headers-clear').checked=false;$('source-headers-state').textContent=source&&source.extraHeadersSet?'Custom headers saved (values hidden).':'';
  for(const [id,key] of [['name','name'],['url','url'],['user','username'],['mac','mac'],['schedule','schedule'],['agent','userAgent'],['referrer','referrer']])$('source-'+id).value=source?source[key]:(id==='schedule'?'0':'');
  $('source-password').value='';$('source-password-hint').textContent=source&&source.passwordSet?'Leave blank to keep the saved password.':'Enter the account password.';
  $('source-save').disabled=!!source&&source.kind===0;$('source-select').disabled=!source||!source.url;$('source-remove').disabled=!source||source.id<=4;sourceFields();
@@ -163,6 +168,7 @@ async function sourceAction(details){
 }
 $('source-form').onsubmit=event=>{
  event.preventDefault();const details={operation:'save',id:Number($('source-list').value),kind:Number($('source-kind').value),name:$('source-name').value,url:$('source-url').value,username:$('source-user').value,mac:$('source-mac').value,schedule:Number($('source-schedule').value),userAgent:$('source-agent').value,referrer:$('source-referrer').value};
+ if($('source-headers-clear').checked)details.extraHeaders='';else if($('source-headers').value)details.extraHeaders=$('source-headers').value;
  if($('source-password').value)details.password=$('source-password').value;sourceAction(details);
 };
 $('source-select').onclick=()=>sourceAction({operation:'select',id:Number($('source-list').value)});

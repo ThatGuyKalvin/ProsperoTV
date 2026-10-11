@@ -34,7 +34,7 @@ class ProgrammeJobs
 };
 struct RecordingInput
 {
-    std::string url, user_agent, referrer, authorization, credential_origin;
+    std::string url, user_agent, referrer, authorization, credential_origin, extra_headers;
     std::string portal_url, portal_mac, portal_command;
 };
 // The stream worker calls the sink in bounded pieces and checks control while waiting.

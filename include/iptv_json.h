@@ -23,12 +23,13 @@ inline int HexDigit(char value)
     return -1;
 }
 
-inline bool AppendUtf8(std::uint32_t codepoint, std::string *output, std::size_t maximum)
+inline bool AppendUtf8(std::uint32_t codepoint, std::string *output, std::size_t maximum,
+                       bool preserve_controls = false)
 {
     if (!output)
         return true;
     // Match the single-character escapes: keep controls out of UI text and URLs.
-    if (codepoint < 0x20u)
+    if (codepoint < 0x20u && !preserve_controls)
         codepoint = ' ';
     if (codepoint > 0x10ffffu || (codepoint >= 0xd800u && codepoint <= 0xdfffu))
         return false;
@@ -100,7 +101,8 @@ class JsonReader
         return position_ == input_.size();
     }
 
-    bool String(std::string *output, std::size_t maximum = kDefaultMaxFieldBytes)
+    bool String(std::string *output, std::size_t maximum = kDefaultMaxFieldBytes,
+                bool preserve_controls = false)
     {
         Whitespace();
         if (position_ >= input_.size() || input_[position_++] != '"')
@@ -136,19 +138,19 @@ class JsonReader
                 simple = escaped;
                 break;
             case 'b':
-                simple = ' ';
+                simple = preserve_controls ? '\b' : ' ';
                 break;
             case 'f':
-                simple = ' ';
+                simple = preserve_controls ? '\f' : ' ';
                 break;
             case 'n':
-                simple = ' ';
+                simple = preserve_controls ? '\n' : ' ';
                 break;
             case 'r':
-                simple = ' ';
+                simple = preserve_controls ? '\r' : ' ';
                 break;
             case 't':
-                simple = ' ';
+                simple = preserve_controls ? '\t' : ' ';
                 break;
             case 'u':
             {
@@ -170,7 +172,7 @@ class JsonReader
                 {
                     return false;
                 }
-                if (!AppendUtf8(codepoint, output, maximum))
+                if (!AppendUtf8(codepoint, output, maximum, preserve_controls))
                     return false;
                 continue;
             }

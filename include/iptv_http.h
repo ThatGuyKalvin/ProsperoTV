@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <string>
+#include <vector>
 
 namespace iptv::http
 {
@@ -86,7 +88,17 @@ struct RequestHeaders
     // When provided, credentials stay on this origin even when a playlist
     // points its segments or streams at another host.
     const char *credential_origin = nullptr;
+    const char *extra_headers = nullptr; // bounded LF-separated Name: value lines; origin-scoped
 };
+
+struct NamedHeader
+{
+    std::string name, value;
+};
+// Reject transport-controlled fields, duplicate names and control characters.
+bool ParseExtraHeaders(std::string_view text, std::vector<NamedHeader> *fields = nullptr);
+// Built-in fields take precedence; callers must scope headers with HeadersForUrl first.
+bool ExtraHeadersForRequest(const RequestHeaders &headers, std::vector<NamedHeader> *fields);
 
 // Validate a ranged response before the demuxer interprets its first byte.
 bool ParseStreamRange(std::string_view headers, int status, std::int64_t offset,
