@@ -28,6 +28,7 @@
 #include "platform/ps5/system.hpp"
 #include "tv/app.hpp"
 #include "tv/diag.hpp"
+#include "tv/crash_report.hpp"
 #include "tv/i18n.hpp"
 #include <atomic>
 #include "tv/remote_input.hpp"
@@ -1208,6 +1209,20 @@ int main()
         profile_name[sizeof(profile_name) - 1] = '\0';
         g_profile_name = profile_name;
     }
+    // Recover before truncating, and install before the first application worker starts.
+    const auto crash_path = tv::storage::logs_dir() + "/prosperotv-crash.pending";
+    ptv::crash::Record crash_record;
+    const auto crash_status = ptv::crash::read(crash_path, crash_record);
+    const bool recovered_crash = crash_status == ptv::crash::Read::record;
+    bool crash_saved = !recovered_crash;
+    if (recovered_crash)
+        crash_saved = save::write_atomic(
+            tv::storage::logs_dir() + "/prosperotv-last-failure.txt",
+            ptv::failure_report(crash_record.receipt(), {}, crash_record.timestamp, -1, 0));
+    if (crash_status != ptv::crash::Read::error && crash_saved)
+        say("[TV] crash recorder: %s", ptv::crash::install(crash_path) ? "ready" : "unavailable");
+    else
+        say("[TV] crash recorder: previous record could not be read or saved");
     iptv_remote_set_pairing_store((tv::storage::config_dir() + "/phone-pairing-v1.txt").c_str());
     iptv_remote_set_icon(tv::storage::app_file("sce_sys/icon0.png").c_str());
     const bool remote_started = iptv_remote_start(8888);
@@ -1246,6 +1261,8 @@ int main()
     }
     auto owned_model =
         std::make_unique<ptv::Model>(tv::storage::config_dir(), tv::storage::cache_dir());
+    if (recovered_crash)
+        owned_model->resume_last(false);
     ptv::Settings settings = ptv::load_settings(tv::storage::config_dir());
     // The diagnostic log: the viewer's switch in Settings, a debug build, or
     // (test title) a dev/diagnostics.txt left beside the app.
@@ -1300,12 +1317,17 @@ int main()
     }
     tv::start_update_check();
     LastPlayback last;
-    std::string menu_notice;
+    std::string menu_notice =
+        recovered_crash
+            ? ptv::tr(crash_saved ? "The previous session crashed. Export its report from Settings."
+                                  : "The previous session crashed. Automatic playback was skipped.")
+            : "";
     std::optional<ptv::PlayRequest> next_channel;
     std::optional<ptv::PlaybackResume> next_resume;
     std::optional<iptv_hls_quality_t> next_quality;
     for (;;)
     {
+        ptv::crash::phase(ptv::crash::Phase::menu);
         ptv::Model &model = *owned_model;
         ptv::PlayRequest request;
         const auto resume = std::move(next_resume);
@@ -1532,6 +1554,7 @@ int main()
         iptv_player_set_sleep_deadline(model.sleep_timer.deadline());
         if (script.active())
             iptv_input_schedule_start(); // "during" steps count from here
+        ptv::crash::phase(ptv::crash::Phase::playback);
         const PlaybackOutcome outcome =
             play_candidates(request, script.watch_ms(), nullptr, resume ? &*resume : nullptr);
         (void)model.viewing_tick(false);
