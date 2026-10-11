@@ -462,8 +462,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             }
         }
         app.configure_images(
-            [&renderer](const ptv::ImagePixels &pixels)
-            {
+            [&renderer](const ptv::ImagePixels &pixels) {
                 return renderer.batch().create_texture(pixels.width, pixels.height,
                                                        pixels.rgba.data());
             },
@@ -542,8 +541,10 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 },
                 &model);
             iptv_remote_set_browse_handler(
-                resolving_portal || app.storage_busy() ? nullptr
-                    : +[](const char *input, size_t bytes, char *out, size_t capacity, void *context) -> int
+                resolving_portal || app.storage_busy()
+                    ? nullptr
+                    : +[](const char *input, size_t bytes, char *out, size_t capacity,
+                          void *context) -> int
                 {
                     std::string response;
                     const int status = static_cast<ptv::Model *>(context)->remote_browse(
@@ -555,7 +556,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     }
                     std::memcpy(out, response.c_str(), response.size() + 1);
                     return status;
-                }, &model);
+                },
+                &model);
             // No remote mutations can race a settings snapshot or restore.
             if (!app.storage_busy())
                 iptv_remote_poll();
@@ -804,7 +806,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         }
         iptv_remote_enable_search(false);
         iptv_remote_set_sources_handler(nullptr, nullptr);
-                iptv_remote_set_browse_handler(nullptr, nullptr);
+        iptv_remote_set_browse_handler(nullptr, nullptr);
         if (chosen)
             hand_over_to_channel(app, renderer, display, frame, request->channel_id,
                                  settings->reduced_motion);

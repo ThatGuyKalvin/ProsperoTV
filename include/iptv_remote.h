@@ -29,7 +29,7 @@ extern "C"
                                          void *context);
     /* Paired phone channel/guide pages. Same menu-thread lifetime as sources. */
     void iptv_remote_set_browse_handler(int (*handle)(const char *, size_t, char *, size_t, void *),
-                                       void *context);
+                                        void *context);
     void iptv_remote_set_icon(const char *path);
     void iptv_remote_stop(void);
     void iptv_remote_poll(void);
