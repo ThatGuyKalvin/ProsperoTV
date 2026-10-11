@@ -148,6 +148,11 @@ void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         model.edit_source_http(id);
         return;
     }
+    if (input.is_pressed(Action::jump_prev) && id > 0)
+    {
+        model.edit_guide_url(id);
+        return;
+    }
     if (input.is_pressed(Action::north) && id > 1)
     {
         model.edit_saved_source(id);
@@ -235,6 +240,10 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
                                 : source->url.empty() ? tr("Not set up")
                                                       : redact_address(source->url);
     ui::paragraph(draw, fonts.regular, address, left, 375, 24, width, 34, theme.text_muted, 3);
+    const auto guide_url = model.guide_url_override(id);
+    if (!guide_url.empty())
+        ui::text(draw, fonts.regular, fonts.regular.font->fit(tr("XMLTV: ") + redact_address(guide_url),
+                                                           20, width), left, 488, 20, theme.text_muted);
     ui::text(draw, fonts.semibold,
              tr("Refresh: ") + std::string(tr(schedule_name(source->schedule))), left, 510, 26,
              theme.text);
@@ -293,7 +302,10 @@ int SourcesScreen::hints(ui::Hint *out, int capacity) const
     if (focused_id() > 1)
         add({ui::Button::triangle, tr("Edit")});
     if (focused_id() > 0)
+    {
         add({ui::Button::square, tr("Refresh schedule")});
+        add({ui::Button::l2, tr("XMLTV guide")});
+    }
     if (focused_id() > 1)
         add({ui::Button::r2, tr("HTTP settings")});
     return count;

@@ -150,3 +150,23 @@ traversal, symlinks, directories and special files are excluded. Reads stream in
 with the existing 512 MiB playlist bound, catalogue limits and cancellation. File changes,
 short reads and mount changes fail without replacing the cache. No elevated USB namespace is
 used. Physical drive recognition and native interaction remain unverified.
+
+
+### Custom XMLTV and channel matching (host implementation; native acceptance pending)
+
+On Sources, L2 edits that source's HTTP(S) XMLTV address. Empty restores the provider's
+playlist/account guide. In the full guide, Options > Match XMLTV channel edits the selected
+visible live channel's XMLTV `channel` ID; use the ID from the guide, not its display name.
+Empty restores automatic `tvg-id` and unambiguous-name matching. Explicit matches take
+priority, and several live channels can share one guide ID. An unknown guide ID produces
+no programmes for that channel rather than guessing a replacement. There is no station
+picker: matching uses the focused ID input.
+
+Overrides and up to 4096 explicit matches per source persist in the private Library database
+(and its existing backup). Guide IDs are limited to 256 bytes. Source account/address changes
+clear their old guide configuration; renaming a source retains it. The saved guide validates
+both source identity and the URL/mapping fingerprint, using one guide database per source
+rather than accumulating a new cache after each edit. Editing configuration invalidates old
+programme assignments immediately; successful downloads save the replacement. Offline restart
+keeps the last good guide only when its configuration still matches. Existing parental and
+hidden-channel filtering remains authoritative. Native keyboard/display acceptance is pending.

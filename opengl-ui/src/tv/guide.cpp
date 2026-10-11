@@ -356,7 +356,7 @@ struct XmltvReader::State
     XML_Parser parser = nullptr;
     z_stream zip{};
     Guide &guide;
-    std::unordered_map<std::string, std::vector<std::string>> ids;
+    std::unordered_map<std::string, std::vector<std::string>> ids, explicit_ids;
     std::unordered_map<std::string, std::string> names;
     Programme programme;
     std::string xml_channel, field, text, prefix;
@@ -365,11 +365,21 @@ struct XmltvReader::State
     unsigned depth = 0;
     bool checked = false, compressed = false, zip_end = false, invalid = false, root = false;
 
-    State(const iptv::Catalog &catalog, std::int64_t now, Guide &target) : guide(target), clock(now)
+    State(const iptv::Catalog &catalog, std::int64_t now, Guide &target,
+          const std::map<std::string, std::string> &mapping)
+        : guide(target), clock(now)
     {
         guide.source_id = catalog.source_id;
         for (const auto channel : catalog)
         {
+            if (channel.media_kind != iptv::MediaKind::live)
+                continue;
+            const auto match = mapping.find(std::string(channel.id));
+            if (match != mapping.end())
+            {
+                explicit_ids[match->second].emplace_back(channel.id);
+                continue;
+            }
             if (!channel.tvg_id.empty())
                 ids[std::string(channel.tvg_id)].emplace_back(channel.id);
             for (const auto name : {channel.tvg_name, channel.name})
@@ -489,23 +499,26 @@ struct XmltvReader::State
             (s.clock == 0 || (s.programme.start >= s.clock - 14 * 86400 &&
                               s.programme.start <= s.clock + 14 * 86400)))
         {
-            const auto found = s.ids.find(s.xml_channel);
-            if (found != s.ids.end())
-                for (const auto &id : found->second)
-                {
-                    const auto bytes = id.size() + s.programme.title.size() +
-                                       s.programme.description.size() +
-                                       s.programme.catchup_id.size();
-                    if (s.count >= Guide::kMaxProgrammes ||
-                        s.text_bytes + bytes > Guide::kMaxTextBytes)
+            for (const auto *matches : {&s.ids, &s.explicit_ids})
+            {
+                const auto found = matches->find(s.xml_channel);
+                if (found != matches->end())
+                    for (const auto &id : found->second)
                     {
-                        s.guide.truncated = true;
-                        break;
+                        const auto bytes = id.size() + s.programme.title.size() +
+                                           s.programme.description.size() +
+                                           s.programme.catchup_id.size();
+                        if (s.count >= Guide::kMaxProgrammes ||
+                            s.text_bytes + bytes > Guide::kMaxTextBytes)
+                        {
+                            s.guide.truncated = true;
+                            break;
+                        }
+                        s.guide.channels[id].push_back(s.programme);
+                        ++s.count;
+                        s.text_bytes += bytes;
                     }
-                    s.guide.channels[id].push_back(s.programme);
-                    ++s.count;
-                    s.text_bytes += bytes;
-                }
+            }
         }
         --s.depth;
     }
@@ -579,8 +592,9 @@ struct XmltvReader::State
     }
 };
 
-XmltvReader::XmltvReader(const iptv::Catalog &catalog, std::int64_t now, Guide &guide)
-    : state_(new State(catalog, now, guide))
+XmltvReader::XmltvReader(const iptv::Catalog &catalog, std::int64_t now, Guide &guide,
+                         const std::map<std::string, std::string> &mapping)
+    : state_(new State(catalog, now, guide, mapping))
 {
 }
 XmltvReader::~XmltvReader() = default;

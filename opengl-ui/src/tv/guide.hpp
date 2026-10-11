@@ -6,6 +6,7 @@
 #include "iptv_catalog.h"
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -48,7 +49,8 @@ class Guide
 class XmltvReader
 {
   public:
-    XmltvReader(const iptv::Catalog &catalog, std::int64_t now, Guide &guide);
+    XmltvReader(const iptv::Catalog &catalog, std::int64_t now, Guide &guide,
+                const std::map<std::string, std::string> &mapping = {});
     ~XmltvReader();
     XmltvReader(const XmltvReader &) = delete;
     XmltvReader &operator=(const XmltvReader &) = delete;

@@ -2,6 +2,8 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/guide.hpp"
+#include "tv/guide_sheet.hpp"
+#include "tv/sources_screen.hpp"
 #include "tv/model.hpp"
 #include "tv/playback_osd.hpp"
 #include "core/save_file.hpp"
@@ -356,6 +358,127 @@ TEST_F(GuideTest, DownloadSearchPlaybackAndFailedRefreshWorkTogether)
     ASSERT_TRUE(offline.open());
     settle(offline);
     EXPECT_EQ(offline.guide().count(), 5u);
+    offline.close();
+}
+
+TEST_F(GuideTest, ExplicitMatchesOverrideAutomaticNamesAndAllowSharedGuideIds)
+{
+    const std::string first(catalog[0].id), second(catalog[1].id);
+    ptv::Guide guide;
+    const std::map<std::string, std::string> mapping{{first, "news"}, {second, "news"},
+                                                  {"missing-channel", "station"}};
+    ptv::XmltvReader reader(catalog, now, guide, mapping);
+    ASSERT_TRUE(reader.feed(kXml));
+    ASSERT_TRUE(reader.finish());
+    ASSERT_EQ(guide.programmes(first).size(), 2u);
+    ASSERT_EQ(guide.programmes(second).size(), 2u);
+    EXPECT_EQ(guide.programmes(first)[0].title, "Headlines");
+    EXPECT_TRUE(guide.programmes("missing-channel").empty());
+    ptv::Guide shared_auto;
+    ptv::XmltvReader shared(catalog, now, shared_auto, {{first, "news"}});
+    ASSERT_TRUE(shared.feed(kXml));
+    ASSERT_TRUE(shared.finish());
+    EXPECT_EQ(shared_auto.programmes(first).size(), 2u);
+    EXPECT_EQ(shared_auto.programmes(second).size(), 2u);
+    ptv::Guide unknown;
+    ptv::XmltvReader no_match(catalog, now, unknown, {{second, "does-not-exist"}});
+    ASSERT_TRUE(no_match.feed(kXml));
+    ASSERT_TRUE(no_match.finish());
+    EXPECT_TRUE(unknown.programmes(second).empty());
+    EXPECT_EQ(unknown.programmes(first).size(), 3u);
+}
+TEST_F(GuideTest, GuideConfigurationPersistsIsolatesSourcesAndClearsOnIdentityChange)
+{
+    ptv::Library library;
+    const auto database = dir + "/library.sqlite3";
+    ASSERT_TRUE(library.open(database));
+    ptv::SavedSource a{0,1,"A","https://one.invalid/list",{},{},{},ptv::RefreshSchedule::manual};
+    ptv::SavedSource b{0,1,"B","https://two.invalid/list",{},{},{},ptv::RefreshSchedule::manual};
+    ASSERT_TRUE(library.save_source(&a));
+    ASSERT_TRUE(library.save_source(&b));
+    EXPECT_FALSE(library.set_guide_url(a.id, "file:///etc/passwd"));
+    ASSERT_TRUE(library.set_guide_url(a.id, "https://guide.invalid/custom.xml"));
+    ASSERT_TRUE(library.set_guide_mapping(a.id, "channel", "news"));
+    ASSERT_TRUE(library.set_guide_mapping(a.id, "channel", "station"));
+    EXPECT_TRUE(library.guide_url(b.id).empty());
+    EXPECT_TRUE(library.guide_mapping(b.id).empty());
+    EXPECT_FALSE(library.set_guide_mapping(a.id, "channel", "bad\nvalue"));
+    library.close();
+    ASSERT_TRUE(library.open(database));
+    EXPECT_EQ(library.guide_url(a.id), "https://guide.invalid/custom.xml");
+    EXPECT_EQ(library.guide_mapping(a.id).at("channel"), "station");
+    a.name = "Renamed";
+    ASSERT_TRUE(library.save_source(&a));
+    EXPECT_FALSE(library.guide_mapping(a.id).empty());
+    a.url = "https://replacement.invalid/list";
+    ASSERT_TRUE(library.save_source(&a));
+    EXPECT_TRUE(library.guide_url(a.id).empty());
+    EXPECT_TRUE(library.guide_mapping(a.id).empty());
+}
+TEST_F(GuideTest, OverrideAndMatchingInvalidateOldGuideAndSurviveOfflineRestart)
+{
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    host::set_network_response("https://guide.invalid/custom.xml", xml);
+    std::string first;
+    {
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        settle(model);
+        first = model.channel(0).id;
+        ASSERT_EQ(model.guide().programmes(first).size(), 3u);
+        const hui::ui::Fonts fonts{};
+        ptv::Shared shared(model, fonts, {});
+        ptv::SourcesScreen sources(shared);
+        hui::ui::Feedback feedback;
+        hui::InputFrame input;
+        input.pressed = hui::action_bit(hui::Action::jump_prev);
+        sources.handle(input, feedback);
+        EXPECT_NE(host::keyboard_title().find("XMLTV URL"), std::string::npos);
+        host::set_keyboard_text("https://guide.invalid/custom.xml");
+        settle(model);
+        ptv::GuideSheet sheet(shared);
+        sheet.open(first, feedback);
+        input.pressed = hui::action_bit(hui::Action::menu);
+        sheet.handle(input, feedback);
+        input = {};
+        input.nav = hui::Direction::down;
+        for (int i = 0; i < 4; ++i) sheet.handle(input, feedback);
+        input = {};
+        input.pressed = hui::action_bit(hui::Action::confirm);
+        sheet.handle(input, feedback);
+        EXPECT_NE(host::keyboard_title().find("XMLTV channel ID"), std::string::npos);
+        host::set_keyboard_text("news");
+        settle(model);
+        EXPECT_EQ(model.guide().programmes(first).size(), 2u);
+        EXPECT_FALSE(model.set_guide_mapping("unknown-channel", "news"));
+        ASSERT_TRUE(model.hide_category("US / Sports / Football", true));
+        EXPECT_FALSE(model.set_guide_mapping(first, "station"));
+        EXPECT_LT(model.position_of(first), 0);
+        ASSERT_TRUE(model.hide_category("US / Sports / Football", false));
+        model.close();
+    }
+    host::set_network(false, "");
+    ptv::Model offline(dir);
+    ASSERT_TRUE(offline.open());
+    settle(offline);
+    EXPECT_EQ(offline.guide_match(first), "news");
+    EXPECT_EQ(offline.guide().programmes(first).size(), 2u);
+    ASSERT_TRUE(offline.set_guide_mapping(first, "does-not-exist"));
+    settle(offline);
+    EXPECT_TRUE(offline.guide().programmes(first).empty());
+    // Clearing the override restores the provider URL; automatic matching is separately restored.
+    ASSERT_TRUE(offline.set_guide_url(offline.selected_source_id(), ""));
+    settle(offline);
+    ASSERT_TRUE(offline.set_guide_mapping(first, ""));
+    settle(offline);
+    host::set_network(true, playlist);
+    offline.refresh_guide();
+    settle(offline);
+    EXPECT_EQ(offline.guide().programmes(first).size(), 3u);
     offline.close();
 }
 } // namespace
