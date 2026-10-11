@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/model.hpp"
 #include "tv/source_check.hpp"
+#include "tv/preview.hpp"
 #include "host_platform.hpp"
 #include "host_preview.hpp"
 #include <gtest/gtest.h>
 #include <filesystem>
+#include <ctime>
 #include <fstream>
 #include <thread>
 #include <sqlite3.h>
@@ -284,5 +286,111 @@ TEST_F(CheckStoreTest, ModelChecksRespectPolicyAndCancelBeforeAnotherResourceOwn
     model.close();
     host::set_preview(false);
     host::reset();
+}
+
+TEST_F(CheckStoreTest, InvisibleChecksDoNotSpendViewingQuotaButVisiblePreviewsDo)
+{
+    host::reset();
+    host::set_preview(true);
+    std::tm noon{};
+    noon.tm_year = 126;
+    noon.tm_mon = 9;
+    noon.tm_mday = 10;
+    noon.tm_hour = 12;
+    noon.tm_isdst = -1;
+    const auto wall = static_cast<std::uint64_t>(std::mktime(&noon));
+    std::uint64_t mono = 1000000;
+    const auto advance = [&](std::uint64_t elapsed)
+    {
+        mono += elapsed;
+        host::set_monotonic_us(mono);
+        host::set_unix_time(wall + (mono - 1000000) / 1000000);
+    };
+    advance(0);
+    const auto parental_file = dir + "/prosperotv-parental-v1.txt";
+    Parental policy;
+    ASSERT_TRUE(policy.load(parental_file));
+    ASSERT_TRUE(policy.set_pin("1234"));
+    ASSERT_TRUE(policy.unlock("1234", wall));
+    ASSERT_TRUE(policy.set_limits(1, -1, 0));
+    ASSERT_TRUE(policy.set_kids(true));
+    std::ofstream(dir + "/list.m3u")
+        << "#EXTM3U\n#EXTINF:-1 group-title=\"Kids\",Cartoon\nhttps://test.invalid/kids.ts\n"
+           "#EXTINF:-1 group-title=\"Adult\",Restricted\nhttps://test.invalid/adult.ts\n";
+    host::set_network(true, dir + "/list.m3u");
+    Model model(dir);
+    struct Cleanup
+    {
+        Model &model;
+        ~Cleanup()
+        {
+            model.close();
+            host::set_preview(false);
+            host::reset();
+        }
+    } cleanup{model};
+    ASSERT_TRUE(model.open());
+    for (unsigned i = 0; i < 600 && model.refreshing(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.refreshing());
+    ASSERT_EQ(model.channel_count(), 2u);
+    ASSERT_TRUE(model.probe_request(model.channel(0).id));
+    EXPECT_FALSE(model.probe_request(model.channel(1).id));
+    const auto saved_policy = [&]
+    {
+        std::ifstream in(parental_file);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    const auto check = [&]
+    {
+        model.toggle_source_check();
+        EXPECT_TRUE(model.checking_source());
+        for (unsigned i = 0; i < 600 && model.checking_source(); ++i)
+        {
+            model.poll();
+            advance(100000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        EXPECT_FALSE(model.checking_source());
+    };
+    const auto before_check = saved_policy();
+    check();
+    EXPECT_EQ(host::preview_starts(), 1u);
+    EXPECT_EQ(model.channel(0).playback_status, iptv::PlaybackStatus::playable);
+    EXPECT_EQ(model.channel(1).playback_status, iptv::PlaybackStatus::unknown);
+    EXPECT_EQ(saved_policy(), before_check); // No reservation or other usage write.
+    EXPECT_EQ(model.parental().remaining_seconds(), 60u);
+
+    LivePreview preview;
+    preview.configure([](auto, const auto &) { return 1u; }, [](auto) {}, false,
+                      [&] { return model.viewing_tick(true); });
+    preview.update(model.preview_request(model.channel(0).id), 1.2f);
+    ASSERT_TRUE(preview.running());
+    ASSERT_TRUE(policy.load(parental_file));
+    EXPECT_EQ(policy.remaining_seconds(), 30u); // Reserved before visible decoding starts.
+    advance(15000000);
+    ASSERT_TRUE(model.viewing_tick(true));
+    preview.clear();
+    ASSERT_TRUE(model.viewing_tick(false));
+    ASSERT_TRUE(policy.load(parental_file));
+    EXPECT_EQ(policy.remaining_seconds(), 45u);
+
+    ASSERT_TRUE(model.viewing_tick(true));
+    advance(45000000);
+    EXPECT_FALSE(model.viewing_tick(true));
+    EXPECT_FALSE(model.preview_request(model.channel(0).id));
+    EXPECT_FALSE(model.preview_request(model.channel(1).id));
+    EXPECT_TRUE(model.probe_request(model.channel(0).id));
+    EXPECT_FALSE(model.probe_request(model.channel(1).id));
+    const auto exhausted = saved_policy();
+    const auto probes = host::preview_starts();
+    check(); // Explicit invisible checks still work after the viewing allowance is exhausted.
+    EXPECT_EQ(host::preview_starts(), probes + 1);
+    EXPECT_EQ(saved_policy(), exhausted);
+    EXPECT_EQ(model.parental().remaining_seconds(), 0u);
+    EXPECT_EQ(model.channel(1).playback_status, iptv::PlaybackStatus::unknown);
 }
 } // namespace
