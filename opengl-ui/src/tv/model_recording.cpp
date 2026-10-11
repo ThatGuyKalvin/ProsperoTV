@@ -197,8 +197,10 @@ void Model::poll_programme_jobs()
         const auto channel = (*channels)[index];
         RecordingInput input;
         input.url = channel.url;
-        input.user_agent = channel.http_user_agent;
-        input.referrer = channel.http_referrer;
+        input.user_agent = channel.http_user_agent.empty() ? source->user_agent
+                                                           : std::string(channel.http_user_agent);
+        input.referrer =
+            channel.http_referrer.empty() ? source->referrer : std::string(channel.http_referrer);
         if (source->kind == 5)
         {
             input.authorization = local_tv_authorization(*source);

@@ -926,6 +926,7 @@ std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) c
             request.urls.emplace_back(url);
     request.user_agent = channel.http_user_agent;
     request.referrer = channel.http_referrer;
+    apply_source_http(request);
     if (active_source_ == iptv::SourceKind::Tvheadend)
     {
         request.authorization = local_tv_authorization(local_source_);
@@ -980,6 +981,7 @@ bool Model::play(unsigned catalog_index)
             play_request_.urls.emplace_back(alternate);
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
+    apply_source_http(play_request_);
     if (active_source_ == iptv::SourceKind::Tvheadend)
     {
         play_request_.authorization = local_tv_authorization(local_source_);
@@ -1249,6 +1251,16 @@ void Model::continue_account_form()
         iptv_ime_request_password(tr("Tvheadend password"), tr("Password"),
                                   IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_password, this);
         break;
+    case AccountStep::http_user_agent:
+        iptv_ime_request_prompt(http_form_.user_agent.c_str(), tr("Source user agent (1 of 2)"),
+                                tr("Leave empty for the default"), IPTV_IME_BUFFER_CHARACTERS,
+                                &Model::on_http_user_agent, this);
+        break;
+    case AccountStep::http_referrer:
+        iptv_ime_request_prompt(http_form_.referrer.c_str(), tr("Source referrer (2 of 2)"),
+                                "https://provider.example/", IPTV_IME_BUFFER_CHARACTERS,
+                                &Model::on_http_referrer, this);
+        break;
     case AccountStep::none:
         break;
     }
@@ -1349,6 +1361,8 @@ void Model::refresh()
     const bool account = active_source_ == iptv::SourceKind::Xtream;
     refresh_source_ = active_source_;
     refresh_saved_source_id_ = selected_source_id_;
+    refresh_http_ =
+        saved_source(selected_source_id_) ? *saved_source(selected_source_id_) : SavedSource{};
     refresh_url_ = custom ? custom_url_ : account ? std::string() : std::string(kCatalogUrl);
     refresh_cache_path_ = cache_path(active_source_);
     refresh_source_id_ = source_id(active_source_);
@@ -1421,6 +1435,8 @@ void Model::run_refresh()
     const bool usb = refresh_source_ == iptv::SourceKind::Custom && usb_playlist_path(refresh_url_);
     pending_network_ = usb ? iptv::http::Status::ok : platform::network_init();
 
+    const iptv::http::RequestHeaders headers{refresh_http_.user_agent.c_str(),
+                                             refresh_http_.referrer.c_str()};
     const auto stopping = [this]() { return stop_requested_.load(std::memory_order_acquire); };
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
@@ -1463,7 +1479,7 @@ void Model::run_refresh()
                     return false;
                 }
                 pending_fetch_ = platform::fetch(endpoint.c_str(), response.data(), response.size(),
-                                                 response.max_bytes, &control);
+                                                 response.max_bytes, &control, &headers);
                 return pending_fetch_.status == iptv::http::Status::ok && !stopping();
             };
             pending_account_stage_ = "authentication";
@@ -1522,8 +1538,8 @@ void Model::run_refresh()
                             return read && !to->parser->full();
                         },
                         &receiver};
-                    pending_fetch_ = platform::fetch_list(endpoint.c_str(), sink,
-                                                          iptv::kMaxXtreamResponseBytes, &control);
+                    pending_fetch_ = platform::fetch_list(
+                        endpoint.c_str(), sink, iptv::kMaxXtreamResponseBytes, &control, &headers);
                     // Stopped by the parser: what it says is the answer.
                     if (pending_fetch_.status == iptv::http::Status::stopped)
                         pending_fetch_.status = iptv::http::Status::ok;
@@ -1560,7 +1576,7 @@ void Model::run_refresh()
                 &receiver};
             pending_fetch_ = usb ? read_usb_playlist(refresh_url_, sink, &control, usb_root_)
                                  : platform::fetch_list(refresh_url_.c_str(), sink,
-                                                        iptv::http::kMaxListBytes, &control);
+                                                        iptv::http::kMaxListBytes, &control, &headers);
             if (pending_fetch_.status == iptv::http::Status::stopped)
                 pending_fetch_.status = pending_report_.input_too_large
                                             ? iptv::http::Status::response_too_large

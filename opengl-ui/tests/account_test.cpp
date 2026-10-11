@@ -74,3 +74,28 @@ TEST(AccountInfo, WarnsWithinSevenDaysAndHandlesUnknownExpiryAndClock)
     EXPECT_EQ(ptv::account_expiry_notice({0, 2, 1}, now), 0);
     EXPECT_EQ(ptv::account_expiry_notice({1900000000, 2, 1}, 0), 0);
 }
+
+TEST(SourceHttp, StoresPerSourceDefaultsAndRejectsUnsafeHeaderValues)
+{
+    ptv::Library library;
+    ASSERT_TRUE(library.open(":memory:"));
+    ptv::SavedSource source{10, 1, "Playlist", "https://provider.invalid/list.m3u", {}, {}, {}};
+    source.user_agent = "Example player/1.0";
+    source.referrer = "https://provider.invalid/watch";
+    ASSERT_TRUE(library.save_source(&source));
+    ASSERT_EQ(library.sources().size(), 1u);
+    EXPECT_EQ(library.sources()[0].user_agent, source.user_agent);
+    EXPECT_EQ(library.sources()[0].referrer, source.referrer);
+    source.user_agent = "bad\r\nAuthorization: leaked";
+    EXPECT_FALSE(library.save_source(&source));
+    EXPECT_EQ(library.sources()[0].user_agent, "Example player/1.0");
+    source.user_agent.assign(513, 'x');
+    EXPECT_FALSE(library.save_source(&source));
+    source.user_agent.clear();
+    source.referrer = "https://user:password@provider.invalid/";
+    EXPECT_FALSE(library.save_source(&source));
+    source.referrer.clear();
+    ASSERT_TRUE(library.save_source(&source));
+    EXPECT_TRUE(library.sources()[0].user_agent.empty());
+    EXPECT_TRUE(library.sources()[0].referrer.empty());
+}

@@ -50,14 +50,15 @@ int Model::remote_sources(std::string_view input, std::string &output)
         {
             if (output.size() > 1)
                 output += ',';
-            output += "{\"id\":" + std::to_string(source.id) +
-                      ",\"kind\":" + std::to_string(source.kind) +
-                      ",\"name\":" + quoted(source.name) + ",\"url\":" + quoted(source.url) +
-                      ",\"username\":" + quoted(source.username) +
-                      ",\"mac\":" + quoted(source.mac) +
-                      ",\"schedule\":" + std::to_string(static_cast<int>(source.schedule)) +
-                      ",\"selected\":" + (source.id == selected_source_id_ ? "true" : "false") +
-                      ",\"passwordSet\":" + (source.password.empty() ? "false" : "true") + "}";
+            output +=
+                "{\"id\":" + std::to_string(source.id) +
+                ",\"kind\":" + std::to_string(source.kind) + ",\"name\":" + quoted(source.name) +
+                ",\"url\":" + quoted(source.url) + ",\"username\":" + quoted(source.username) +
+                ",\"mac\":" + quoted(source.mac) + ",\"userAgent\":" + quoted(source.user_agent) +
+                ",\"referrer\":" + quoted(source.referrer) +
+                ",\"schedule\":" + std::to_string(static_cast<int>(source.schedule)) +
+                ",\"selected\":" + (source.id == selected_source_id_ ? "true" : "false") +
+                ",\"passwordSet\":" + (source.password.empty() ? "false" : "true") + "}";
             if (output.size() >= 120u * 1024u)
             {
                 output = "Too many source details to send. Manage sources on the TV.";
@@ -91,7 +92,8 @@ int Model::remote_sources(std::string_view input, std::string &output)
         return 400;
     for (const auto &[key, value] : fields)
         if (key != "operation" && key != "id" && key != "kind" && key != "name" && key != "url" &&
-            key != "username" && key != "password" && key != "mac" && key != "schedule")
+            key != "username" && key != "password" && key != "mac" && key != "schedule" &&
+            key != "userAgent" && key != "referrer")
             return 400;
     std::int64_t id = 0;
     if (!integer(fields["id"], id))
@@ -133,6 +135,10 @@ int Model::remote_sources(std::string_view input, std::string &output)
     source.url = fields["url"];
     source.username = fields["username"];
     source.mac = fields["mac"];
+    if (fields.contains("userAgent"))
+        source.user_agent = fields["userAgent"];
+    if (fields.contains("referrer"))
+        source.referrer = fields["referrer"];
     if (fields.contains("password"))
         source.password = fields["password"];
     std::string normalized;

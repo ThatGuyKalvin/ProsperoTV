@@ -70,7 +70,9 @@ void record_request(const char *url, const iptv::http::RequestHeaders *headers)
 {
     const std::lock_guard<std::mutex> lock(g_network.mutex);
     g_network.requests.push_back({url ? url : "", headers && headers->cookie ? headers->cookie : "",
-                                  headers && headers->authorization ? headers->authorization : ""});
+                                  headers && headers->authorization ? headers->authorization : "",
+                                  headers && headers->user_agent ? headers->user_agent : "",
+                                  headers && headers->referrer ? headers->referrer : ""});
 }
 
 void request(const char *title, iptv_ime_result_fn callback, void *user_data)

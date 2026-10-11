@@ -901,3 +901,56 @@ TEST_F(VodTest, AccountInfoComesFromNormalRefreshAndSurvivesOfflineCachedStartup
                             { return notice.title == "Account expires within a week"; }));
     offline.close();
 }
+
+TEST_F(VodTest, SourceHttpDefaultsReachAccountCatalogGuideAndVodRequestsAndPlayback)
+{
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        auto source = library.sources()[0];
+        source.user_agent = "AccountPlayer/2";
+        source.referrer = "https://provider.invalid/watch";
+        ASSERT_TRUE(library.save_source(&source));
+    }
+    response("", R"({"user_info":{"auth":1}})");
+    response("get_live_categories", R"([])");
+    response("get_live_streams", R"([{"stream_id":1,"name":"Live"}])");
+    std::string details_url;
+    ASSERT_TRUE(iptv::BuildXtreamApiUrl(account, "get_vod_info", &details_url));
+    reply(details_url + "&vod_id=10", R"({"info":{"plot":"Protected details"}})");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.refresh();
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play(0));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.user_agent, "AccountPlayer/2");
+    EXPECT_EQ(request.referrer, "https://provider.invalid/watch");
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    model.vod().request_details(0);
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.vod().details(model.vod().catalog()[0].id).plot, "Protected details");
+    ASSERT_TRUE(model.play_vod(0));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.user_agent, "AccountPlayer/2");
+    EXPECT_EQ(request.referrer, "https://provider.invalid/watch");
+    model.vod().select(ptv::VodKind::episodes, "20");
+    ASSERT_TRUE(settle(model));
+    model.close();
+    auto requests = host::requests();
+    ASSERT_GE(requests.size(), 7u);
+    bool guide = false, series = false, details = false;
+    for (const auto &fetched : requests)
+    {
+        EXPECT_EQ(fetched.user_agent, "AccountPlayer/2") << fetched.url;
+        EXPECT_EQ(fetched.referrer, "https://provider.invalid/watch") << fetched.url;
+        guide = guide || fetched.url.find("xmltv.php") != std::string::npos;
+        series = series || fetched.url.find("get_series_info") != std::string::npos;
+        details = details || fetched.url.find("get_vod_info") != std::string::npos;
+    }
+    EXPECT_TRUE(guide);
+    EXPECT_TRUE(series);
+    EXPECT_TRUE(details);
+}

@@ -53,6 +53,7 @@ struct SavedSource
     std::string mac;
     RefreshSchedule schedule = RefreshSchedule::daily;
     AccountInfo account{};
+    std::string user_agent{}, referrer{};
 };
 bool valid_source(const SavedSource &source);
 

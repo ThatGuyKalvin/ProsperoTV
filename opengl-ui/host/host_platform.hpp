@@ -35,6 +35,7 @@ int fetch_count();
 struct RequestRecord
 {
     std::string url, cookie, authorization;
+    std::string user_agent{}, referrer{};
 };
 std::vector<RequestRecord> requests();
 // How many bytes of lists were handed over, all downloads together.

@@ -163,7 +163,9 @@ bool Recorder::start(RecordingInput input, const std::string &drive, std::int64_
     if (active() || end <= static_cast<std::int64_t>(now) ||
         end - static_cast<std::int64_t>(now) > 86400)
         return false;
-    struct stat info{};
+    struct stat info
+    {
+    };
     if (lstat(drive.c_str(), &info) != 0 || !S_ISDIR(info.st_mode))
         return false;
     input_ = std::move(input);
@@ -182,7 +184,9 @@ void *Recorder::run(void *context)
 {
     auto &r = *static_cast<Recorder *>(context);
     const std::string partial = r.filename_ + ".partial";
-    struct stat mount{};
+    struct stat mount
+    {
+    };
     const bool mounted = stat(r.drive_.c_str(), &mount) == 0;
     const int fd = mounted ? ::open(partial.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600) : -1;
     if (fd < 0)
@@ -210,7 +214,9 @@ void *Recorder::run(void *context)
         [](void *p, const char *data, std::size_t size)
         {
             auto &s = *static_cast<Sink *>(p);
-            struct stat current{};
+            struct stat current
+            {
+            };
             if (stat(s.r->drive_.c_str(), &current) != 0 || current.st_dev != s.device)
             {
                 s.failed = true;
@@ -248,7 +254,9 @@ void *Recorder::run(void *context)
         ready = platform::network_init() == iptv::http::Status::ok;
         if (ready)
         {
-            PortalClient portal({r.input_.portal_url, r.input_.portal_mac}, &control);
+            PortalClient portal(
+                {r.input_.portal_url, r.input_.portal_mac, r.input_.user_agent, r.input_.referrer},
+                &control);
             ready = portal.sign_in() && portal.resolve(r.input_.portal_command, &r.input_.url);
             platform::network_shutdown();
         }
@@ -260,7 +268,9 @@ void *Recorder::run(void *context)
     const bool flushed = fsync(fd) == 0;
     const bool closed = ::close(fd) == 0;
     r.success_ = status >= 0 && !sink.failed && flushed && closed && r.bytes_.load() > 0;
-    struct stat existing{};
+    struct stat existing
+    {
+    };
     if (r.success_ && lstat(r.filename_.c_str(), &existing) != 0 && errno == ENOENT &&
         std::rename(partial.c_str(), r.filename_.c_str()) == 0)
         r.result_ = r.filename_;

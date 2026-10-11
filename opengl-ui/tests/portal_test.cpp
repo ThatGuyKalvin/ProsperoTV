@@ -214,3 +214,20 @@ TEST_F(PortalTest, ResolvingOnAWorkerCompletesAndCanBeCancelled)
     EXPECT_TRUE(job.url().empty());
 }
 } // namespace
+
+TEST_F(PortalTest, SourceHttpOverridesPortalDefaultsWithoutRemovingMacAuthentication)
+{
+    auto configured = credentials;
+    configured.user_agent = "ProviderBox/3";
+    configured.referrer = "https://provider.invalid/portal/";
+    ptv::PortalClient client(configured, nullptr);
+    ASSERT_TRUE(client.sign_in()) << client.error();
+    const auto requests = host::requests();
+    ASSERT_FALSE(requests.empty());
+    for (const auto &request : requests)
+    {
+        EXPECT_EQ(request.user_agent, configured.user_agent);
+        EXPECT_EQ(request.referrer, configured.referrer);
+        EXPECT_NE(request.cookie.find("mac="), std::string::npos);
+    }
+}

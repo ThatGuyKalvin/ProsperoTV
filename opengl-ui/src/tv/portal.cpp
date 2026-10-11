@@ -158,9 +158,12 @@ PortalClient::PortalClient(PortalCredentials credentials, const iptv::http::Requ
 }
 iptv::http::RequestHeaders PortalClient::headers() const
 {
-    return {"Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 MAG250 stbapp ver: 2 rev: 250 "
-            "Safari/533.3",
-            referrer_.c_str(), cookie_.c_str(), authorization_.c_str()};
+    return {credentials_.user_agent.empty() ? "Mozilla/5.0 (QtEmbedded; U; Linux; C) "
+                                              "AppleWebKit/533.3 MAG250 stbapp ver: 2 rev: 250 "
+                                              "Safari/533.3"
+                                            : credentials_.user_agent.c_str(),
+            credentials_.referrer.empty() ? referrer_.c_str() : credentials_.referrer.c_str(),
+            cookie_.c_str(), authorization_.c_str()};
 }
 std::string PortalClient::address(std::string_view type, std::string_view action,
                                   const Parameters &parameters) const
@@ -221,9 +224,10 @@ bool PortalClient::sign_in()
                   {"not_valid_token", "0"}}))
         return false;
     std::string status;
-    if (!js_object(
-            reply, [&](const std::string &key, JsonReader *value)
-            { return key == "status" ? value->StringOrScalar(&status) : value->SkipValue(); }) ||
+    if (!js_object(reply,
+                   [&](const std::string &key, JsonReader *value) {
+                       return key == "status" ? value->StringOrScalar(&status) : value->SkipValue();
+                   }) ||
         (!status.empty() && status != "0"))
     {
         error_ =

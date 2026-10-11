@@ -102,6 +102,11 @@ bool valid_source(const SavedSource &source)
     if (source.id < 0 || source.kind < 0 || source.kind > 5 || !valid_text(source.name, 128) ||
         source.schedule < RefreshSchedule::daily || source.schedule > RefreshSchedule::manual)
         return false;
+    std::string referer_url;
+    if ((!source.user_agent.empty() && !valid_text(source.user_agent, 512)) ||
+        (!source.referrer.empty() && (!valid_text(source.referrer, 2048) ||
+                                      !iptv::CanonicalizeStreamUrl(source.referrer, &referer_url))))
+        return false;
     if (source.kind == 0)
         return source.id == 1;
     // An original source slot may remain unconfigured after migration.
@@ -189,6 +194,8 @@ bool Library::open(const std::string &path)
         "CREATE TABLE IF NOT EXISTS sources (id INTEGER PRIMARY KEY,kind INTEGER NOT NULL,"
         "name TEXT NOT NULL,url TEXT NOT NULL,username TEXT NOT NULL,password TEXT NOT NULL,"
         "mac TEXT NOT NULL,schedule INTEGER NOT NULL CHECK(schedule BETWEEN 0 AND 2));"
+        "CREATE TABLE IF NOT EXISTS source_http (source INTEGER PRIMARY KEY REFERENCES sources(id)"
+        " ON DELETE CASCADE,user_agent TEXT NOT NULL,referrer TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS account_info (source INTEGER PRIMARY KEY REFERENCES sources(id)"
         " ON DELETE CASCADE,expires INTEGER NOT NULL,connections INTEGER NOT NULL,checked INTEGER "
         "NOT NULL);"
@@ -341,6 +348,12 @@ std::vector<SavedSource> Library::sources() const
                            query.string(5),
                            query.string(6),
                            static_cast<RefreshSchedule>(sqlite3_column_int(query.stmt, 7))};
+        Statement http(db_, "SELECT user_agent,referrer FROM source_http WHERE source=?1");
+        if (http.integer(1, source.id) && http.row())
+        {
+            source.user_agent = http.string(0);
+            source.referrer = http.string(1);
+        }
         if (valid_source(source))
         {
             if (source.kind == 2)
@@ -376,20 +389,31 @@ bool Library::save_source(SavedSource *source)
 {
     if (source == nullptr || !valid_source(*source))
         return false;
+    if (sqlite3_exec(db_, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr) != SQLITE_OK)
+        return false;
     Statement query(
         db_,
         "INSERT INTO sources VALUES(NULLIF(?1,0),?2,?3,?4,?5,?6,?7,?8)"
         " ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,name=excluded.name,url=excluded.url,"
         "username=excluded.username,password=excluded.password,mac=excluded.mac,schedule=excluded."
         "schedule");
-    const bool saved = query.integer(1, source->id) && query.integer(2, source->kind) &&
-                       query.text(3, source->name) && query.text(4, source->url) &&
-                       query.text(5, source->username) && query.text(6, source->password) &&
-                       query.text(7, source->mac) &&
-                       query.integer(8, static_cast<int>(source->schedule)) && query.done();
-    if (saved && source->id == 0)
-        source->id = sqlite3_last_insert_rowid(db_);
-    return saved;
+    bool saved = query.integer(1, source->id) && query.integer(2, source->kind) &&
+                 query.text(3, source->name) && query.text(4, source->url) &&
+                 query.text(5, source->username) && query.text(6, source->password) &&
+                 query.text(7, source->mac) &&
+                 query.integer(8, static_cast<int>(source->schedule)) && query.done();
+    const auto id = source->id ? source->id : sqlite3_last_insert_rowid(db_);
+    Statement http(db_, "INSERT INTO source_http VALUES(?1,?2,?3) ON CONFLICT(source) "
+                        "DO UPDATE SET user_agent=excluded.user_agent,referrer=excluded.referrer");
+    saved = saved && http.integer(1, id) && http.text(2, source->user_agent) &&
+            http.text(3, source->referrer) && http.done();
+    if (saved && sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr) == SQLITE_OK)
+    {
+        source->id = id;
+        return true;
+    }
+    (void)sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
 }
 
 bool Library::remove_source(std::int64_t id)
