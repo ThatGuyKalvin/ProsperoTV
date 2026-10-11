@@ -29,8 +29,7 @@ VodMetadata load_vod_metadata(const std::string &path, const iptv::Catalog &cata
 std::vector<std::string> vod_genres(std::string_view genres);
 bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_view series,
               iptv::Catalog *catalog, const iptv::http::RequestControl *control, std::string *error,
-              VodMetadata *metadata = nullptr,
-              const iptv::http::RequestHeaders *headers = nullptr);
+              VodMetadata *metadata = nullptr, const iptv::http::RequestHeaders *headers = nullptr);
 
 // Shares the app's network time with live-list and programme-guide downloads.
 // The Model grants that time through poll(can_download).

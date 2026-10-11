@@ -1574,9 +1574,10 @@ void Model::run_refresh()
                            (channels != 0 || to->bytes < kPlaylistProbeBytes);
                 },
                 &receiver};
-            pending_fetch_ = usb ? read_usb_playlist(refresh_url_, sink, &control, usb_root_)
-                                 : platform::fetch_list(refresh_url_.c_str(), sink,
-                                                        iptv::http::kMaxListBytes, &control, &headers);
+            pending_fetch_ =
+                usb ? read_usb_playlist(refresh_url_, sink, &control, usb_root_)
+                    : platform::fetch_list(refresh_url_.c_str(), sink, iptv::http::kMaxListBytes,
+                                           &control, &headers);
             if (pending_fetch_.status == iptv::http::Status::stopped)
                 pending_fetch_.status = pending_report_.input_too_large
                                             ? iptv::http::Status::response_too_large
