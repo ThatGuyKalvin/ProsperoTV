@@ -99,3 +99,5 @@ tests pass (114.7 seconds), plus 173 standalone shaping checks. Native compiler
 flags and application code are unchanged; case 88 remains the native candidate.
 The correction is included in draft PRs #45 and #46. Console acceptance is still
 pending while `.30` runs another title.
+
+- 2026-10-11: idle .30 accepted merged main 958a68d (case 89: 56 deployed files verified; Home/Live/On Demand/Sources/Settings and 11,172-channel catalog) and native status-label fix ac2c4e9 (case 93: all seven tabs correctly identified; 20-second H.264 1920x1080 playback, 493 decoded/473 presented frames, 918 audio frames/3,672 output grains, zero audio/video queue underruns or presentation gaps over 500 ms, clean teardown; services 2121/3232/9021 reachable and no active title). Candidate ELF SHA-256: 505236d6f183e384e8c7a8a4fdd553821dff8797500c9221285ca5adaf3a84ca; evidence: results/integration/console-89 and console-93; disposable no-elevation title: PPSA88306. These bounded checks do not validate 4K, VOD, Auto-quality throttling, physical USB, surround or speech; controlled LAN fixtures remain blocked by inbound Windows firewall access.
