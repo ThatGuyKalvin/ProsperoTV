@@ -94,9 +94,9 @@ The interface in `opengl-ui/` is not part of a release yet. Its build adds:
   kept in this repository.
 - [PS5-Lapy-JB-Daemon](https://github.com/ArkSama/PS5-Lapy-JB-Daemon), created
   by ArkSama, MIT. The build fetches the cooperative owned-root helper from
-  [mpereiraesaa's fork](https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon) at
-  commit `54a095c0f19161825e845daa760a03b446e654fa`, builds it unmodified for
-  the app's title with the PS5 Payload SDK v0.40 that upstream requires, and
+  [BlackBearReloaded's fork](https://github.com/blackbearreloaded/PS5-Lapy-JB-Daemon) at
+  commit `57fcc19b7f57e46c823d6f2a6c6233ebf3288079`, builds it unmodified for
+  the app's title with the PS5 Payload SDK v0.42, and
   packages it as `lapy.elf` with `licenses/Lapy-MIT.txt`. The client that
   talks to it (`opengl-ui/ps5/src/elevation/`) and the update kit
   (`opengl-ui/ps5/src/update_kit/`, `opengl-ui/ps5/update_helper/`) come from
