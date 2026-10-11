@@ -260,6 +260,9 @@ TEST_F(VodTest, MissingHomeSeriesFetchCanCancelAndFallsBackToSavedEpisode)
     ptv::PlayRequest request;
     model.poll(); // Cancellation must also stop an active worker.
     EXPECT_FALSE(model.take_play_request(&request));
+    std::string phone_response;
+    EXPECT_EQ(model.remote_browse(R"({"operation":"list"})", phone_response), 409);
+    EXPECT_NE(phone_response.find("episode loading"), phone_response.npos);
     ASSERT_TRUE(model.cancel_home_play());
     model.poll();
     EXPECT_FALSE(model.take_play_request(&request));
