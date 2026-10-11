@@ -466,6 +466,12 @@ class Model
         return guide_status_;
     }
     void refresh_guide();
+    void edit_guide_url(std::int64_t source);
+    void edit_guide_mapping(unsigned channel);
+    bool set_guide_url(std::int64_t source, std::string_view url);
+    bool set_guide_mapping(std::string_view channel, std::string_view guide_id);
+    std::string guide_url_override(std::int64_t source) const { return library_.guide_url(source); }
+    std::string guide_match(std::string_view channel) const;
     bool take_play_request(PlayRequest *request);
     // The focused live channel without changing history or playback health.
     std::optional<PlayRequest> preview_request(std::string_view channel_id) const;
@@ -633,6 +639,7 @@ class Model
     void mark_visibility();
     bool refresh_needed() const;
     std::string guide_path() const;
+    std::uint64_t guide_source_id() const;
     void stop_guide();
     void poll_guide();
     static void *guide_entry(void *self);
@@ -640,6 +647,9 @@ class Model
 
     static void on_query(const char *text, void *self);
     static void on_vod_query(const char *text, void *self);
+    void reload_guide_configuration();
+    static void on_guide_url(const char *text, void *self);
+    static void on_guide_mapping(const char *text, void *self);
     static void on_custom_url(const char *text, void *self);
     static void on_account_server(const char *text, void *self);
     static void on_account_username(const char *text, void *self);
@@ -718,6 +728,10 @@ class Model
     // ---- sources ----
     iptv::SourceKind active_source_ = iptv::SourceKind::BuiltIn;
     std::array<SourceHealth, kSourceCount> health_{};
+    std::uint64_t guide_expected_source_ = 0;
+    std::int64_t guide_edit_source_ = 0;
+    std::string guide_edit_channel_;
+    std::map<std::string, std::string> guide_mapping_;
     std::string custom_url_;
     std::string usb_root_ = "/mnt";
     iptv::XtreamCredentials xtream_;

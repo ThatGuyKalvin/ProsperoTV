@@ -485,7 +485,7 @@ void Model::load_cache()
                                                                      : SourceHealth::empty;
     index_.build(catalog_);
     if (catalog_loaded_)
-        (void)guide_.load(guide_path(), catalog_.source_id);
+        (void)guide_.load(guide_path(), guide_source_id());
     adopt_catalog();
 }
 

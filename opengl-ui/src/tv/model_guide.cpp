@@ -5,12 +5,23 @@
 #include "tv/model.hpp"
 #include "tv/platform.hpp"
 #include "tv/local_tv.hpp"
+#include "iptv_ime.h"
 
 namespace ptv
 {
 std::string Model::guide_path() const
 {
     return cache_path(active_source_) + ".guide.sqlite3";
+}
+std::uint64_t Model::guide_source_id() const
+{
+    std::string config = library_.guide_url(selected_source_id_);
+    const auto mapping = library_.guide_mapping(selected_source_id_);
+    for (const auto &[channel, guide_id] : mapping)
+        config += "\n" + channel + "\n" + guide_id;
+    return config.empty()
+               ? catalog_.source_id
+               : iptv::CustomSourceId(std::to_string(catalog_.source_id) + "\n" + config);
 }
 
 void Model::stop_guide()
@@ -92,6 +103,10 @@ void Model::refresh_guide()
         if (iptv::BuildXtreamGuideUrl(xtream_, &url))
             guide_urls_ = {std::move(url)};
     }
+    const auto override_url = library_.guide_url(selected_source_id_);
+    if (!override_url.empty())
+        guide_urls_ = {override_url};
+    guide_mapping_ = library_.guide_mapping(selected_source_id_);
     next_guide_check_ = platform::unix_time() + 3600;
     if (guide_urls_.empty())
     {
@@ -101,6 +116,7 @@ void Model::refresh_guide()
     guide_file_ = guide_path();
     guide_http_ =
         saved_source(selected_source_id_) ? *saved_source(selected_source_id_) : SavedSource{};
+    guide_expected_source_ = guide_source_id();
     guide_authorization_ =
         active_source_ == iptv::SourceKind::Tvheadend ? local_tv_authorization(local_source_) : "";
     guide_origin_ = active_source_ == iptv::SourceKind::Tvheadend ? local_source_.url : "";
@@ -137,7 +153,7 @@ void Model::run_guide()
                 break;
             }
             XmltvReader reader(catalog_, static_cast<std::int64_t>(platform::unix_time()),
-                               pending_guide_);
+                               pending_guide_, guide_mapping_);
             const iptv::http::ListSink sink{
                 [](void *reader, const char *data, std::size_t bytes)
                 { return static_cast<XmltvReader *>(reader)->feed({data, bytes}); }, &reader};
@@ -158,7 +174,10 @@ void Model::run_guide()
         }
         guide_ok_ = all;
         if (guide_ok_)
+        {
+            pending_guide_.source_id = guide_expected_source_;
             guide_saved_ = pending_guide_.save(guide_file_);
+        }
         platform::network_shutdown();
     }
     guide_done_.store(true, std::memory_order_release);
@@ -197,5 +216,88 @@ bool Model::play_programme(unsigned index, const Programme &programme)
     play_request_.record_channel_result = false;
     play_requested_ = true;
     return true;
+}
+} // namespace ptv
+
+namespace ptv
+{
+void Model::reload_guide_configuration()
+{
+    guide_ = {};
+    (void)guide_.load(guide_path(), guide_source_id());
+    next_guide_check_ = 0;
+    rebuild_visible();
+    refresh_guide();
+}
+bool Model::set_guide_url(std::int64_t source, std::string_view url)
+{
+    if (!require_parent() || !saved_source(source) || refreshing())
+        return false;
+    if (source == selected_source_id_)
+        stop_guide();
+    if (!library_.set_guide_url(source, url))
+        return false;
+    if (source == selected_source_id_)
+        reload_guide_configuration();
+    ++revision_;
+    return true;
+}
+std::string Model::guide_match(std::string_view channel) const
+{
+    const auto mapping = library_.guide_mapping(selected_source_id_);
+    const auto found = mapping.find(std::string(channel));
+    return found == mapping.end() ? std::string() : found->second;
+}
+bool Model::set_guide_mapping(std::string_view channel, std::string_view guide_id)
+{
+    const auto index = catalog_.Find(channel);
+    if (!require_parent() || refreshing() || index == iptv::Catalog::npos ||
+        catalog_[index].media_kind != iptv::MediaKind::live || position_of(channel) < 0)
+        return false;
+    stop_guide();
+    if (!library_.set_guide_mapping(selected_source_id_, channel, guide_id))
+        return false;
+    reload_guide_configuration();
+    ++revision_;
+    return true;
+}
+void Model::edit_guide_url(std::int64_t source)
+{
+    if (!require_parent() || !keyboard_ready_ || refreshing() || !saved_source(source))
+        return;
+    guide_edit_source_ = source;
+    const auto current = library_.guide_url(source);
+    iptv_ime_request_prompt(current.c_str(), tr("XMLTV URL (empty uses provider guide)"),
+                            "https://example.com/guide.xml", IPTV_IME_BUFFER_CHARACTERS,
+                            &Model::on_guide_url, this);
+}
+void Model::on_guide_url(const char *text, void *self)
+{
+    if (!self || !text)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    if (!model.set_guide_url(model.guide_edit_source_, text))
+        model.notify(Level::error, tr("The guide address could not be saved"),
+                     tr("Use an HTTP or HTTPS XMLTV address, or leave it empty."));
+}
+void Model::edit_guide_mapping(unsigned channel)
+{
+    if (!require_parent() || !keyboard_ready_ || channel >= channel_count() ||
+        position_of(catalog_[channel].id) < 0)
+        return;
+    guide_edit_source_ = selected_source_id_;
+    guide_edit_channel_ = catalog_[channel].id;
+    const auto current = guide_match(guide_edit_channel_);
+    iptv_ime_request_prompt(current.c_str(), tr("XMLTV channel ID (empty matches automatically)"),
+                            "channel.id", 256, &Model::on_guide_mapping, this);
+}
+void Model::on_guide_mapping(const char *text, void *self)
+{
+    if (!self || !text)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    if (model.guide_edit_source_ != model.selected_source_id_ ||
+        !model.set_guide_mapping(model.guide_edit_channel_, text))
+        model.notify(Level::error, tr("The guide match could not be saved"));
 }
 } // namespace ptv
