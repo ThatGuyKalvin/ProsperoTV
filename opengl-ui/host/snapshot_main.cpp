@@ -494,6 +494,8 @@ int main(int argc, char **argv)
     g_model = &model;
     model.open();
     auto appearance = ptv::load_settings(data_dir);
+    if (const char *value=std::getenv("TV_LANGUAGE_OVERRIDE")) appearance.interface_language=std::atoi(value);
+    ptv::set_interface_language(static_cast<unsigned>(appearance.interface_language));
     if (const char *theme = std::getenv("TV_THEME"))
         appearance.theme = std::clamp(std::atoi(theme), 0, 2);
     appearance.larger_text = std::getenv("TV_LARGER_TEXT") != nullptr;

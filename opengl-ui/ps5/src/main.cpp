@@ -1270,6 +1270,7 @@ int main()
     if (recovered_crash)
         owned_model->resume_last(false);
     ptv::Settings settings = ptv::load_settings(tv::storage::config_dir());
+    ptv::set_interface_language(static_cast<unsigned>(settings.interface_language));
     // The diagnostic log: the viewer's switch in Settings, a debug build, or
     // (test title) a dev/diagnostics.txt left beside the app.
     tv::diag::start(tv::storage::logs_dir());
@@ -1372,6 +1373,7 @@ int main()
             owned_model->sleep_timer = sleep_timer;
             owned_model->resume_last(false);
             settings = ptv::load_settings(tv::storage::config_dir());
+            ptv::set_interface_language(static_cast<unsigned>(settings.interface_language));
             ptv::diag::set_enabled(settings.diagnostics);
             iptv_native_set_volume(static_cast<unsigned>(settings.volume));
             iptv_native_set_audio_normalization(settings.audio_normalization);

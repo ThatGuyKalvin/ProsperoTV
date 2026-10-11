@@ -8,6 +8,9 @@ namespace ptv
 // Call at startup before constructing screens. Unknown languages use English.
 void set_console_language(int language);
 const char *interface_language();
+// 0 follows the console; 1..9 select en/es/fr/de/it/pt/nl/ar/he.
+void set_interface_language(unsigned choice);
+bool interface_rtl();
 // Only presentation text belongs here, never source IDs or provider metadata.
 const char *tr(const char *english);
 } // namespace ptv

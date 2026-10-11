@@ -21,6 +21,8 @@
 #include "stb/stb_truetype.h"
 
 #include "gfx/font_format.hpp"
+#include <hb.h>
+#include <hb-subset.h>
 
 #include <algorithm>
 #include <cmath>
@@ -131,12 +133,14 @@ unsigned char *make_field(const stbtt_fontinfo &font, float scale, int codepoint
     int x1 = 0;
     int y1 = 0;
     const float large = scale * kSuper;
-    stbtt_GetCodepointBitmapBox(&font, codepoint, large, large, &x0, &y0, &x1, &y1);
+    stbtt_GetGlyphBitmapBox(&font, codepoint, large, large, &x0, &y0, &x1, &y1);
     if (x1 <= x0 || y1 <= y0)
         return nullptr;
     const int pad = range * kSuper;
-    const auto down = [](int value) { return static_cast<int>(std::floor(static_cast<float>(value) / kSuper)); };
-    const auto up = [](int value) { return static_cast<int>(std::ceil(static_cast<float>(value) / kSuper)); };
+    const auto down = [](int value)
+    { return static_cast<int>(std::floor(static_cast<float>(value) / kSuper)); };
+    const auto up = [](int value)
+    { return static_cast<int>(std::ceil(static_cast<float>(value) / kSuper)); };
     const int left = down(x0 - pad);
     const int top = down(y0 - pad);
     const int w = up(x1 + pad) - left;
@@ -144,10 +148,10 @@ unsigned char *make_field(const stbtt_fontinfo &font, float scale, int codepoint
     const int large_w = w * kSuper;
     const int large_h = h * kSuper;
     std::vector<unsigned char> picture(static_cast<std::size_t>(large_w) * large_h, 0);
-    stbtt_MakeCodepointBitmap(&font,
-                              &picture[static_cast<std::size_t>(y0 - top * kSuper) * large_w +
-                                       (x0 - left * kSuper)],
-                              x1 - x0, y1 - y0, large_w, large, large, codepoint);
+    stbtt_MakeGlyphBitmap(
+        &font,
+        &picture[static_cast<std::size_t>(y0 - top * kSuper) * large_w + (x0 - left * kSuper)],
+        x1 - x0, y1 - y0, large_w, large, large, codepoint);
     for (unsigned char &value : picture)
         value = value >= 128 ? 1 : 0;
     const std::vector<float> to_inside = distance_to(picture, large_w, large_h, true);
@@ -168,7 +172,8 @@ unsigned char *make_field(const stbtt_fontinfo &font, float scale, int codepoint
                     const std::size_t at =
                         static_cast<std::size_t>(y * kSuper + kSuper / 2 + dy) * large_w +
                         (x * kSuper + kSuper / 2 + dx);
-                    signed_distance += picture[at] != 0 ? to_outside[at] - 0.5f : 0.5f - to_inside[at];
+                    signed_distance +=
+                        picture[at] != 0 ? to_outside[at] - 0.5f : 0.5f - to_inside[at];
                 }
             }
             signed_distance /= 4.0f * kSuper;
@@ -212,9 +217,10 @@ bool read_ranges(const char *path, std::set<int> *codepoints)
 
 int main(int argc, char **argv)
 {
-    if (argc != 7)
+    if (argc != 7 && argc != 8)
     {
-        std::fprintf(stderr, "usage: %s font out.huifont pixel_size sdf_range atlas_width ranges.txt\n",
+        std::fprintf(stderr,
+                     "usage: %s font out.huifont pixel_size sdf_range atlas_width ranges.txt\n",
                      argv[0]);
         return 2;
     }
@@ -222,7 +228,7 @@ int main(int argc, char **argv)
     const int range = std::atoi(argv[4]);
     const int atlas_width = std::atoi(argv[5]);
     std::set<int> wanted;
-    if (!read_ranges(argv[6], &wanted) || wanted.empty())
+    if (argc == 7 && (!read_ranges(argv[6], &wanted) || wanted.empty()))
     {
         std::fprintf(stderr, "cannot read code points from %s\n", argv[6]);
         return 1;
@@ -242,23 +248,70 @@ int main(int argc, char **argv)
 
     std::vector<Baked> glyphs;
     std::size_t missing = 0;
-    for (const int codepoint : wanted)
+    std::vector<std::vector<unsigned char>> faces;
+    if (argc == 8)
     {
-        if (codepoint != ' ' && stbtt_FindGlyphIndex(&font, codepoint) == 0)
+        faces.push_back(data);
+        hb_blob_t *blob = hb_blob_create_from_file_or_fail(argv[7]);
+        if (!blob)
+            return 1;
+        hb_face_t *face = hb_face_create(blob, 0);
+        hb_subset_input_t *subset = hb_subset_input_create_or_fail();
+        if (!subset)
+            return 1;
+        hb_set_t *unicode = hb_subset_input_unicode_set(subset);
+        hb_set_add_range(unicode, 0x590, 0x8ff);
+        hb_set_add_range(unicode, 0xfb1d, 0xfeff);
+        hb_set_add_range(unicode, 0x2000, 0x206f);
+        hb_face_t *small = hb_subset_or_fail(face, subset);
+        if (!small)
+            return 1;
+        hb_blob_t *result = hb_face_reference_blob(small);
+        unsigned count = 0;
+        const char *bytes = hb_blob_get_data(result, &count);
+        faces.emplace_back(bytes, bytes + count);
+        hb_blob_destroy(result);
+        hb_face_destroy(small);
+        hb_subset_input_destroy(subset);
+        hb_face_destroy(face);
+        hb_blob_destroy(blob);
+        for (unsigned face_index = 0; face_index < faces.size(); ++face_index)
         {
-            ++missing;
-            continue;
+            stbtt_fontinfo item{};
+            if (!stbtt_InitFont(&item, faces[face_index].data(), 0) || item.numGlyphs > 65535)
+                return 1;
+            const float factor = stbtt_ScaleForMappingEmToPixels(&item, pixel_size);
+            for (int id = 0; id < item.numGlyphs; ++id)
+            {
+                Baked glyph;
+                glyph.codepoint = static_cast<int>((face_index << 16) | static_cast<unsigned>(id));
+                int advance = 0, bearing = 0;
+                stbtt_GetGlyphHMetrics(&item, id, &advance, &bearing);
+                glyph.advance = static_cast<float>(advance) * factor;
+                glyph.bitmap = make_field(item, factor, id, range, &glyph.w, &glyph.h, &glyph.xoff,
+                                          &glyph.yoff);
+                glyphs.push_back(glyph);
+            }
         }
-        Baked glyph;
-        glyph.codepoint = codepoint;
-        int advance = 0;
-        int bearing = 0;
-        stbtt_GetCodepointHMetrics(&font, codepoint, &advance, &bearing);
-        glyph.advance = static_cast<float>(advance) * scale;
-        glyph.bitmap =
-            make_field(font, scale, codepoint, range, &glyph.w, &glyph.h, &glyph.xoff, &glyph.yoff);
-        glyphs.push_back(glyph);
     }
+    else
+        for (const int codepoint : wanted)
+        {
+            const int id = stbtt_FindGlyphIndex(&font, codepoint);
+            if (codepoint != ' ' && id == 0)
+            {
+                ++missing;
+                continue;
+            }
+            Baked glyph;
+            glyph.codepoint = codepoint;
+            int advance = 0, bearing = 0;
+            stbtt_GetGlyphHMetrics(&font, id, &advance, &bearing);
+            glyph.advance = static_cast<float>(advance) * scale;
+            glyph.bitmap =
+                make_field(font, scale, id, range, &glyph.w, &glyph.h, &glyph.xoff, &glyph.yoff);
+            glyphs.push_back(glyph);
+        }
 
     // Shelf packing, tallest first, one pixel of spacing; as many shelves as it takes.
     std::vector<Baked *> order;
@@ -292,7 +345,8 @@ int main(int argc, char **argv)
     const int atlas_height = pen_y + shelf + 1;
     if (atlas_height > 16384)
     {
-        std::fprintf(stderr, "the atlas would be %d rows: more than a texture holds\n", atlas_height);
+        std::fprintf(stderr, "the atlas would be %d rows: more than a texture holds\n",
+                     atlas_height);
         return 1;
     }
     std::vector<unsigned char> atlas(static_cast<std::size_t>(atlas_width) * atlas_height, 0);
@@ -307,7 +361,7 @@ int main(int argc, char **argv)
     stbtt_GetFontVMetrics(&font, &ascent, &descent, &line_gap);
     ff::Header header{};
     header.magic = ff::kMagic;
-    header.version = ff::kVersion;
+    header.version = argc == 8 ? 2 : ff::kVersion;
     header.atlas_width = static_cast<std::uint16_t>(atlas_width);
     header.atlas_height = static_cast<std::uint16_t>(atlas_height);
     header.pixel_size = pixel_size;
@@ -334,6 +388,16 @@ int main(int argc, char **argv)
         put(out, record);
     }
     out.insert(out.end(), atlas.begin(), atlas.end());
+    if (argc == 8)
+    {
+        put(out, static_cast<std::uint32_t>(faces.size()));
+        put(out, pixel_size);
+        for (const auto &face : faces)
+        {
+            put(out, static_cast<std::uint32_t>(face.size()));
+            out.insert(out.end(), face.begin(), face.end());
+        }
+    }
 
     std::FILE *file = std::fopen(argv[2], "wb");
     if (file == nullptr || std::fwrite(out.data(), 1, out.size(), file) != out.size())

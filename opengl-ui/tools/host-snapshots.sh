@@ -15,6 +15,7 @@ tv=$(cd -- "${TV:-$root/..}" && pwd)
 cxx=$(command -v "${HOST_CXX:-clang++}")
 cache=$(command -v ccache || true)
 expat=$(bash "$tv/tools/setup-guide-dependencies.sh" host | tail -1)
+text=$(bash "$root/tools/setup-text-dependencies.sh")
 # HOST_SANITIZE=1 runs the walk under AddressSanitizer and UBSan.
 sanitize=""
 build="$root/build/host"
@@ -24,7 +25,7 @@ if [[ ${HOST_SANITIZE:-0} == 1 ]]; then
 fi
 mkdir -p "$build/obj"
 
-includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen -I$expat/include"
+includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen -I$expat/include -I$text/include/harfbuzz -I$text/include/fribidi"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O2 -Wall -Wextra $sanitize \$flags -DGL_GLEXT_PROTOTYPES=1 $includes -MD -MF \$out.d -c \$in -o \$out"
@@ -32,7 +33,7 @@ includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -
     echo "  deps = gcc"
     echo "  description = CXX \$in"
     echo "rule link"
-    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a -lpng -ljpeg -lz -lEGL -lGL -lsqlite3 -lssl -lcrypto -lpthread -lm -o \$out"
+    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a $text/lib/libharfbuzz.a $text/lib/libfribidi.a -lpng -ljpeg -lz -lEGL -lGL -lsqlite3 -lssl -lcrypto -lpthread -lm -o \$out"
     echo "  description = LINK \$out"
     objects=()
     edge() {

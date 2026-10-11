@@ -20,3 +20,7 @@ tooling/prospero-clang18 text eol=lf
 *.at9 binary
 *.prx binary
 *.bin binary
+
+# Patches and source lists are consumed by POSIX build tools.
+*.patch text eol=lf
+opengl-ui/tools/kit-sources.txt text eol=lf
