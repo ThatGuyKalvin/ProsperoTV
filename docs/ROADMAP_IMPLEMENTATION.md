@@ -211,8 +211,8 @@ header requirements. It limits request size and page output, validates source id
 paging and tuning requests, and rechecks parental/hidden/failed-channel policy before returning
 channel data or playing. During playback a read-only view borrows the stopped Model's catalogue
 and guide and copies visibility marks, order and renamed labels once. Menu requests borrow
-those existing arrays synchronously, so a small page does not copy or recheck the entire source. The synchronous polling
-handler records a selection without mutating the Model. Idle player polling honors the normal
+those existing arrays synchronously, so a small page does not copy or recheck the entire source.
+The synchronous polling handler records a selection without mutating the Model. Idle player polling honors the normal
 stop-for-switch result; the handler detaches immediately after playback, before its view can
 expire. The Model then rechecks source and content policy before queuing the channel. Tapping
 the current channel does not restart it. A phone switch saves VOD progress without advancing
@@ -237,8 +237,9 @@ Changing quality cleanly closes the player, preserves the full authenticated req
 position, pause state, speed and audio delay, then re-fetches the original master. Audio and
 subtitle selections are matched by language/title/accessibility role, with stable-ID fallback
 only when metadata is absent. Missing audio leaves the replacement default playing with a notice;
-missing subtitles stay off with a notice. An explicit Audio Off choice remains off. Live playback restarts at the live edge and discards its replay buffer. Phone channel
-selection takes priority. Quality changes save progress without marking completion or advancing
+missing subtitles stay off with a notice. An explicit Audio Off choice remains off. Live playback
+restarts at the live edge and discards its replay buffer. Phone channel selection takes priority.
+Quality changes save progress without marking completion or advancing
 episodes.
 
 The fresh master must contain a compatible descriptor, or a compatible fallback no larger in
