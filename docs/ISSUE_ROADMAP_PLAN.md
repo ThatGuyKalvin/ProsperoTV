@@ -41,3 +41,30 @@ case; another running title always takes priority.
 - 2026-10-11 | Sources / phone | 636a68e | host/PS5 build | partial-pass: 225 sanitized UI tests, full lint/static analysis (136 attributed files); arbitrary source headers and guide origin isolation | results/integration/console-77 | no-run
 - 2026-10-11 | Home / phone | 7b24316 | host/PS5 build | partial-pass: 26 focused sanitized tests; phone browsing during playback, current Home URLs and large-list phone performance | results/integration/console-78 | .30 occupied by PPSA99008; no deployment
 - 2026-10-11 | Home / quality | a48a8a5 | host/PS5 build | partial-pass: 233 sanitized UI tests; indexed Home parent policy and manual HLS quality switching | results/integration/console-79 | .30 occupied by PPSA99008; native acceptance pending
+
+## Combined quality, household and language validation
+
+Candidate `7e4475d` integrates source checking, crash-report recovery, viewing
+limits, encrypted console sharing, manual and reduce-only automatic HLS quality,
+Arabic/Hebrew shaping and layout, and guide/recording translations.
+
+- All 276 combined interface tests pass under ASan/UBSan (117.4 seconds).
+  The 120,000-channel app case takes 11.6 seconds after removing repeated
+  category-tab geometry calculation. The shaping implementation separately
+  passes 173 checks; Arabic/Hebrew host renders and an independent bounds/bidi
+  review found no outstanding blocker.
+- The integrated guide/localization checks pass all 22 focused tests, and the
+  Auto-quality/quality-reopen checks pass all 10. Native-player static analysis
+  and formatting/assets checks pass. The additive slow-network fixture verifies
+  that high-quality segments exceed its bandwidth while low-quality segments fit.
+- Application-only PS5 build case 86 passes: 41,815,324 bytes, SHA-256
+  `2f161d937e5513523dc5a62c5a26c9b7baa5bb11ad8cc19cfe553952051ed4dd`.
+  Case 85 exposed an assembly omission for C++ headers; the shared assembly step
+  now copies both `.h` and `.hpp` files, and the clean rebuild includes Auto.
+
+Evidence is in `results/integration/console-86` and the ignored integration test
+logs. Console `.30` still reports `PPSA99008` running, so this candidate has not
+been installed or run there. Runtime acceptance remains pending, including actual
+quality reduction and sharing between consoles. Surround output still lacks a
+verified PS5 output-route contract, and spoken focus has no verified SDK API;
+neither is claimed implemented. Roadmap checkboxes remain open until acceptance.
