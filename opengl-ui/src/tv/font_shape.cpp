@@ -77,7 +77,9 @@ class FontShaper
             if (entry.text == text && entry.tracking == tracking)
                 return entry.shaped;
         auto shaped = uncached(text, tracking);
-        while (!cache_.empty() && (cache_.size() >= 64 || bytes_ + text.size() > 65536 ||
+        // Keep the 200 category chips and visible tile text together; 64 entries
+        // evicted the category row on every frame. Byte and glyph caps still apply.
+        while (!cache_.empty() && (cache_.size() >= 512 || bytes_ + text.size() > 65536 ||
                                    glyphs_ + shaped.glyphs.size() > 32768))
         {
             bytes_ -= cache_.front().text.size();

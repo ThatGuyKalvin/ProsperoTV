@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "gfx/font.hpp"
 #include "gfx/draw_list.hpp"
+#include <hb.h>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -11,6 +13,14 @@
 #include <fstream>
 #include <iterator>
 #include <thread>
+static std::atomic<unsigned> shape_calls{0};
+extern "C" void __real_hb_shape(hb_font_t *, hb_buffer_t *, const hb_feature_t *, unsigned);
+extern "C" void __wrap_hb_shape(hb_font_t *font, hb_buffer_t *buffer, const hb_feature_t *features,
+                                unsigned count)
+{
+    ++shape_calls;
+    __real_hb_shape(font, buffer, features, count);
+}
 using hui::gfx::Align;
 using hui::gfx::Font;
 using hui::gfx::GlyphQuad;
@@ -129,6 +139,22 @@ int main(int argc, char **argv)
                 "numeric URL fingerprint glyph order remains LTR");
         require(std::memcmp(a.extra, b.extra, sizeof(a.extra)) == 0, "glyph UVs never mirror");
     }
+    // The public catalogue's category row must stay warm while channel tiles change.
+    std::vector<std::string> categories;
+    std::vector<float> widths;
+    for (unsigned i = 0; i < 200; ++i)
+    {
+        categories.push_back("Entertainment;News;Sports " + std::to_string(i));
+        widths.push_back(font.measure(categories.back(), 22));
+    }
+    for (unsigned i = 0; i < 40; ++i)
+        (void)glyphs(font, "Channel " + std::to_string(i));
+    const auto calls = shape_calls.load();
+    for (unsigned frame = 0; frame < 3; ++frame)
+        for (unsigned i = 0; i < categories.size(); ++i)
+            require(font.measure(categories[i], 22) == widths[i], "cached category width");
+    require(shape_calls.load() == calls, "category row must not reshape on each frame");
+
     const auto start = std::chrono::steady_clock::now();
     std::thread worker(
         [&]

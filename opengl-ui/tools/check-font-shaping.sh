@@ -16,5 +16,5 @@ cxx=${HOST_CXX:-clang++}
 "$cxx" -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I"$kit/src" -I"$text/include/harfbuzz" -I"$text/include/fribidi" \
     "$root/tests/font_shape_check.cc" "$root/src/tv/font_shape.cpp" "$kit/src/gfx/font.cpp" "$kit/src/gfx/draw_list.cpp" "$kit/src/gfx/triangulate.cpp" \
-    "$text/lib/libharfbuzz.a" "$text/lib/libfribidi.a" -lpthread -o "$build/font_shape_check"
+    "$text/lib/libharfbuzz.a" "$text/lib/libfribidi.a" -lpthread -Wl,--wrap=hb_shape -o "$build/font_shape_check"
 ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 "$build/font_shape_check" "$build/inter-shaped.huifont"
