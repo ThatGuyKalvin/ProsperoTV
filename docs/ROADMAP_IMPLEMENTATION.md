@@ -351,3 +351,10 @@ source-check tests. The additional checker/viewing-allowance integration regress
 passes in the root tree and proves checks preserve the parental file byte for byte,
 including after quota exhaustion. The latest console preflight found `PPSA99008_000`
 running, so this candidate has not been installed or exercised on the console.
+
+The subsequent sharing integration passes all 262 UI sanitizer tests on a stable
+source tree. The complete static-analysis run identified a quality-candidate count
+initialization path; resetting the builder's count explicitly resolves it and the
+affected translation unit passes its rerun. Formatting, metadata and asset lint
+passes all 136 attributed files. Encrypted sharing and its SDK build evidence are
+described in [CONSOLE_SHARING.md](CONSOLE_SHARING.md).
