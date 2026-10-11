@@ -487,13 +487,15 @@ struct XtreamStreamsParser::State
         std::string extension;
         std::string direct_source;
         std::string stream_url;
-        std::string archive, archive_days, adult;
+        std::string archive, archive_days, adult, number;
         JsonReader entry(element);
         if (!ReadObject(&entry,
                         [&](const std::string &key, JsonReader *value)
                         {
                             if (key == "is_adult")
                                 return value->StringOrScalar(&adult, 8);
+                            if (key == "num")
+                                return value->StringOrScalar(&number, 64u);
                             if (key == "stream_id")
                                 return value->StringOrScalar(&stream_id, 64u);
                             if (key == "tv_archive")
@@ -541,6 +543,8 @@ struct XtreamStreamsParser::State
         channel.source_id = source_id;
         channel.name = name;
         channel.tvg_name = name;
+        if (ValidChannelNumber(number))
+            channel.channel_number = number;
         channel.tvg_id = epg_id;
         channel.group_title = CategoryName(category_names, category_id);
         const auto adult_group = category_adult.find(category_id);

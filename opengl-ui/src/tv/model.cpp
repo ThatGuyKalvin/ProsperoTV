@@ -452,8 +452,8 @@ void Model::load_cache()
         iptv::LoadCatalog(cache_path(active_source_), &cached, {}, &report);
     catalog_loaded_ = status == iptv::StoreStatus::ok && report.catalog_version >= 5 &&
                       cached.source_id == wanted && !cached.empty();
-    playlist_cache_needs_refresh_ = catalog_loaded_ && active_source_ == iptv::SourceKind::Custom &&
-                                    report.catalog_version < 6;
+    playlist_cache_needs_refresh_ =
+        catalog_loaded_ && active_source_ == iptv::SourceKind::Custom && report.catalog_version < 6;
     catalog_ = catalog_loaded_ ? std::move(cached) : iptv::Catalog{};
     saved_unix_ = catalog_loaded_ ? report.saved_unix : 0;
     if (catalog_loaded_)
@@ -632,6 +632,30 @@ void Model::rebuild_visible()
 int Model::letter_at(unsigned position) const
 {
     return position < visible_count_ ? index_.letters[visible_[position]] : 0;
+}
+
+std::string Model::number_label(unsigned catalog_index) const
+{
+    if (catalog_index >= channel_count())
+        return {};
+    const auto value = channel(catalog_index).channel_number;
+    return iptv::ValidChannelNumber(value) ? std::string(value)
+                                           : std::to_string(number_of(catalog_index));
+}
+
+int Model::position_for_number(std::string_view number) const
+{
+    if (!iptv::ValidChannelNumber(number))
+        return -1;
+    int found = -1;
+    for (unsigned position = 0; position < visible_count(); ++position)
+        if (number_label(visible(position)) == number)
+        {
+            if (found >= 0)
+                return -2;
+            found = static_cast<int>(position);
+        }
+    return found;
 }
 
 int Model::position_of(std::string_view channel_id) const
@@ -1303,7 +1327,8 @@ void Model::run_refresh()
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
         const iptv::http::RequestControl control{
-            [](void *context) {
+            [](void *context)
+            {
                 return static_cast<const Model *>(context)->stop_requested_.load(
                     std::memory_order_acquire);
             },

@@ -12,7 +12,7 @@ class LibrarySheet
 {
   public:
     explicit LibrarySheet(Shared &shared);
-    void open(bool folders, std::string channel, ui::Feedback &feedback);
+    void open(bool folders, std::string channel, ui::Feedback &feedback, bool allow_play = true);
     bool is_open() const
     {
         return open_;
@@ -24,6 +24,12 @@ class LibrarySheet
 
   private:
     void sync();
+    void handle_number_pad(const InputFrame &input, ui::Feedback &feedback);
+    void draw_number_pad(ui::Canvas &canvas) const;
+    bool number_pad_ = false;
+    bool allow_play_ = true;
+    int number_key_ = 0;
+    std::string number_;
     static void named(const char *text, void *context);
     Shared &shared_;
     ui::ListView list_;

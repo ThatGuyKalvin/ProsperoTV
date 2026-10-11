@@ -520,8 +520,8 @@ void PlaybackOsd::paint()
             if (begin + row == focus_)
                 for (unsigned y = top; y < top + 66; ++y)
                     std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 728, 66);
-            line((channel.id == current_id_ ? "> " : "") + std::to_string(model_.number_of(index)) +
-                     "  " + display_name(channel),
+            line((channel.id == current_id_ ? "> " : "") + model_.number_label(index) + "  " +
+                     display_name(channel),
                  28, top + 43, 28, 700);
         }
         line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 700);
@@ -551,11 +551,10 @@ void PlaybackOsd::paint()
             line(tr("L2 Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live"), 30, 231,
                  24, 1700);
         }
-        line(live_
-                 ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
-                      "Info · "
-                      "Circle Back")
-                 : tr("Options Tracks · Triangle Info · Circle Back"),
+        line(live_ ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
+                        "Info · "
+                        "Circle Back")
+                   : tr("Options Tracks · Triangle Info · Circle Back"),
              30, history_.available ? 281 : 204, 24, 1700);
     }
     dirty_ = false;

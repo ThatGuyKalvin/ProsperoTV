@@ -221,10 +221,9 @@ bool PortalClient::sign_in()
                   {"not_valid_token", "0"}}))
         return false;
     std::string status;
-    if (!js_object(reply,
-                   [&](const std::string &key, JsonReader *value) {
-                       return key == "status" ? value->StringOrScalar(&status) : value->SkipValue();
-                   }) ||
+    if (!js_object(
+            reply, [&](const std::string &key, JsonReader *value)
+            { return key == "status" ? value->StringOrScalar(&status) : value->SkipValue(); }) ||
         (!status.empty() && status != "0"))
     {
         error_ =
@@ -309,6 +308,8 @@ bool PortalClient::load(iptv::Catalog *catalog, iptv::ParseReport *report,
                                 return value->StringOrScalar(&adult, 8);
                             if (key == "id")
                                 return value->StringOrScalar(&id, 128);
+                            if (key == "number")
+                                return value->StringOrScalar(&channel.channel_number, 64);
                             if (key == "name")
                                 return value->StringOrScalar(&channel.name);
                             if (key == "cmd")
@@ -323,6 +324,8 @@ bool PortalClient::load(iptv::Catalog *catalog, iptv::ParseReport *report,
                         }) ||
             !item.Finished())
             return false;
+        if (!iptv::ValidChannelNumber(channel.channel_number))
+            channel.channel_number.clear();
         if (id.empty() || id == "null" || channel.name.empty() || channel.portal_command.empty() ||
             channel.portal_command == "null")
         {

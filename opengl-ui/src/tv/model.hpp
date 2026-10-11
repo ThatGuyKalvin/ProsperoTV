@@ -266,6 +266,9 @@ class Model
     {
         return catalog_index < index_.ranks.size() ? index_.ranks[catalog_index] + 1u : 0u;
     }
+    std::string number_label(unsigned catalog_index) const;
+    // Only the visible list can be reached. -1 means missing; -2 means ambiguous.
+    int position_for_number(std::string_view number) const;
     // The scripts the list's names and groups are written in beyond the
     // European ones: the faces for them are large, and loaded only when asked for.
     bool uses_east_asian() const

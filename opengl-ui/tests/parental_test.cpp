@@ -209,7 +209,7 @@ TEST_F(ParentalTest, AdultMetadataMergesAndSurvivesCatalogCopiesAndCache)
     ASSERT_EQ(iptv::LoadCatalog(dir + "/cache.sqlite3", &loaded, {}, &report),
               iptv::StoreStatus::ok);
     EXPECT_TRUE(loaded[0].adult);
-    EXPECT_EQ(report.catalog_version, 6u);
+    EXPECT_EQ(report.catalog_version, 7u);
     std::vector<iptv::XtreamCategory> categories;
     ASSERT_EQ(
         iptv::ParseXtreamCategories(

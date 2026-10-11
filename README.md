@@ -206,6 +206,7 @@ at 3840×2160. Codec and renderer details are documented in
 | Triangle on a configurable source | Edit the custom M3U URL or Xtream account |
 | Square in Sources | Cycle daily, weekly and manual refresh |
 | Touchpad in Live TV / Favorites | Provider categories / favorite folders |
+| R1 inside categories / folders | Channel number pad: enter a number, then Watch |
 | R3 in the channel browser | Open the programme guide |
 | L3 in Live TV / Favorites | Open Multiview; Square chooses a channel, Triangle switches two/four tiles, R3 mutes, Cross opens full screen |
 | Options | Refresh the selected catalog source |
@@ -508,3 +509,10 @@ Copyright © 2026 BlackBearReloaded. Licensed under GPL-3.0-or-later; see [LICEN
 
 This project was developed with AI assistance from OpenAI and/or Anthropic tools.
 <!-- bbr-footer:end -->
+
+Provider channel numbers (`tvg-chno` / `channel-number` in M3U, `num` in Xtream,
+`number` in MAC portals) appear in the channel hero and playback channel list.
+Numbers such as `7.2` and leading zeros are preserved. Channels without a number
+keep their alphabetical position. The number pad searches only the current
+visible list; when numbers repeat, narrow the list before choosing one. Existing
+cached lists acquire provider numbers on their next refresh.

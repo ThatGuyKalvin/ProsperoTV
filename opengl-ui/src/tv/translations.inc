@@ -521,3 +521,15 @@
 {"Correct to 4:3", {"Corregir a 4:3", "Corriger en 4:3", "Auf 4:3 korrigieren", "Correggi a 4:3", "Corrigir para 4:3", "Corrigeren naar 4:3"}},
 {"Correct to 16:9", {"Corregir a 16:9", "Corriger en 16:9", "Auf 16:9 korrigieren", "Correggi a 16:9", "Corrigir para 16:9", "Corrigeren naar 16:9"}},
 {"L1/R1 Audio / Subtitles / Picture", {"L1/R1 Audio / Subtítulos / Imagen", "L1/R1 Audio / Sous-titres / Image", "L1/R1 Audio / Untertitel / Bild", "L1/R1 Audio / Sottotitoli / Immagine", "L1/R1 Áudio / Legendas / Imagem", "L1/R1 Audio / Ondertitels / Beeld"}},
+
+{"Channel number", {"Número de canal", "Numéro de chaîne", "Kanalnummer", "Numero canale", "Número do canal", "Kanaalnummer"}},
+{"Watch a channel in the current list", {"Ver un canal de la lista actual", "Regarder une chaîne de la liste actuelle", "Kanal aus der aktuellen Liste ansehen", "Guarda un canale della lista attuale", "Assistir a um canal da lista atual", "Kijk naar een kanaal in de huidige lijst"}},
+{"R1: Channel number", {"R1: Número de canal", "R1 : Numéro de chaîne", "R1: Kanalnummer", "R1: Numero canale", "R1: Número do canal", "R1: Kanaalnummer"}},
+{"Several channels use this number", {"Varios canales usan este número", "Plusieurs chaînes utilisent ce numéro", "Mehrere Kanäle verwenden diese Nummer", "Più canali usano questo numero", "Vários canais usam este número", "Meerdere kanalen gebruiken dit nummer"}},
+{"No channel with this number", {"No hay ningún canal con este número", "Aucune chaîne avec ce numéro", "Kein Kanal mit dieser Nummer", "Nessun canale con questo numero", "Nenhum canal com este número", "Geen kanaal met dit nummer"}},
+{"Choose a narrower list if numbers repeat.", {"Elige una lista más específica si se repiten los números.", "Choisissez une liste plus précise si les numéros se répètent.", "Bei doppelten Nummern eine kleinere Liste wählen.", "Scegli una lista più specifica se i numeri si ripetono.", "Escolha uma lista mais específica se os números se repetirem.", "Kies een specifiekere lijst als nummers dubbel voorkomen."}},
+{"Cross: Enter   Square: Delete   Circle: Back", {"Cruz: Introducir   Cuadrado: Borrar   Círculo: Atrás", "Croix : Saisir   Carré : Effacer   Cercle : Retour", "Kreuz: Eingabe   Quadrat: Löschen   Kreis: Zurück", "Croce: Inserisci   Quadrato: Elimina   Cerchio: Indietro", "Cruz: Inserir   Quadrado: Apagar   Círculo: Voltar", "Kruis: Invoeren   Vierkant: Wissen   Cirkel: Terug"}},
+
+{"Clear", {"Limpiar", "Vider", "Leeren", "Svuota", "Limpar", "Wissen"}},
+
+{"Delete", {"Borrar", "Effacer", "Löschen", "Elimina", "Apagar", "Verwijder"}},
