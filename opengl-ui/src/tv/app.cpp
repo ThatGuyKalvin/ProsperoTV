@@ -471,6 +471,8 @@ void App::show_tab(int index, bool glide)
 
 void App::tab_changed()
 {
+    if (tabs_.active() != kVod)
+        shared_.model.set_vod_overview(false);
     shared_.model.view.tab = tabs_.active();
     diag::event("tab %s", kTabNames[std::clamp(tabs_.active(), 0, kTabCount - 1)]);
     page_age_ = 0.0f;

@@ -91,6 +91,7 @@ void Model::select_source_record(const SavedSource &source)
 {
     cancel_source_check("Check stopped for source change");
     clear_home_playback();
+    set_vod_overview(false);
     end_search();
     const bool changed = selected_source_id_ != source.id;
     selected_source_id_ = source.id;

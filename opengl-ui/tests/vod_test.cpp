@@ -533,6 +533,100 @@ TEST_F(VodTest, LoadsBomPrefixedListsAndIndexedSeasonArrays)
     EXPECT_TRUE(catalog.empty());
 }
 
+TEST_F(VodTest, OverviewCountsTitlesAndDisablesOnlyConfirmedEmptyLists)
+{
+    response("get_series", "[]");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    const hui::ui::Fonts fonts{};
+    ptv::Shared shared(model, fonts, {});
+    ptv::VodScreen screen(shared);
+    hui::ui::Feedback feedback;
+    screen.enter();
+    EXPECT_FALSE(model.vod_count(ptv::VodKind::movies).has_value());
+    EXPECT_FALSE(model.vod_count(ptv::VodKind::series).has_value());
+    for (int i = 0; i < 500 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading());
+    screen.update();
+    EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 2u);
+    EXPECT_EQ(model.vod_count(ptv::VodKind::series), 0u);
+    hui::InputFrame input;
+    input.nav = hui::Direction::down;
+    screen.handle(input, feedback);
+    input.nav = hui::Direction::none;
+    input.pressed = hui::action_bit(hui::Action::confirm);
+    screen.handle(input, feedback);
+    EXPECT_EQ(model.view.vod_kind, -1);
+    ASSERT_TRUE(model.hide_category("US", true));
+    screen.update();
+    EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 0u);
+    model.view.vod_focus = 0;
+    screen.handle(input, feedback);
+    EXPECT_EQ(model.view.vod_kind, -1);
+    ASSERT_TRUE(model.hide_category("US", false));
+    screen.update();
+    screen.handle(input, feedback);
+    EXPECT_EQ(model.view.vod_kind, static_cast<int>(ptv::VodKind::movies));
+    ASSERT_TRUE(settle(model));
+    // A refresh from inside Movies must be reflected when returning to the root.
+    response("get_vod_streams", "[]");
+    screen.refresh();
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.vod().catalog().empty()) << model.vod().status();
+    ASSERT_TRUE(screen.back());
+    ASSERT_EQ(model.view.vod_kind, -1);
+    EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 0u);
+    model.use_saved_source(1);
+    screen.update();
+    EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 0u);
+    EXPECT_EQ(model.vod_count(ptv::VodKind::series), 0u);
+    screen.handle(input, feedback);
+    EXPECT_EQ(model.view.vod_kind, -1);
+    model.close();
+}
+
+TEST_F(VodTest, OverviewFailureIsUnknownAndRefreshCanRecoverFromEmpty)
+{
+    response("get_vod_streams", "not json");
+    response("get_series", "[]");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    const hui::ui::Fonts fonts{};
+    ptv::Shared shared(model, fonts, {});
+    ptv::VodScreen screen(shared);
+    screen.enter();
+    const auto wait = [&]
+    {
+        for (int i = 0; i < 500 && model.search_loading(); ++i)
+        {
+            model.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        ASSERT_FALSE(model.search_loading());
+        screen.update();
+    };
+    wait();
+    EXPECT_FALSE(model.vod_count(ptv::VodKind::movies).has_value());
+    EXPECT_EQ(model.vod_count(ptv::VodKind::series), 0u);
+    response("get_vod_streams",
+             R"([{"stream_id":12,"name":"New film","container_extension":"mp4"}])");
+    response("get_series", R"([{"series_id":21,"name":"New show"}])");
+    screen.refresh();
+    wait();
+    EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 1u);
+    EXPECT_EQ(model.vod_count(ptv::VodKind::series), 1u);
+    // Opening and closing search must not cancel the overview's shared loader.
+    model.begin_search();
+    model.end_search();
+    EXPECT_FALSE(model.searching());
+    EXPECT_EQ(model.vod_count(ptv::VodKind::series), 1u);
+    model.close();
+}
+
 TEST_F(VodTest, ControllerBrowsesChildrenAndStartsAMovieWithoutChangingLiveHistory)
 {
     ptv::Model model(dir);

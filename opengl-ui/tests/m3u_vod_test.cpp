@@ -62,6 +62,10 @@ TEST(M3uVod, ImportsMixedPlusPlaylistAndKeepsMoviesAndEpisodesOutOfLiveAfterRest
         }
         ASSERT_FALSE(model.refreshing());
         ASSERT_EQ(model.visible_count(), 1u);
+        model.set_vod_overview(true);
+        EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 1u);
+        EXPECT_EQ(model.vod_count(ptv::VodKind::series), 1u);
+        model.set_vod_overview(false);
         ASSERT_EQ(model.provider_categories().size(), 1u);
         EXPECT_EQ(model.provider_categories()[0].value, "Live");
         if (launch == 1)

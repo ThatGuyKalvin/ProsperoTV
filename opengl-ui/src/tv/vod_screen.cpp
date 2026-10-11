@@ -36,9 +36,11 @@ void VodScreen::sync()
     auto &model = shared_.model;
     auto &view = model.view;
     const auto &vod = model.vod();
+    model.set_vod_overview(view.vod_kind < 0);
     rows_.clear();
     if (view.vod_kind < 0)
-        rows_ = {{Kind::movies, tr("Movies"), {}, 0}, {Kind::shows, tr("TV shows"), {}, 0}};
+        rows_ = {{Kind::movies, tr("Movies"), {}, 0, model.vod_count(VodKind::movies)},
+                 {Kind::shows, tr("TV shows"), {}, 0, model.vod_count(VodKind::series)}};
     else
     {
         const auto &catalog = vod.catalog();
@@ -125,10 +127,14 @@ void VodScreen::sync()
     top_ = std::max(0, view.vod_focus - kRows + 1);
     revision_ = vod.revision();
     model_revision_ = model.revision();
+    counts_revision_ = model.search_revision();
 }
 void VodScreen::update()
 {
-    if (revision_ != shared_.model.vod().revision() || model_revision_ != shared_.model.revision())
+    shared_.model.set_vod_overview(shared_.model.view.vod_kind < 0);
+    if (revision_ != shared_.model.vod().revision() ||
+        model_revision_ != shared_.model.revision() ||
+        counts_revision_ != shared_.model.search_revision())
         sync();
 }
 void VodScreen::refresh()
@@ -139,6 +145,12 @@ void VodScreen::refresh()
         return;
     }
     const auto &view = shared_.model.view;
+    if (view.vod_kind < 0)
+    {
+        shared_.model.set_vod_overview(true, true);
+        sync();
+        return;
+    }
     if (view.vod_kind >= 0)
         shared_.model.vod().select(static_cast<VodKind>(view.vod_kind), view.vod_series, true);
 }
@@ -289,6 +301,8 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
     if (!input.is_pressed(Action::confirm) || !focused() || !model.vod().available())
         return;
     const auto row = *focused();
+    if (row.count == 0)
+        return;
     if (row.kind == Kind::movies || row.kind == Kind::shows)
     {
         view.vod_genre.clear();
@@ -375,11 +389,21 @@ void VodScreen::draw(ui::Canvas &canvas) const
         const auto &row = rows_[i];
         const float y = 305 + static_cast<float>(i - top_) * 85;
         const bool selected = i == view.vod_focus;
-        draw.bordered_rect({kMargin, y, 1060, 76}, 14, kWhite.with_alpha(selected ? 0.16f : 0.04f),
+        const bool disabled = row.count == 0;
+        draw.bordered_rect({kMargin, y, 1060, 76}, 14,
+                           kWhite.with_alpha(disabled   ? 0.02f
+                                             : selected ? 0.16f
+                                                        : 0.04f),
                            selected ? 2 : 0, tone::cream);
         auto label = row.text + (row.kind == Kind::category && model.category_hidden(row.category)
                                      ? tr(" (Hidden)")
                                      : "");
+        if (row.kind == Kind::movies || row.kind == Kind::shows)
+            label += " (" +
+                     (row.count                ? group_digits(*row.count)
+                      : model.search_loading() ? std::string(tr("Loading…"))
+                                               : std::string("—")) +
+                     ")";
         if (row.kind == Kind::category)
         {
             const int rule = model.category_rule(row.category);
@@ -391,8 +415,8 @@ void VodScreen::draw(ui::Canvas &canvas) const
         const auto &font = face_for(fonts, fonts.semibold, label);
         const auto shown = readable(font, label);
         ui::text(draw, font, font.font->fit(shown.empty() ? tr("Untitled") : shown, 27, 960),
-                 kMargin + 24, y + 47, 27, theme.text);
-        if (row.kind != Kind::item || view.vod_kind == 1)
+                 kMargin + 24, y + 47, 27, disabled ? theme.text_muted : theme.text);
+        if (!disabled && (row.kind != Kind::item || view.vod_kind == 1))
             ui::text(draw, fonts.regular, ">", kMargin + 1020, y + 47, 27, tone::accent);
     }
     if (rows_.empty())
@@ -454,8 +478,9 @@ int VodScreen::hints(ui::Hint *out, int capacity) const
                               {ui::Button::triangle, tr("Search")},
                               {ui::Button::options, tr("Update")},
                               {ui::Button::circle, tr("Back")}};
-    int count = std::min(capacity, 5);
-    std::copy_n(hints, count, out);
+    const int first = focused() && focused()->count == 0 ? 1 : 0;
+    int count = std::min(capacity, 5 - first);
+    std::copy_n(hints + first, count, out);
     if (count < capacity && focused() && focused()->kind == Kind::item)
         out[count++] = {ui::Button::square, tr("Details")};
     if (count < capacity && focused() && focused()->kind == Kind::category &&

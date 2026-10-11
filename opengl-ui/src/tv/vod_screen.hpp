@@ -44,6 +44,7 @@ class VodScreen
         Kind kind;
         std::string text, category;
         unsigned item = 0;
+        std::optional<unsigned> count = std::nullopt;
     };
     void sync();
     void draw_details(ui::Canvas &) const;
@@ -52,7 +53,7 @@ class VodScreen
     const Row *focused() const;
     Shared &shared_;
     std::vector<Row> rows_;
-    unsigned revision_ = ~0u, model_revision_ = ~0u;
+    unsigned revision_ = ~0u, model_revision_ = ~0u, counts_revision_ = ~0u;
     int top_ = 0;
     bool details_open_ = false, filters_open_ = false;
     int filter_focus_ = 0;

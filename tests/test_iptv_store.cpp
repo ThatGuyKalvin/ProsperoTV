@@ -121,6 +121,23 @@ class IptvStoreTest : public ::testing::Test
     fs::path history_path_;
 };
 
+TEST_F(IptvStoreTest, EmptyVodCacheRequiresExplicitOptIn)
+{
+    const auto empty = MakeCatalog(0);
+    EXPECT_EQ(iptv::SaveCatalog(path_.string(), empty), iptv::StoreStatus::invalid_argument);
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), empty, {.allow_empty = true}),
+              iptv::StoreStatus::ok);
+    auto loaded = MakeCatalog(1);
+    EXPECT_NE(iptv::LoadCatalog(path_.string(), &loaded), iptv::StoreStatus::ok);
+    ASSERT_EQ(loaded.size(), 1u);
+    iptv::StoreReport report;
+    ASSERT_EQ(iptv::LoadCatalog(path_.string(), &loaded, {.allow_empty = true}, &report),
+              iptv::StoreStatus::ok);
+    EXPECT_TRUE(loaded.empty());
+    EXPECT_EQ(loaded.source_id, kSourceId);
+    EXPECT_GT(report.saved_unix, 0u);
+}
+
 TEST_F(IptvStoreTest, RoundTripsMediaKindsAndReadsVersionFiveAsLive)
 {
     iptv::Catalog catalog;

@@ -314,7 +314,8 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
                                               });
                          }
                          return ReadObject(value,
-                                           [&](const std::string &season, JsonReader *episodes) {
+                                           [&](const std::string &season, JsonReader *episodes)
+                                           {
                                                return ReadArray(
                                                    episodes, [&](JsonReader *episode)
                                                    { return parser.item(episode, season); });
@@ -441,8 +442,13 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
             : tr("Choose a playlist or Xtream account in Sources to browse on-demand titles.");
     ++revision_;
 }
-void VodLibrary::configure_like(const VodLibrary &source)
+void VodLibrary::configure_like(const VodLibrary &source, bool reload)
 {
+    if (reload)
+    {
+        stop();
+        key_.clear(); // Another browser may have refreshed the shared disk cache.
+    }
     configure(source.account_, source.cache_, source.schedule_, source.user_agent_,
               source.referrer_, source.extra_headers_);
     if (source.playlist_)
@@ -588,7 +594,8 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
         series_ = std::move(series);
         key_ = key;
         iptv::StoreReport report;
-        loaded_ = iptv::LoadCatalog(file(), &catalog_, {}, &report) == iptv::StoreStatus::ok &&
+        loaded_ = iptv::LoadCatalog(file(), &catalog_, {.allow_empty = true}, &report) ==
+                      iptv::StoreStatus::ok &&
                   report.catalog_version >= 5 &&
                   catalog_.source_id == iptv::XtreamSourceId(account_);
         if (!loaded_)
@@ -755,7 +762,8 @@ void *VodLibrary::work(void *self)
                         ++it;
                     }
                 }
-                v.saved_ok_ = iptv::SaveCatalog(v.file(), v.pending_) == iptv::StoreStatus::ok &&
+                v.saved_ok_ = iptv::SaveCatalog(v.file(), v.pending_, {.allow_empty = true}) ==
+                                  iptv::StoreStatus::ok &&
                               save_vod_metadata(v.file(), v.pending_metadata_);
             }
         }

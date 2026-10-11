@@ -29,6 +29,7 @@ struct StoreLimits
     std::size_t max_channels = kDefaultMaxChannels;
     std::size_t max_alternate_urls = kDefaultMaxAlternateUrls;
     std::size_t max_alternate_groups = kDefaultMaxAlternateGroups;
+    bool allow_empty = false;
 };
 
 enum class StoreStatus : std::uint8_t

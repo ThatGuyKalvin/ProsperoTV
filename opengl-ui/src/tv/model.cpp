@@ -390,6 +390,7 @@ void Model::close()
     cancel_home_play();
     home_series_.stop();
     clear_pin();
+    set_vod_overview(false);
     end_search();
     vod_.stop();
     stop_guide();
@@ -448,11 +449,12 @@ void Model::poll()
         stop_guide();
     poll_home_playback();
     vod_.poll(!home_waiting_ && !refreshing() && !guide_thread_ && !search_busy());
-    search_movies_.poll(!home_waiting_ && searching_ && !refreshing() && !guide_thread_ &&
-                        !vod_.busy() && !vod_.requested() && !search_shows_.busy());
-    search_shows_.poll(!home_waiting_ && searching_ && !refreshing() && !guide_thread_ &&
-                       !vod_.busy() && !vod_.requested() && !search_movies_.busy() &&
-                       !search_movies_.requested());
+    search_movies_.poll(!home_waiting_ && (searching_ || vod_overview_) && !refreshing() &&
+                        !guide_thread_ && !vod_.busy() && !vod_.requested() &&
+                        !search_shows_.busy());
+    search_shows_.poll(!home_waiting_ && (searching_ || vod_overview_) && !refreshing() &&
+                       !guide_thread_ && !vod_.busy() && !vod_.requested() &&
+                       !search_movies_.busy() && !search_movies_.requested());
     if (!home_waiting_ && !vod_.busy() && !vod_.requested() && !search_busy() && !search_pending())
         poll_guide();
     const auto now = platform::unix_time();
@@ -1365,6 +1367,7 @@ void Model::refresh()
 {
     cancel_source_check("Check stopped for source refresh");
     cancel_home_play();
+    set_vod_overview(false);
     end_search();
     vod_.stop();
     stop_guide();

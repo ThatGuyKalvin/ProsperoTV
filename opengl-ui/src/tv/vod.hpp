@@ -41,7 +41,7 @@ class VodLibrary
                    std::string user_agent = {}, std::string referrer = {},
                    std::string extra_headers = {});
     void configure_playlist(const iptv::Catalog *playlist);
-    void configure_like(const VodLibrary &source);
+    void configure_like(const VodLibrary &source, bool reload = false);
     std::size_t find_series(std::string_view series, std::uint64_t source) const;
     void playlist_updated();
     void select(VodKind kind, std::string series = {}, bool force = false);

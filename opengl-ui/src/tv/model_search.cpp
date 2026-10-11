@@ -11,6 +11,8 @@ void Model::begin_search()
     if (searching_)
         return;
     searching_ = true;
+    if (vod_overview_)
+        return;
     search_movies_.configure_like(vod_);
     search_shows_.configure_like(vod_);
     search_movies_.select(VodKind::movies);
@@ -19,8 +21,47 @@ void Model::begin_search()
 void Model::end_search()
 {
     searching_ = false;
+    if (vod_overview_)
+        return;
     search_movies_.stop();
     search_shows_.stop();
+}
+void Model::set_vod_overview(bool active, bool force)
+{
+    if (active == vod_overview_ && !force)
+        return;
+    vod_overview_ = active;
+    if (!active)
+    {
+        if (!searching_)
+        {
+            search_movies_.stop();
+            search_shows_.stop();
+        }
+        return;
+    }
+    if (!searching_ || force)
+    {
+        search_movies_.configure_like(vod_, true);
+        search_shows_.configure_like(vod_, true);
+        search_movies_.select(VodKind::movies, {}, force);
+        search_shows_.select(VodKind::series, {}, force);
+    }
+}
+std::optional<unsigned> Model::vod_count(VodKind kind) const
+{
+    if (!vod_.available())
+        return 0;
+    if (active_source_ == iptv::SourceKind::Custom && !has_catalog())
+        return std::nullopt;
+    const auto &library = kind == VodKind::movies ? search_movies_ : search_shows_;
+    if (!library.loaded())
+        return std::nullopt;
+    unsigned count = 0;
+    for (const auto item : library.catalog())
+        if (search_vod_allowed(item))
+            ++count;
+    return count;
 }
 bool Model::channel_visible(unsigned index) const
 {

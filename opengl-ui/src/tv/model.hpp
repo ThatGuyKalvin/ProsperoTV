@@ -288,6 +288,8 @@ class Model
     };
     void begin_search();
     void end_search();
+    void set_vod_overview(bool active, bool force = false);
+    std::optional<unsigned> vod_count(VodKind kind) const;
     bool searching() const
     {
         return searching_;
@@ -764,14 +766,15 @@ class Model
     void poll_home_playback();
     bool next_home_episode(const PlayRequest &request);
     VodLibrary search_movies_, search_shows_;
-    bool searching_ = false;
+    bool searching_ = false, vod_overview_ = false;
     bool search_busy() const
     {
         return search_movies_.busy() || search_shows_.busy();
     }
     bool search_pending() const
     {
-        return searching_ && (search_movies_.requested() || search_shows_.requested());
+        return (searching_ || vod_overview_) &&
+               (search_movies_.requested() || search_shows_.requested());
     }
     bool home_vod_allowed(const ResumeItem &item) const;
     bool queue_home_vod(ResumeItem item);

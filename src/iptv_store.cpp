@@ -342,8 +342,8 @@ StoreStatus SaveCatalog(const std::string &path, const Catalog &catalog, const S
                         StoreReport *report)
 {
     SetReport(report, StoreStatus::invalid_argument, 0, 0);
-    if (path.empty() || catalog.empty() || catalog.size() > limits.max_channels ||
-        limits.max_file_bytes == 0)
+    if (path.empty() || (!limits.allow_empty && catalog.empty()) ||
+        catalog.size() > limits.max_channels || limits.max_file_bytes == 0)
     {
         return StoreStatus::invalid_argument;
     }
@@ -530,7 +530,8 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
     if (ok)
     {
         const sqlite3_int64 value = sqlite3_column_int64(statement, 0);
-        ok = value > 0 && static_cast<std::uint64_t>(value) <= limits.max_channels;
+        ok = (value > 0 || (value == 0 && limits.allow_empty)) &&
+             static_cast<std::uint64_t>(value) <= limits.max_channels;
         if (ok)
             count = static_cast<std::size_t>(value);
     }
