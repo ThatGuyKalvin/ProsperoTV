@@ -130,4 +130,35 @@ TEST_F(RemoteBrowseTest, RechecksHiddenAndParentalRulesBeforeReturningGuideOrTun
     EXPECT_FALSE(model.take_play_request(&play));
     model.close();
 }
+TEST_F(RemoteBrowseTest, PlaybackViewBorrowsClosedModelWithoutTuningUntilRevalidation)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    ASSERT_TRUE(model.hide_category("Private", true));
+    model.close(); // Catalog/guide remain owned, workers have stopped.
+    auto view = model.remote_browse_view();
+    view.current_channel = std::string(model.channel(1).id);
+    std::string output;
+    ASSERT_EQ(view.handle(R"({"operation":"list","query":"Football"})", output), 200);
+    EXPECT_NE(output.find("Channel 80"), std::string::npos);
+    const auto token = source(output);
+    EXPECT_EQ(view.handle(request("play", token, model.channel(0).id), output), 404);
+    EXPECT_TRUE(view.selected.empty());
+    EXPECT_EQ(view.handle(request("play", token, model.channel(1).id), output), 200);
+    EXPECT_TRUE(view.selected.empty()); // Already watching: no unnecessary restart.
+    ASSERT_EQ(view.handle(request("guide", token, model.channel(80).id), output), 200);
+    EXPECT_NE(output.find("News"), std::string::npos);
+    ASSERT_EQ(view.handle(request("play", token, model.channel(80).id), output), 200);
+    ptv::PlayRequest play;
+    EXPECT_FALSE(model.take_play_request(&play)); // Phone only requests a normal stop.
+    ASSERT_EQ(model.remote_browse(view.selection_request(), output), 200);
+    ASSERT_TRUE(model.take_play_request(&play));
+    EXPECT_EQ(play.channel_id, model.channel(80).id);
+    ASSERT_TRUE(model.hide_channel(model.channel(80).id, true));
+    EXPECT_EQ(model.remote_browse(view.selection_request(), output), 404);
+    EXPECT_FALSE(model.take_play_request(&play)); // Policy is checked again after teardown.
+    view.source = "stale";
+    EXPECT_EQ(model.remote_browse(view.selection_request(), output), 409);
+}
 } // namespace

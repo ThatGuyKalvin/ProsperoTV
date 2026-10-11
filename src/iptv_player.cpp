@@ -1194,8 +1194,13 @@ class StreamRunner
             }
         }
         iptv_input_poll();
-        if (gControls)
-            (void)gControls(gControlsContext, -1);
+        if (gControls && gControls(gControlsContext, -1) == 2)
+        {
+            playback_stop_requested_ = true;
+            if (adapter_.initialized)
+                iptv_native_backend_request_stop(&adapter_.backend);
+            return true;
+        }
         const bool overlay_chord =
             iptv_input_pressed(IPTV_INPUT_TOUCHPAD) && iptv_input_pressed(IPTV_INPUT_R1);
         if (overlay_chord && !overlay_chord_down_)

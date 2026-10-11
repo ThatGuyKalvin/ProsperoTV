@@ -54,7 +54,7 @@ input[type=range]{padding:0;min-height:44px;accent-color:#ff9445;cursor:pointer}
 <p class="muted" id="browse-label">Current source, with the TV's parental and hidden-channel rules.</p>
 <div id="browse-results" style="max-height:65vh;overflow:auto" aria-live="polite"></div>
 <div class="row"><button id="browse-prev" type="button">Previous page</button><button id="browse-next" type="button">Next page</button></div>
-<p class="muted">Return to the TV menu with Back before browsing. Tap a channel name to watch on TV.</p>
+<p class="muted">Browse while watching. Tap a channel name to switch the TV.</p>
 </div></section>
 <section class="card"><button id="manage-sources" type="button" style="width:100%" aria-expanded="false" aria-controls="source-editor">Manage sources</button>
 <div id="source-editor" hidden>

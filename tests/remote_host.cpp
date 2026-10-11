@@ -29,14 +29,13 @@ int main(int argc, char **argv)
                 return 200;
             },
             nullptr);
-    if (argc == 3)
-        iptv_remote_set_browse_handler(
-            [](const char *, size_t, char *out, size_t capacity, void *)
-            {
-                std::snprintf(out, capacity, "%s", "{\"channels\":[]}");
-                return 200;
-            },
-            nullptr);
+    iptv_remote_set_browse_handler(
+        [](const char *, size_t, char *out, size_t capacity, void *)
+        {
+            std::snprintf(out, capacity, "%s", "{\"channels\":[]}");
+            return 200;
+        },
+        nullptr);
     if (argc == 4)
         iptv_remote_set_playback_favorite(
             [](void *context) -> int
@@ -69,6 +68,11 @@ int main(int argc, char **argv)
             else if (std::strcmp(command, "connected\n") == 0)
             {
                 std::printf("connected:%d\n", iptv_remote_take_connected());
+            }
+            else if (std::strcmp(command, "detach-browse\n") == 0)
+            {
+                iptv_remote_set_browse_handler(nullptr, nullptr);
+                std::puts("detached");
             }
             else if (std::strcmp(command, "cancel\n") == 0)
             {
