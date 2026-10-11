@@ -42,7 +42,12 @@ struct RemoteBrowseView
     const iptv::Catalog *catalog = nullptr;
     const Guide *guide = nullptr;
     std::vector<unsigned> order;
-    std::vector<bool> allowed;
+    std::vector<std::uint8_t> marks;
+    // Borrowed only for a synchronous menu request; playback owns its copies.
+    std::span<const unsigned> menu_order;
+    std::span<const std::uint8_t> menu_marks;
+    const std::map<std::string, std::string, std::less<>> *menu_names = nullptr;
+    bool parental_prompt = false;
     std::map<std::string, std::string, std::less<>> names;
     std::string source, current_channel, selected;
     int handle(std::string_view input, std::string &output);
@@ -244,7 +249,7 @@ class Model
     // Called on the menu thread by the authenticated phone remote.
     int remote_sources(std::string_view input, std::string &output);
     int remote_browse(std::string_view input, std::string &output);
-    RemoteBrowseView remote_browse_view() const;
+    RemoteBrowseView remote_browse_view(bool snapshot = true) const;
     VodLibrary &vod()
     {
         return vod_;

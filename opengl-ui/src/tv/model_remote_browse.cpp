@@ -60,6 +60,11 @@ int RemoteBrowseView::handle(std::string_view input, std::string &output)
     const auto &operation = fields["operation"];
     if (operation != "list" && operation != "guide" && operation != "play")
         return 400;
+    if (parental_prompt)
+    {
+        output = "Finish the parental prompt on the TV first.";
+        return 403;
+    }
     if (!catalog || !guide)
         return 409;
     if ((operation != "list" || !fields["source"].empty()) && fields["source"] != source)
@@ -67,12 +72,15 @@ int RemoteBrowseView::handle(std::string_view input, std::string &output)
         output = "The source changed. Reload the channel list.";
         return 409;
     }
+    const auto visible_marks = menu_names ? menu_marks : std::span<const std::uint8_t>(marks);
+    const auto visible_order = menu_names ? menu_order : std::span<const unsigned>(order);
+    const auto &visible_names = menu_names ? *menu_names : names;
     const auto is_allowed = [&](std::size_t index)
-    { return index < allowed.size() && allowed[index]; };
+    { return index < visible_marks.size() && (visible_marks[index] & 4u) == 0; };
     const auto channel = [&](unsigned index)
     {
         auto item = (*catalog)[index];
-        if (const auto name = names.find(item.id); name != names.end())
+        if (const auto name = visible_names.find(item.id); name != visible_names.end())
             item.name = name->second;
         return item;
     };
@@ -116,13 +124,13 @@ int RemoteBrowseView::handle(std::string_view input, std::string &output)
     if (query.size() > 156 ||
         std::any_of(query.begin(), query.end(),
                     [](unsigned char c) { return c < 32 || c == 127; }) ||
-        offset > order.size())
+        offset > visible_order.size())
         return 400;
     output = "{\"source\":" + quote(source) + ",\"channels\":[";
     unsigned count = 0;
-    while (offset < order.size() && count < 40)
+    while (offset < visible_order.size() && count < 40)
     {
-        const auto index = order[offset++];
+        const auto index = visible_order[offset++];
         if (!is_allowed(index))
             continue;
         const auto item = channel(index);
@@ -139,35 +147,31 @@ int RemoteBrowseView::handle(std::string_view input, std::string &output)
         if (output.size() > 96u * 1024u)
             break;
     }
-    output += "],\"next\":" + (offset < order.size() ? std::to_string(offset) : "null") + "}";
+    output +=
+        "],\"next\":" + (offset < visible_order.size() ? std::to_string(offset) : "null") + "}";
     return 200;
 }
-RemoteBrowseView Model::remote_browse_view() const
+RemoteBrowseView Model::remote_browse_view(bool snapshot) const
 {
     RemoteBrowseView view;
+    view.parental_prompt = pin_prompt();
+    if (view.parental_prompt || !has_catalog() || refreshing() || home_waiting_)
+        return view;
     view.catalog = &catalog_;
     view.guide = &guide_;
     view.source = std::to_string(selected_source_id_) + ":" + std::to_string(catalog_.source_id);
-    view.order.assign(index_.order.begin(), index_.order.end());
-    view.names = channel_names_;
-    const auto is_allowed = [&](std::size_t index)
+    if (snapshot)
     {
-        if (index >= catalog_.size())
-            return false;
-        const auto item = catalog_[index];
-        if (item.media_kind != iptv::MediaKind::live || !content_allowed(item) ||
-            hidden_channels_.contains(std::string(item.id)) ||
-            (hide_failed_ && item.playback_status == iptv::PlaybackStatus::failed) ||
-            category_hidden(item.group_title))
-            return false;
-        for (const auto group : item.alternate_group_titles)
-            if (category_hidden(group))
-                return false;
-        return true;
-    };
-    view.allowed.resize(catalog_.size());
-    for (const auto index : view.order)
-        view.allowed[index] = is_allowed(index);
+        view.order.assign(index_.order.begin(), index_.order.end());
+        view.names = channel_names_;
+        view.marks = marks_;
+    }
+    else
+    {
+        view.menu_order = index_.order;
+        view.menu_names = &channel_names_;
+        view.menu_marks = marks_;
+    }
     return view;
 }
 int Model::remote_browse(std::string_view input, std::string &output)
@@ -187,7 +191,7 @@ int Model::remote_browse(std::string_view input, std::string &output)
         output = "Wait for the TV channel list to load.";
         return 409;
     }
-    auto view = remote_browse_view();
+    auto view = remote_browse_view(false);
     const int result = view.handle(input, output);
     if (result == 200 && !view.selected.empty() &&
         !play(static_cast<unsigned>(catalog_.Find(view.selected))))
