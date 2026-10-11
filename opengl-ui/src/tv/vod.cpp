@@ -448,6 +448,24 @@ void VodLibrary::configure_like(const VodLibrary &source)
     if (source.playlist_)
         configure_playlist(source.playlist_);
 }
+std::size_t VodLibrary::find_series(std::string_view series, std::uint64_t source) const
+{
+    if (!loaded_ || kind_ != VodKind::series || series.empty() || catalog_.source_id != source)
+        return iptv::Catalog::npos;
+    if (!playlist_)
+    {
+        const auto at = catalog_.Find(identifier(source, VodKind::series, series));
+        return at != iptv::Catalog::npos && catalog_[at].source_id == source &&
+                       catalog_[at].tvg_id == series
+                   ? at
+                   : iptv::Catalog::npos;
+    }
+    // Playlist show rows keep the representative episode ID, not an Xtream ID.
+    for (unsigned at = 0; at < catalog_.size(); ++at)
+        if (catalog_[at].source_id == source && catalog_[at].tvg_id == series)
+            return at;
+    return iptv::Catalog::npos;
+}
 void VodLibrary::configure_playlist(const iptv::Catalog *playlist)
 {
     stop();
