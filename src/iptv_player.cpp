@@ -153,6 +153,7 @@ bool gMediaSession = false;
 std::atomic<std::uint32_t> gMediaSavedAudio{UINT32_MAX}, gMediaSavedSubtitle{0};
 std::atomic<std::uint32_t> gMediaRestoreAudio{UINT32_MAX};
 std::atomic<int> gAudioDelayMs{0};
+std::atomic<unsigned> gPlaybackSpeed{100};
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
 #if IPTV_PROBE
 constexpr char kProbePath[] = "/download0/iptv-playback-probe.txt";
@@ -759,6 +760,7 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     config.audio_stream_type = format->audio_stream_type;
     config.poll_controls = adapter->poll_controls;
     config.controls_context = adapter->controls_context;
+    config.speed_percent = gMediaSession ? gPlaybackSpeed.load() : 100;
     iptv_native_agc_loading_stop();
     const int handoff = iptv_native_agc_present_shutdown();
     if (handoff != 0)
@@ -3023,6 +3025,7 @@ void iptv_player_set_start_position(uint64_t position_us)
 {
     gMediaStartPosition.store(std::min<std::uint64_t>(position_us, INT64_MAX / 4));
     gAudioDelayMs.store(0);
+    gPlaybackSpeed.store(100);
     gMediaSeekRequest.store(-1);
     gMediaSavedAudio = UINT32_MAX;
     gMediaSavedSubtitle = 0;
@@ -3034,6 +3037,7 @@ void iptv_player_media_state(iptv_player_media_state_t *state)
     {
         std::lock_guard lock(gMediaMutex);
         *state = gMediaState;
+        state->speed_percent = gPlaybackSpeed.load();
     }
 }
 int iptv_player_seek_media(uint64_t position_us)
@@ -3051,6 +3055,21 @@ int iptv_player_seek_media(uint64_t position_us)
         std::memory_order_release);
     return IPTV_STREAM_OK;
 }
+int iptv_player_set_speed(unsigned percent)
+{
+    if (percent != 50 && percent != 75 && percent != 100 && percent != 125 && percent != 150 &&
+        percent != 200)
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    iptv_player_media_state_t state{};
+    iptv_player_media_state(&state);
+    if (!state.seekable || !state.duration_us)
+        return IPTV_STREAM_INVALID_STATE;
+    const int result = iptv_player_seek_media(state.position_us);
+    if (result == IPTV_STREAM_OK)
+        gPlaybackSpeed.store(percent);
+    return result;
+}
+
 int iptv_player_pause_media(int paused)
 {
     std::lock_guard lock(gMediaMutex);

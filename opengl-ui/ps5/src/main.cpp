@@ -1404,6 +1404,8 @@ int main()
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
                     if (const auto position = osd.take_media_seek())
                         (void)iptv_player_seek_media(*position);
+                    if (const auto speed = osd.take_media_speed())
+                        (void)iptv_player_set_speed(*speed);
                     if (const auto paused = osd.take_media_pause())
                         (void)iptv_player_pause_media(*paused);
                     if (const auto selected = osd.take_picture_selection())

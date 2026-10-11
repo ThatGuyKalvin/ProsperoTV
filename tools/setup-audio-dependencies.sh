@@ -15,7 +15,7 @@ suffix=audio
 build="$root/.deps/ffmpeg-$suffix/build"
 prefix="$root/.deps/ffmpeg-$suffix/root"
 stamp=$(cat "${BASH_SOURCE[0]}" "$root/tools/patch-ffmpeg-hls.py" "$root/tools/patch-ffmpeg-color.py" | sha256sum | cut -d' ' -f1)
-if [[ -f $prefix/.complete && $(<"$prefix/.complete") == "$stamp" && -f $prefix/lib/libavformat.a ]]; then
+if [[ -f $prefix/.complete && $(<"$prefix/.complete") == "$stamp" && -f $prefix/lib/libavformat.a && -f $prefix/lib/libavfilter.a ]]; then
     exit 0
 fi
 mkdir -p "$root/.deps" "$build" "$prefix"
@@ -44,7 +44,7 @@ cd "$build"
 "$source/configure" --prefix="$prefix" "${cross[@]}" --disable-autodetect --disable-everything \
     --disable-programs --disable-doc --enable-network --disable-avdevice \
     --enable-openssl --enable-protocol=http,https,udp --pkg-config-flags=--static \
-    --disable-avfilter --disable-swscale --disable-shared --enable-static \
+    --enable-avfilter --enable-filter=abuffer,abuffersink,atempo --disable-swscale --disable-shared --enable-static \
     --enable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
     --enable-avcodec --enable-avutil --enable-swresample --enable-avformat \
     --enable-demuxer=mov,matroska,hls,webvtt --enable-muxer=mpegts \

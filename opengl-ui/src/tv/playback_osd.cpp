@@ -297,7 +297,7 @@ void PlaybackOsd::set_media_state(const iptv_player_media_state_t &state)
 {
     std::lock_guard lock(mutex_);
     if (media_.available != state.available || media_.paused != state.paused ||
-        media_.seekable != state.seekable ||
+        media_.seekable != state.seekable || media_.speed_percent != state.speed_percent ||
         media_.position_us / 1000000 != state.position_us / 1000000 ||
         media_.duration_us != state.duration_us || media_.chapter_count != state.chapter_count)
         dirty_ = true;
@@ -318,6 +318,14 @@ std::optional<std::uint64_t> PlaybackOsd::take_media_seek()
     media_seek_.reset();
     return result;
 }
+std::optional<unsigned> PlaybackOsd::take_media_speed()
+{
+    std::lock_guard lock(mutex_);
+    const auto result = media_speed_;
+    media_speed_.reset();
+    return result;
+}
+
 std::optional<bool> PlaybackOsd::take_media_pause()
 {
     std::lock_guard lock(mutex_);
@@ -459,6 +467,19 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         if (media_.available && action == IPTV_INPUT_PLAY_PAUSE)
             media_pause_ = !media_.paused;
+        else if (media_.seekable && action == IPTV_INPUT_GO_LIVE)
+        {
+            constexpr unsigned speeds[] = {50, 75, 100, 125, 150, 200};
+            const auto current = media_.speed_percent ? media_.speed_percent : 100;
+            unsigned next = 50;
+            for (const auto speed : speeds)
+                if (speed > current)
+                {
+                    next = speed;
+                    break;
+                }
+            media_speed_ = media_.speed_percent = next;
+        }
         else if (media_.seekable && action == IPTV_INPUT_SQUARE)
             media_seek_ = 0;
         else if (media_.seekable && (action == IPTV_INPUT_LEFT || action == IPTV_INPUT_RIGHT ||
@@ -760,8 +781,12 @@ void PlaybackOsd::paint()
                 return std::to_string(seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") +
                        std::to_string(seconds % 60);
             };
+            char speed[24];
+            const auto percent = media_.speed_percent ? media_.speed_percent : 100;
+            std::snprintf(speed, sizeof(speed), "  %u.%02ux", percent / 100, percent % 100);
             line((media_.paused ? tr("Paused  ") : "") + time(media_.position_us) + " / " +
-                     (media_.duration_us ? time(media_.duration_us) : tr("Unknown duration")),
+                     (media_.duration_us ? time(media_.duration_us) : tr("Unknown duration")) +
+                     speed,
                  30, 101, 28, 1700);
             if (media_.duration_us)
             {
@@ -774,7 +799,7 @@ void PlaybackOsd::paint()
                 }
             }
             line(media_.seekable
-                     ? tr("Left / Right 10s | L1 / R1 1 min | L2 Pause | Square Restart")
+                     ? tr("Left / Right 10s | L1 / R1 1 min | L2 Pause | R2 Speed | Square Restart")
                      : tr("Seeking unavailable | L2 Pause / resume"),
                  30, 187, 24, 1700);
         }

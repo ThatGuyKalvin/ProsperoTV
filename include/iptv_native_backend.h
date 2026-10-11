@@ -95,6 +95,7 @@ extern "C"
         /* Called on the draining caller's thread while queued video finishes. */
         void (*poll_controls)(void *context);
         void *controls_context;
+        uint32_t speed_percent; /* 0 or 100 is normal; 50 through 200 is supported. */
     } iptv_native_open_config_t;
 
     typedef struct iptv_native_telemetry
