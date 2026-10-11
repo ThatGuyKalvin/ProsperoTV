@@ -543,6 +543,7 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             return;
         }
         const auto channel = browse_.focused();
+        model.block_source_check(true);
         shared_.preview.clear();
         multiview_.open(channel ? std::string(channel->id) : std::string());
         return;
@@ -967,6 +968,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
                                  !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
                                  !library_sheet_.is_open() && !guide_sheet_.is_open() &&
                                  !pairing_open_ && !storage_dialog_.is_open();
+    model.block_source_check(preview_allowed || multiview_.active());
     const auto focused = preview_allowed ? browse_.focused() : std::nullopt;
     shared_.preview.update(focused ? model.preview_request(focused->id) : std::nullopt, dt);
     multiview_.update(dt);

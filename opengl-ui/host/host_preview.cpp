@@ -11,14 +11,23 @@ namespace
 {
 std::atomic<bool> enabled{false};
 std::atomic<unsigned> starts{0}, stops{0};
+std::atomic<int> probe_kind{-1}, probe_status{0};
+std::atomic<unsigned> probe_delay{0};
 } // namespace
 namespace host
 {
 void set_preview(bool value)
 {
     enabled.store(value);
+    probe_kind.store(-1);
     starts.store(0);
     stops.store(0);
+}
+void set_preview_probe(int outcome, int http, unsigned delay_ms)
+{
+    probe_kind.store(outcome);
+    probe_status.store(http);
+    probe_delay.store(delay_ms);
 }
 unsigned preview_starts()
 {
@@ -33,8 +42,19 @@ namespace ptv::platform
 {
 void preview(const PlayRequest &, const iptv::http::RequestControl &control,
              void (*picture)(void *, const iptv_native_picture_t *), void *context,
-             PreviewAudio *audio)
+             PreviewAudio *audio, ProbeResult *probe)
 {
+    if (probe)
+        *probe = {};
+    if (probe && probe_kind.load() >= 0)
+    {
+        ++starts;
+        for (unsigned i = 0; i < probe_delay.load() && !control.cancelled(control.context); i += 5)
+            sleep_ms(5);
+        *probe = {static_cast<ProbeOutcome>(probe_kind.load()), probe_status.load()};
+        ++stops;
+        return;
+    }
     if (!enabled.load())
         return;
     ++starts;

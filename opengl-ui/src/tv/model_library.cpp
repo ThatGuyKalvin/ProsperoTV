@@ -67,6 +67,7 @@ const SavedSource *Model::saved_source(std::int64_t id) const
 
 void Model::select_source_record(const SavedSource &source)
 {
+    cancel_source_check("Check stopped for source change");
     clear_home_playback();
     end_search();
     const bool changed = selected_source_id_ != source.id;

@@ -351,6 +351,7 @@ bool Model::open()
         // is read again.
         (void)iptv::LoadPlaybackResults(path("prosperotv-playback-history.sqlite3"),
                                         catalog_.source_id, &catalog_);
+        load_source_checks();
         mark_visibility();
         mark_lists();
         recount_groups();
@@ -384,6 +385,7 @@ bool Model::open()
 
 void Model::close()
 {
+    cancel_source_check();
     cancel_home_play();
     home_series_.stop();
     clear_pin();
@@ -434,6 +436,7 @@ bool Model::close_for_storage()
 void Model::poll()
 {
     poll_programme_jobs();
+    poll_source_check();
     check_sleep_timer();
     if (keyboard_ready_)
         iptv_ime_poll();
@@ -483,6 +486,7 @@ void Model::load_cache()
     if (catalog_loaded_)
         (void)iptv::LoadPlaybackResults(path("prosperotv-playback-history.sqlite3"), wanted,
                                         &catalog_);
+    load_source_checks();
     const bool own = active_source_ != iptv::SourceKind::BuiltIn;
     health_[static_cast<unsigned>(active_source_)] = catalog_loaded_ ? SourceHealth::cached
                                                      : own           ? SourceHealth::saved
@@ -1346,6 +1350,7 @@ void Model::apply_account_password(const char *password)
 
 void Model::refresh()
 {
+    cancel_source_check("Check stopped for source refresh");
     cancel_home_play();
     end_search();
     vod_.stop();
@@ -1454,7 +1459,8 @@ void Model::run_refresh()
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
         const iptv::http::RequestControl control{
-            [](void *context) {
+            [](void *context)
+            {
                 return static_cast<const Model *>(context)->stop_requested_.load(
                     std::memory_order_acquire);
             },
@@ -1720,6 +1726,7 @@ void Model::consume_refresh()
         saved_unix_ = pending_saved_ ? platform::unix_time() : 0;
         (void)iptv::LoadPlaybackResults(path("prosperotv-playback-history.sqlite3"),
                                         catalog_.source_id, &catalog_);
+        load_source_checks();
         adopt_catalog();
         next_guide_check_ = 0;
         if (has_failure_)

@@ -83,6 +83,14 @@ void SourcesScreen::sync()
         rows.push_back(std::move(row));
         ids_.push_back(source.id);
     }
+    if (model.has_catalog())
+    {
+        ui::ListItem check;
+        check.title = tr(model.checking_source() ? "Cancel source check" : "Check active source");
+        check.subtitle = model.source_check_status();
+        rows.push_back(std::move(check));
+        ids_.push_back(-7);
+    }
     ui::ListItem playlist;
     playlist.title = tr("Add another playlist");
     playlist.subtitle = tr("M3U or M3U8 address");
@@ -113,7 +121,8 @@ void SourcesScreen::sync()
     usb.subtitle = tr("Top-level .m3u and .m3u8 files on connected drives");
     rows.push_back(std::move(usb));
     ids_.push_back(-6);
-    usb_files_ = usb_playlists(model.usb_root());
+    if (!model.checking_source())
+        usb_files_ = usb_playlists(model.usb_root());
     for (std::size_t i = 0; i < usb_files_.size(); ++i)
     {
         ui::ListItem row;
@@ -172,8 +181,14 @@ void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
     }
     if (list_.handle(input, feedback) == ui::Event::activated)
     {
-        if (id == -6)
+        if (id == -7)
         {
+            shared_.preview.clear();
+            model.toggle_source_check();
+        }
+        else if (id == -6)
+        {
+            usb_files_ = usb_playlists(model.usb_root());
             sync();
             model.announce(Level::ready,
                            usb_files_.empty() ? tr("No USB playlists found")
@@ -220,9 +235,23 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     const float left = kPanel.x + 36, width = kPanel.w - 72;
     const auto id = focused_id();
     const auto *source = model.saved_source(id);
-    const std::string title = source != nullptr ? source_title(*source) : tr("Add a source");
+    const std::string title = id == -7            ? tr("Check active source")
+                              : source != nullptr ? source_title(*source)
+                                                  : tr("Add a source");
     ui::text(draw, fonts.display, fonts.display.font->fit(title, 36, width), left, 315, 36,
              theme.text);
+    if (id == -7)
+    {
+        ui::paragraph(
+            draw, fonts.regular,
+            tr("Checks one visible live channel at a time. A decoded picture passes; only missing "
+               "channel addresses fail. Unsupported formats and timeouts are skipped. Playback, "
+               "previews, recording or source changes stop the check."),
+            left, 375, 26, width, 38, theme.text_muted, 12);
+        ui::paragraph(draw, fonts.regular, model.source_check_status(), left, 700, 24, width, 34,
+                      theme.text, 5);
+        return;
+    }
     if (source == nullptr && (id == -6 || id <= -100))
     {
         ui::paragraph(draw, fonts.regular,
@@ -305,7 +334,11 @@ int SourcesScreen::hints(ui::Hint *out, int capacity) const
         if (count < capacity)
             out[count++] = hint;
     };
-    add({ui::Button::cross, focused_id() < 0 ? tr("Add") : tr("Use source")});
+    add({ui::Button::cross,
+         focused_id() == -7
+             ? tr(shared_.model.checking_source() ? "Cancel source check" : "Check active source")
+         : focused_id() < 0 ? tr("Add")
+                            : tr("Use source")});
     if (focused_id() > 1)
         add({ui::Button::triangle, tr("Edit")});
     if (focused_id() > 0)

@@ -18,6 +18,7 @@
 #include "tv/library.hpp"
 #include "tv/guide.hpp"
 #include "tv/recording.hpp"
+#include "tv/source_check.hpp"
 #include "tv/portal.hpp"
 #include "tv/vod.hpp"
 #include "tv/parental.hpp"
@@ -460,6 +461,15 @@ class Model
     bool schedule_programme(unsigned index, const Programme &programme, bool record);
     void poll_programme_jobs();
     void toggle_recording(std::string_view channel);
+    void toggle_source_check();
+    void cancel_source_check(const char *reason = "Check stopped");
+    void block_source_check(bool blocked);
+    bool checking_source() const
+    {
+        return check_active_;
+    }
+    std::string source_check_status() const;
+
     void cancel_programme_job(std::int64_t id);
     std::vector<ProgrammeJob> programme_jobs() const
     {
@@ -600,6 +610,18 @@ class Model
     bool check_sleep_timer();
 
   private:
+    void poll_source_check();
+    void load_source_checks();
+    std::uint64_t source_check_identity() const;
+    SourceCheck source_check_;
+    CheckStore check_store_;
+    bool check_active_ = false, check_blocked_ = false;
+    std::uint64_t check_source_ = 0, check_fingerprint_ = 0, check_next_ = 0;
+    std::size_t check_cursor_ = 0, check_total_ = 0, check_passed_ = 0, check_failed_ = 0,
+                check_skipped_ = 0;
+    std::string check_channel_, check_message_;
+    std::vector<unsigned> check_order_;
+
     enum class PinStep
     {
         none,

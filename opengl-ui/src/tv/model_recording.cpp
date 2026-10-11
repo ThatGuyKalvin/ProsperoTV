@@ -217,6 +217,7 @@ void Model::poll_programme_jobs()
         }
         if (!programme_jobs_.finish(job.id, 1, "Recording"))
             continue;
+        cancel_source_check("Check stopped for recording");
         if (recorder_.start(std::move(input), job.drive, job.end, now, job.id))
         {
             recording_job_ = job.id;
