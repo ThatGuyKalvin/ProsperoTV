@@ -73,22 +73,28 @@ class FontShaper
     {
         text = text.substr(0, max_text);
         std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto &entry : cache_)
+        for (auto &entry : cache_)
             if (entry.text == text && entry.tracking == tracking)
+            {
+                entry.used = ++tick_;
                 return entry.shaped;
+            }
         auto shaped = uncached(text, tracking);
         // Keep the 200 category chips and visible tile text together; 64 entries
         // evicted the category row on every frame. Byte and glyph caps still apply.
         while (!cache_.empty() && (cache_.size() >= 512 || bytes_ + text.size() > 65536 ||
                                    glyphs_ + shaped.glyphs.size() > 32768))
         {
-            bytes_ -= cache_.front().text.size();
-            glyphs_ -= cache_.front().shaped.glyphs.size();
-            cache_.erase(cache_.begin());
+            const auto oldest =
+                std::min_element(cache_.begin(), cache_.end(),
+                                 [](const Cached &a, const Cached &b) { return a.used < b.used; });
+            bytes_ -= oldest->text.size();
+            glyphs_ -= oldest->shaped.glyphs.size();
+            cache_.erase(oldest);
         }
         bytes_ += text.size();
         glyphs_ += shaped.glyphs.size();
-        cache_.push_back({std::string(text), tracking, shaped});
+        cache_.push_back({std::string(text), tracking, shaped, ++tick_});
         return shaped;
     }
 
@@ -98,10 +104,12 @@ class FontShaper
         std::string text;
         float tracking;
         Shaped shaped;
+        std::uint64_t used;
     };
     mutable std::mutex mutex_;
     mutable std::vector<Cached> cache_;
     mutable std::size_t bytes_ = 0, glyphs_ = 0;
+    mutable std::uint64_t tick_ = 0;
     Shaped uncached(std::string_view text, float tracking) const
     {
         Shaped out;

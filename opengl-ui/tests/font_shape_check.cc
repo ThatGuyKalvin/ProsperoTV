@@ -147,13 +147,15 @@ int main(int argc, char **argv)
         categories.push_back("Entertainment;News;Sports " + std::to_string(i));
         widths.push_back(font.measure(categories.back(), 22));
     }
-    for (unsigned i = 0; i < 40; ++i)
-        (void)glyphs(font, "Channel " + std::to_string(i));
-    const auto calls = shape_calls.load();
-    for (unsigned frame = 0; frame < 3; ++frame)
+    for (unsigned frame = 0; frame < 30; ++frame)
+    {
+        for (unsigned i = 0; i < 40; ++i)
+            (void)glyphs(font, "Channel " + std::to_string(frame * 40 + i));
+        const auto calls = shape_calls.load();
         for (unsigned i = 0; i < categories.size(); ++i)
             require(font.measure(categories[i], 22) == widths[i], "cached category width");
-    require(shape_calls.load() == calls, "category row must not reshape on each frame");
+        require(shape_calls.load() == calls, "category row must not reshape while paging");
+    }
 
     const auto start = std::chrono::steady_clock::now();
     std::thread worker(
