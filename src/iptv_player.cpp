@@ -3000,6 +3000,14 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
         const int result = RunPlayerOnce(url, channel_name, user_agent, referrer, remaining,
                                          reconnect_live, live, authorization, credential_origin);
         const auto target = gMediaSeekRequest.exchange(-1, std::memory_order_acq_rel);
+        iptv_player_media_state_t media{};
+        iptv_player_media_state(&media);
+        if (!live && result < 0 && gMediaStartPosition.load() && !media.presented)
+        {
+            // A stale bookmark or a server refusing ranges must not prevent watching the film.
+            gMediaStartPosition.store(0);
+            continue;
+        }
         if (live || target < 0 || result < 0)
             return result;
         // Reopen after normal teardown: never mix old queued pictures or mux DTS with a seek.

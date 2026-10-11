@@ -417,6 +417,8 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         if (media_.available && action == IPTV_INPUT_PLAY_PAUSE)
             media_pause_ = !media_.paused;
+        else if (media_.seekable && action == IPTV_INPUT_SQUARE)
+            media_seek_ = 0;
         else if (media_.seekable && (action == IPTV_INPUT_LEFT || action == IPTV_INPUT_RIGHT ||
                                      action == IPTV_INPUT_L1 || action == IPTV_INPUT_R1))
         {
@@ -706,8 +708,8 @@ void PlaybackOsd::paint()
                 }
             }
             line(media_.seekable
-                     ? tr("Left / Right 10 seconds ? L1 / R1 1 minute ? L2 Pause / resume")
-                     : tr("Seeking unavailable ? L2 Pause / resume"),
+                     ? tr("Left / Right 10s | L1 / R1 1 min | L2 Pause | Square Restart")
+                     : tr("Seeking unavailable | L2 Pause / resume"),
                  30, 187, 24, 1700);
         }
         line(live_ ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
