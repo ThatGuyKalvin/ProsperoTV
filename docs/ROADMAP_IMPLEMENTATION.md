@@ -225,3 +225,30 @@ measured 199,472 microseconds per request before borrowing menu visibility data 
 The regression checks that menu views hold no owned catalogue-sized arrays/maps; timing is
 reported, not used as a flaky pass/fail limit. PIN-prompt snapshots reject browsing, and moved
 playback snapshots retain renamed labels and visibility independently of later menu changes.
+
+### Manual HLS quality (host implementation, console acceptance pending)
+
+Playback Options now has a Quality tab listing compatible master-playlist variants and the
+currently attempted/playing selection. Best available uses the existing resolution/codec/bitrate
+ranking; it is not bandwidth-adaptive streaming. Direct files, media playlists and single-quality
+masters explain that no alternative is supplied. Choices last for the current foreground stream.
+
+Changing quality cleanly closes the player, preserves the full authenticated request, VOD
+position, pause state, speed and audio delay, then re-fetches the original master. Audio and
+subtitle selections are matched by language/title/accessibility role, with stable-ID fallback
+only when metadata is absent. Missing audio leaves the replacement default playing with a notice;
+missing subtitles stay off with a notice. An explicit Audio Off choice remains off. Live playback restarts at the live edge and discards its replay buffer. Phone channel
+selection takes priority. Quality changes save progress without marking completion or advancing
+episodes.
+
+The fresh master must contain a compatible descriptor, or a compatible fallback no larger in
+resolution or advertised bandwidth. Reordering cannot silently pick a different numeric index.
+Recognized, fully validated unencrypted fragmented-MP4 media playlists now use the container
+path; encryption encountered after EXT-X-MAP still fails explicitly. Direct MP4 stays a single
+quality and the existing bounded manifest/HTTP origin policy remains in force.
+
+Native acceptance: exercise a multi-variant TS live stream and fragmented-MP4 VOD; change down
+and up while paused and while playing, verify position/tracks/speed/delay and unchanged headers,
+then reorder/remove the selected variant and fail its segment requests to check bounded fallback.
+Check direct MP4 and single-quality HLS, encrypted rejection, Circle cancellation, simultaneous
+phone selection, and long translated Quality panels. This change has no hardware verification.

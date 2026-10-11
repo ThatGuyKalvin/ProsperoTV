@@ -284,3 +284,42 @@ TEST(IptvHlsTest, AcceptsTagsBetweenTheDurationAndTheAddress)
 }
 
 } // namespace
+
+TEST(IptvHlsQualityTest, RevalidatesReorderedQualityAndBoundsFallback)
+{
+    auto master = ParseMaster(
+        "#EXTM3U\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080,CODECS=\"avc1.640028\"\nhi.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,CODECS=\"avc1.64001f\"\nmid.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS=\"avc1.42001e\"\nlo.m3u8\n");
+    iptv_hls_limits_t limits{};
+    iptv_hls_default_limits(&limits);
+    const auto selected = iptv_hls_quality(&master.variants[1]);
+    EXPECT_EQ(iptv_hls_select_quality(&master, &limits, &selected, 0), 1u);
+    std::swap(master.variants[0], master.variants[1]);
+    EXPECT_EQ(iptv_hls_select_quality(&master, &limits, &selected, 0), 0u);
+    EXPECT_EQ(iptv_hls_select_quality(&master, &limits, &selected, 1), 2u);
+    EXPECT_EQ(iptv_hls_select_quality(&master, &limits, &selected, 5), IPTV_HLS_NO_VARIANT);
+    master.variants[0].compatible = 0;
+    EXPECT_EQ(iptv_hls_select_quality(&master, &limits, &selected, 0), 2u);
+    EXPECT_EQ(iptv_hls_select_quality(&master, &limits, nullptr, 0), 1u);
+}
+
+TEST(IptvHlsQualityTest, RecognizesOnlyValidatedUnencryptedFmp4)
+{
+    const std::string prefix = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MAP:URI=\"init.mp4\"\n";
+    const std::string segments = "#EXTINF:6,\nfirst.m4s\n#EXT-X-ENDLIST\n";
+    auto playlist = std::make_unique<iptv_hls_playlist_t>();
+    const auto parse = [&](const std::string &text)
+    {
+        const char *url = "http://fixture.test/media.m3u8";
+        return iptv_hls_parse(text.data(), text.size(), url, std::strlen(url), nullptr,
+                              playlist.get());
+    };
+    EXPECT_EQ(parse(prefix + segments), IPTV_HLS_UNSUPPORTED_FMP4);
+    EXPECT_EQ(playlist->kind, IPTV_HLS_KIND_MEDIA);
+    EXPECT_EQ(parse(prefix + "#EXT-X-KEY:METHOD=AES-128,URI=\"secret\"\n" + segments),
+              IPTV_HLS_UNSUPPORTED_ENCRYPTION);
+    EXPECT_EQ(parse(prefix), IPTV_HLS_MALFORMED);
+    EXPECT_EQ(parse(prefix + "#EXTINF:6,\nfile:///private.m4s\n"), IPTV_HLS_INVALID_URL);
+}

@@ -30,11 +30,22 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
                                 unsigned visible_height, unsigned depth, unsigned hdr = false,
                                 float scale_x = 1, float scale_y = 1);
 
+struct PlaybackResume
+{
+    iptv_player_audio_state_t audio{};
+    iptv::SubtitleState subtitles;
+    iptv_player_media_state_t media{};
+};
+
 class PlaybackOsd
 {
   public:
     PlaybackOsd(Model &model, const PlayRequest &request, const Settings &settings = {});
     void set_paused(bool paused);
+    void set_quality_state(const iptv_player_quality_state_t &state);
+    std::optional<iptv_hls_quality_t> quality_selection();
+    PlaybackResume resume_state();
+    void restore_playback(const PlaybackResume &state);
     bool copy_picture_settings(Settings &settings);
     bool load_fonts(const std::string &directory);
     // The control thread alone calls input and reads selected_channel. Drawing
@@ -74,6 +85,12 @@ class PlaybackOsd
     std::string current_id_, title_, now_, next_;
     bool live_ = false, list_ = false, dirty_ = true, started_ = false;
     bool audio_menu_ = false;
+    iptv_player_quality_state_t quality_{};
+    unsigned quality_focus_ = 0;
+    std::optional<iptv_hls_quality_t> quality_selection_;
+    std::optional<iptv_player_audio_state_t> restore_audio_;
+    std::optional<iptv::SubtitleState> restore_subtitles_;
+    std::optional<iptv_player_media_state_t> restore_media_;
     iptv_player_live_state_t history_{};
     iptv_player_media_state_t media_{};
     bool on_demand_ = false;

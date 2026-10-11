@@ -136,6 +136,19 @@ typedef struct iptv_hls_playlist {
     iptv_hls_segment_t segments[IPTV_HLS_MAX_SEGMENTS];
 } iptv_hls_playlist_t;
 
+/* A URL-free quality descriptor; zero bandwidth means best available. */
+typedef struct iptv_hls_quality {
+    uint64_t bandwidth;
+    uint32_t width, height;
+    iptv_hls_codec_t codec;
+    iptv_hls_video_range_t video_range;
+} iptv_hls_quality_t;
+iptv_hls_quality_t iptv_hls_quality(const iptv_hls_variant_t *variant);
+/* Revalidate against a fresh master. Fallback never exceeds these ceilings. */
+uint32_t iptv_hls_select_quality(const iptv_hls_playlist_t *playlist,
+                               const iptv_hls_limits_t *limits,
+                               const iptv_hls_quality_t *quality, uint32_t excluded);
+
 void iptv_hls_default_limits(iptv_hls_limits_t *limits);
 
 iptv_hls_result_t iptv_hls_resolve_url(

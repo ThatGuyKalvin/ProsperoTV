@@ -979,6 +979,7 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
     bool pending_segment = false;
     bool pending_discontinuity = false;
     bool segments_seen = false;
+    bool fmp4 = false;
     /* A live playlist may list hours of segments: only the newest ones are kept, in a ring. */
     uint64_t total_segments = 0;
     uint32_t pending_duration_ms = 0;
@@ -1038,7 +1039,17 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
         if (starts_with(line, "#EXT-X-BYTERANGE:"))
             return fail(playlist, IPTV_HLS_UNSUPPORTED_BYTE_RANGE, line_number);
         if (starts_with(line, "#EXT-X-MAP:"))
-            return fail(playlist, IPTV_HLS_UNSUPPORTED_FMP4, line_number);
+        {
+            slice_t attributes{line.data + 11, line.size - 11}, uri{};
+            char resolved[IPTV_HLS_URL_BYTES]{};
+            if (master_seen || pending_variant ||
+                find_attribute(attributes, "URI", &uri) != ATTR_FOUND ||
+                iptv_hls_resolve_url(playlist_url, playlist_url_bytes, uri.data, uri.size, resolved,
+                                     sizeof(resolved)) != IPTV_HLS_OK)
+                return fail(playlist, IPTV_HLS_MALFORMED, line_number);
+            fmp4 = media_seen = true;
+            continue; // Validate the complete playlist, especially later encryption tags.
+        }
         if (starts_with(line, "#EXT-X-PART:") || starts_with(line, "#EXT-X-PRELOAD-HINT:") ||
             starts_with(line, "#EXT-X-SKIP:") || equal(line, "#EXT-X-I-FRAMES-ONLY"))
             return fail(playlist, IPTV_HLS_UNSUPPORTED_FEATURE, line_number);
@@ -1079,8 +1090,7 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
             }
             else
             {
-                if (has_fmp4_extension(destination))
-                    return fail(playlist, IPTV_HLS_UNSUPPORTED_FMP4, line_number);
+                fmp4 |= has_fmp4_extension(destination);
                 if (playlist->media_sequence > UINT64_MAX - total_segments)
                     return fail(playlist, IPTV_HLS_MALFORMED, line_number);
                 iptv_hls_segment_t &segment = playlist->segments[slot];
@@ -1217,7 +1227,7 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
         if (total_segments > playlist->segment_count)
         {
             /* A finished programme cannot lose its beginning. */
-            if (!playlist->is_live)
+            if (!playlist->is_live && !fmp4)
                 return fail(playlist, IPTV_HLS_OUTPUT_LIMIT, line_number);
             iptv_hls_segment_t *const first = playlist->segments;
             std::rotate(first, first + total_segments % playlist->segment_count,
@@ -1226,7 +1236,7 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
             playlist->discontinuity_sequence =
                 first->discontinuity_sequence - (first->discontinuity ? 1u : 0u);
         }
-        return IPTV_HLS_OK;
+        return fmp4 ? fail(playlist, IPTV_HLS_UNSUPPORTED_FMP4, 0) : IPTV_HLS_OK;
     }
     return fail(playlist, IPTV_HLS_MALFORMED, line_number);
 }
@@ -1337,4 +1347,39 @@ bool iptv::HlsVariantManifest(const iptv_hls_playlist_t &master, uint32_t index,
     result += std::string("\n") + variant.url + "\n";
     text = std::move(result);
     return true;
+}
+
+extern "C" iptv_hls_quality_t iptv_hls_quality(const iptv_hls_variant_t *variant)
+{
+    if (!variant)
+        return {};
+    return {variant->bandwidth, variant->width, variant->height, variant->codec,
+            variant->video_range};
+}
+extern "C" uint32_t iptv_hls_select_quality(const iptv_hls_playlist_t *playlist,
+                                            const iptv_hls_limits_t *limits,
+                                            const iptv_hls_quality_t *quality, uint32_t excluded)
+{
+    if (!playlist || !limits || playlist->variant_count > IPTV_HLS_MAX_VARIANTS)
+        return IPTV_HLS_NO_VARIANT;
+    if (!quality || !quality->bandwidth)
+        return iptv_hls_select_variant(playlist, limits, excluded);
+    for (uint32_t i = 0; i < playlist->variant_count; ++i)
+    {
+        const auto &v = playlist->variants[i];
+        if (v.bandwidth > quality->bandwidth ||
+            (quality->width && (!v.width || v.width > quality->width)) ||
+            (quality->height && (!v.height || v.height > quality->height)))
+            excluded |= UINT32_C(1) << i;
+    }
+    for (uint32_t i = 0; i < playlist->variant_count; ++i)
+    {
+        const auto &v = playlist->variants[i];
+        if (!(excluded & (UINT32_C(1) << i)) && v.bandwidth == quality->bandwidth &&
+            v.width == quality->width && v.height == quality->height && v.codec == quality->codec &&
+            v.video_range == quality->video_range &&
+            iptv_hls_select_variant(playlist, limits, ~(UINT32_C(1) << i)) == i)
+            return i;
+    }
+    return iptv_hls_select_variant(playlist, limits, excluded);
 }

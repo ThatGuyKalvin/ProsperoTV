@@ -1124,7 +1124,8 @@ TEST_F(ModelTest, PlaybackPictureModesDoNotSelectTracksOrChannels)
     ASSERT_TRUE(model.take_play_request(&request));
     ptv::PlaybackOsd controls(model, request);
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 2), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 2), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 2), 1);
     for (unsigned mode = 0; mode < 7; ++mode)
     {
         EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
@@ -1333,5 +1334,84 @@ TEST_F(ModelTest, PhoneCustomHeadersPreserveSecretsAndRejectEscapedInjection)
     EXPECT_EQ(model.remote_sources(prefix + R"(,"extraHeaders":""})", output), 200);
     ASSERT_TRUE(settle(model));
     EXPECT_TRUE(model.saved_source(2)->extra_headers.empty());
+    model.close();
+}
+
+TEST_F(ModelTest, QualityPickerReopensOnlyPlayableChoicesAndKeepsTracksAcrossIds)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    request.live = false;
+    ptv::PlaybackOsd controls(model, request);
+    EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 2), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
+    EXPECT_FALSE(controls.quality_selection());
+    iptv_player_quality_state_t quality{};
+    quality.count = 1;
+    controls.set_quality_state(quality);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
+    EXPECT_FALSE(controls.quality_selection());
+    quality.count = 2;
+    quality.variants[0] = {2000000, 1280, 720, IPTV_HLS_CODEC_AVC, IPTV_HLS_VIDEO_RANGE_SDR};
+    controls.set_quality_state(quality);
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ASSERT_TRUE(controls.load_fonts(std::getenv("KIT_FONTS")));
+    std::vector<std::uint8_t> video(1920 * 1088 * 3 / 2, 77);
+    EXPECT_TRUE(controls.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 3));
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 4), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 5), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 6), 1); // Unsupported row cannot reopen.
+    EXPECT_FALSE(controls.quality_selection());
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 7), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 8), 2);
+    ASSERT_TRUE(controls.quality_selection());
+    EXPECT_EQ(controls.quality_selection()->bandwidth, 2000000u);
+    ptv::PlaybackResume resume;
+    resume.audio.count = 1;
+    resume.audio.tracks[0] = {101, 15, "eng", 0};
+    resume.audio.selected_pid = 101;
+    resume.audio.delay_ms = 250;
+    resume.subtitles.tracks = {{1, iptv::SubtitleCodec::webvtt, "en", "English", false, false}};
+    resume.subtitles.selected = 1;
+    resume.media.paused = 1;
+    controls.restore_playback(resume);
+    EXPECT_EQ(controls.take_audio_delay(), 250);
+    auto audio = resume.audio;
+    audio.tracks[0].pid = 202;
+    audio.selected_pid = 202;
+    controls.set_audio_state(audio);
+    EXPECT_EQ(controls.take_audio_selection(), 202u);
+    auto subtitles = resume.subtitles;
+    subtitles.tracks[0].id = 9;
+    controls.set_subtitle_state(subtitles);
+    EXPECT_EQ(controls.take_subtitle_selection(), 9u);
+    iptv_player_media_state_t media{};
+    controls.set_media_state(media);
+    EXPECT_FALSE(controls.take_media_pause());
+    media.available = 1;
+    controls.set_media_state(media);
+    EXPECT_EQ(controls.take_media_pause(), true);
+    controls.set_media_state(media);
+    EXPECT_FALSE(controls.take_media_pause());
+    controls.restore_playback(resume);
+    audio.tracks[0] = {303, 15, "spa", 0};
+    controls.set_audio_state(audio);
+    EXPECT_FALSE(controls.take_audio_selection());
+    resume.audio.disabled = 1;
+    controls.restore_playback(resume);
+    controls.set_audio_state(audio);
+    EXPECT_EQ(controls.take_audio_selection(), 0u);
+    subtitles.tracks[0].language = "es";
+    controls.set_subtitle_state(subtitles);
+    EXPECT_EQ(controls.take_subtitle_selection(), 0u);
+    request.live = true;
+    ptv::PlaybackOsd live(model, request);
+    live.set_quality_state(quality);
+    EXPECT_EQ(live.input(IPTV_INPUT_OPTIONS, 1), 1);
+    EXPECT_EQ(live.input(IPTV_INPUT_L1, 2), 1);
+    EXPECT_EQ(live.input(IPTV_INPUT_CIRCLE, 3), 1);
+    EXPECT_FALSE(live.quality_selection());
     model.close();
 }

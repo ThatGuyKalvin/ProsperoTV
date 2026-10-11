@@ -893,7 +893,8 @@ void append_autotest_receipt(const char *archive_path, const char *receipt_path)
 
 // Plays the channel's addresses in order until one opens.
 PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_after_ms,
-                                const char *archive_path)
+                                const char *archive_path,
+                                const ptv::PlaybackResume *resume = nullptr)
 {
     PlaybackOutcome outcome{};
     for (std::size_t candidate = 0; candidate < request.urls.size(); ++candidate)
@@ -909,6 +910,9 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
         }
         std::remove(kLatestReceiptPath);
         iptv_player_set_start_position(request.start_position_us);
+        if (resume)
+            iptv_player_set_initial_controls(resume->media.paused, resume->media.speed_percent,
+                                             resume->audio.delay_ms);
         outcome.result = iptv_player_run_configured(
             request.urls[candidate].c_str(), request.channel_name.c_str(),
             request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
@@ -1298,10 +1302,17 @@ int main()
     LastPlayback last;
     std::string menu_notice;
     std::optional<ptv::PlayRequest> next_channel;
+    std::optional<ptv::PlaybackResume> next_resume;
+    std::optional<iptv_hls_quality_t> next_quality;
     for (;;)
     {
         ptv::Model &model = *owned_model;
         ptv::PlayRequest request;
+        const auto resume = std::move(next_resume);
+        const auto quality = next_quality;
+        next_resume.reset();
+        next_quality.reset();
+        iptv_player_set_quality(quality ? &*quality : nullptr);
         const bool switching = next_channel.has_value();
         if (switching)
         {
@@ -1385,6 +1396,8 @@ int main()
             },
             &phone);
         ptv::PlaybackOsd controls(model, request, settings);
+        if (resume)
+            controls.restore_playback(*resume);
         const bool osd_ready = controls.load_fonts(tv::storage::app_file("assets/fonts"));
         struct PlaybackControlsContext
         {
@@ -1404,6 +1417,9 @@ int main()
                     iptv_player_audio_state_t audio{};
                     iptv_player_audio_state(&audio);
                     osd.set_audio_state(audio);
+                    iptv_player_quality_state_t quality{};
+                    iptv_player_quality_state(&quality);
+                    osd.set_quality_state(quality);
                     const auto subtitle_state = iptv::player_subtitles().state();
                     osd.set_subtitle_state(subtitle_state);
                     iptv_player_live_state_t live{};
@@ -1505,7 +1521,8 @@ int main()
         iptv_player_set_sleep_deadline(model.sleep_timer.deadline());
         if (script.active())
             iptv_input_schedule_start(); // "during" steps count from here
-        const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
+        const PlaybackOutcome outcome =
+            play_candidates(request, script.watch_ms(), nullptr, resume ? &*resume : nullptr);
         iptv_remote_set_browse_handler(nullptr, nullptr);
         iptv_player_set_controls(nullptr, nullptr);
         iptv_native_agc_set_osd(nullptr, nullptr);
@@ -1585,13 +1602,22 @@ int main()
         }
         iptv_player_media_state_t media{};
         iptv_player_media_state(&media);
+        const auto selected_quality = controls.quality_selection();
         if ((media.presented || outcome.result == 0) &&
             model.finish_vod(request, media.position_us, media.duration_us,
-                             outcome.result == 0 && phone.selected.empty()))
+                             outcome.result == 0 && phone.selected.empty() && !selected_quality))
         {
             ptv::PlayRequest next;
             if (model.take_play_request(&next))
                 next_channel = std::move(next);
+        }
+        if (selected_quality && outcome.result >= 0 && phone.selected.empty() &&
+            !model.sleep_timer.sleeping())
+        {
+            next_channel = request;
+            next_channel->start_position_us = request.live ? 0 : media.position_us;
+            next_resume = controls.resume_state();
+            next_quality = selected_quality;
         }
         if (const auto selected = controls.selected_channel(); selected && outcome.result >= 0 &&
                                                                !model.sleep_timer.sleeping() &&
@@ -1599,7 +1625,11 @@ int main()
         {
             ptv::PlayRequest next;
             if (model.take_play_request(&next))
+            {
                 next_channel = std::move(next);
+                next_resume.reset();
+                next_quality.reset();
+            }
         }
         if (!phone.selected.empty() && outcome.result >= 0 && !model.sleep_timer.sleeping())
         {

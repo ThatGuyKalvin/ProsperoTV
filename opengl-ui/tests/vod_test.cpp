@@ -725,7 +725,8 @@ TEST_F(VodTest, FilmControlsClampSkipsPauseAndSelectChapters)
     EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 5), 1);
     EXPECT_EQ(controls.take_media_pause(), true);
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 6), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 7), 1); // Chapters, last tab.
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 7), 1); // Quality, last tab.
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 7), 1); // Chapters.
     EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 8), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 9), 1);
     EXPECT_EQ(controls.take_media_seek(), 50000000u);
