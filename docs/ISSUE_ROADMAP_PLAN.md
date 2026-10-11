@@ -38,3 +38,5 @@ case; another running title always takes priority.
 - 2026-10-11 | G4-G6 | integrated features | host | partial-pass: 188 UI, 129 core, 34 media, 50 tooling tests passed | console .30 occupied; native build and remaining browsing in progress
 - 2026-10-11 | G4-G6 | dc5d9e8 | host/PS5 build | partial-pass: 208 sanitized UI tests; Home, VOD details, account info, USB import linked | results/integration/console-76 | .30 occupied; no-run
 - 2026-10-11 | G4-G5 / Sources | b929ae4 | host | partial-pass: 218 sanitized UI tests; cold Home episode continuation, source HTTP defaults and custom XMLTV integrated | .30 occupied by PPSA99008; no deployment
+- 2026-10-11 | Sources / phone | 636a68e | host/PS5 build | partial-pass: 225 sanitized UI tests, full lint/static analysis (136 attributed files); arbitrary source headers and guide origin isolation | results/integration/console-77 | no-run
+- 2026-10-11 | Home / phone | 7b24316 | host/PS5 build | partial-pass: 26 focused sanitized tests; phone browsing during playback, current Home URLs and large-list phone performance | results/integration/console-78 | .30 occupied by PPSA99008; no deployment
