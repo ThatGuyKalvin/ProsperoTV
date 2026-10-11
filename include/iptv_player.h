@@ -40,12 +40,13 @@ extern "C"
         char titles[IPTV_STREAM_MAX_AUDIO_TRACKS][128];
         char languages[IPTV_STREAM_MAX_AUDIO_TRACKS][32];
         uint32_t count, selected_pid, disabled, pending;
-        int32_t result;
+        int32_t result, delay_ms;
     } iptv_player_audio_state_t;
     /* Thread-safe snapshots and requests. The demux worker applies changes
      * between chunks. Selection never accesses its session concurrently. */
     void iptv_player_audio_state(iptv_player_audio_state_t *state);
     int iptv_player_select_audio(uint32_t pid);
+    void iptv_player_set_audio_delay(int milliseconds);
     typedef struct iptv_player_live_state
     {
         uint64_t first_us, last_us, position_us;

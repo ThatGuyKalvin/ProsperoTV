@@ -41,6 +41,7 @@ class PlaybackOsd
     std::optional<unsigned> take_picture_selection();
     void set_audio_state(const iptv_player_audio_state_t &state);
     std::optional<std::uint32_t> take_audio_selection();
+    std::optional<int> take_audio_delay();
     void set_subtitle_state(const iptv::SubtitleState &state);
     void set_live_state(const iptv_player_live_state_t &state);
     void set_media_state(const iptv_player_media_state_t &state);
@@ -80,6 +81,7 @@ class PlaybackOsd
     unsigned audio_focus_ = 0;
     iptv_player_audio_state_t audio_{};
     std::optional<std::uint32_t> audio_selection_;
+    std::optional<int> audio_delay_;
     iptv::SubtitleState subtitles_;
     unsigned tab_ = 0, picture_focus_ = 0, picture_mode_ = 0;
     std::optional<unsigned> picture_selection_;
