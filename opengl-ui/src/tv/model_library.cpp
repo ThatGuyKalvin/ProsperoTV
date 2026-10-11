@@ -4,6 +4,7 @@
 
 #include "tv/i18n.hpp"
 #include "tv/model.hpp"
+#include "tv/usb_playlist.hpp"
 #include "tv/category_path.hpp"
 #include "tv/platform.hpp"
 #include "tv/settings.hpp"
@@ -727,3 +728,32 @@ bool Model::put_in_folder(std::string_view folder, unsigned index, bool included
     return true;
 }
 } // namespace ptv
+
+namespace ptv
+{
+bool Model::import_usb_playlist(const std::string &file)
+{
+    if (!require_parent() || refreshing() || !usb_playlist_path(file))
+        return false;
+    const auto available = usb_playlists(usb_root_);
+    if (std::find(available.begin(), available.end(), file) == available.end())
+    {
+        notify(Level::error, tr("The USB playlist is no longer available"));
+        return false;
+    }
+    for (const auto &source : sources_)
+        if (source.kind == 1 && source.url == file)
+        {
+            use_saved_source(source.id);
+            refresh();
+            return true;
+        }
+    SavedSource source;
+    source.kind = 1;
+    source.name = file.substr(file.find_last_of('/') + 1);
+    if (source.name.size() > 128) source.name.resize(128);
+    source.url = file;
+    source.schedule = RefreshSchedule::manual;
+    return commit_source(std::move(source));
+}
+}

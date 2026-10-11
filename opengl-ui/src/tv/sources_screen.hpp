@@ -32,6 +32,7 @@ class SourcesScreen
     ui::ListView list_;
     unsigned seen_revision_ = 0;
     std::vector<std::int64_t> ids_;
+    std::vector<std::string> usb_files_;
 };
 
 } // namespace ptv

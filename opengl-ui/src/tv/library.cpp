@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tv/library.hpp"
+#include "tv/usb_playlist.hpp"
 
 #include "iptv_catalog.h"
 #include "iptv_xtream.h"
@@ -105,6 +106,8 @@ bool valid_source(const SavedSource &source)
         return source.id == 1;
     // An original source slot may remain unconfigured after migration.
     if (source.kind <= 3 && source.id == source.kind + 1 && source.url.empty())
+        return source.username.empty() && source.password.empty() && source.mac.empty();
+    if (source.kind == 1 && usb_playlist_path(source.url))
         return source.username.empty() && source.password.empty() && source.mac.empty();
     std::string normalized;
     if (!iptv::CanonicalizeStreamUrl(source.url, &normalized) || source.url.size() > 4096)

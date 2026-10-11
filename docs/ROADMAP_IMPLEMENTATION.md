@@ -130,3 +130,23 @@ fixes, native cases and integrated acceptance.
   stop correction and repeats VOD and portal playback.
 - No real provider credentials were supplied. Protocol compatibility is tested
   with synthetic responses, not claimed for every provider.
+
+
+### USB playlist files (host implementation; native acceptance pending)
+
+Sources offers **Find playlists on USB** and import rows for top-level `.m3u` / `.m3u8`
+files under the normal `/mnt/usb0` through `/mnt/usb7` mounts. Imports become independent
+saved Custom sources; existing playlists and accounts are retained. New USB sources default
+to manual refresh. Their parsed catalogue is stored privately in the app, so saved channels
+remain available after disconnecting the drive or restarting. Refresh rereads the original
+USB path; daily/weekly schedules apply if selected. A missing drive or failed read keeps the
+last good catalogue. Reconnect the same drive at the same mount path to update it; importing
+the same path selects and refreshes its existing source. Playlist media addresses must still
+be HTTP(S); this feature does not import local video files or follow relative video paths.
+
+Discovery examines at most 4096 entries per drive and offers at most 64 playlist files.
+Names are at most 128 bytes. Only root-level regular files are accepted; hidden names,
+traversal, symlinks, directories and special files are excluded. Reads stream in 64 KiB chunks,
+with the existing 512 MiB playlist bound, catalogue limits and cancellation. File changes,
+short reads and mount changes fail without replacing the cache. No elevated USB namespace is
+used. Physical drive recognition and native interaction remain unverified.
