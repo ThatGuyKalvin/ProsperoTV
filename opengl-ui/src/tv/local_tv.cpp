@@ -127,13 +127,14 @@ iptv::http::FetchResult load_local_tv(const SavedSource &source, iptv::Catalog *
                                       iptv::ParseReport *report,
                                       const iptv::http::RequestControl *control)
 {
+    iptv::http::RequestHeaders headers{source.user_agent.c_str(), source.referrer.c_str()};
     if (source.kind == 4)
     {
         auto body = iptv::http::AllocateListBuffer(4u * 1024u * 1024u);
         if (!body.data())
             return {iptv::http::Status::response_too_large};
         auto result = platform::fetch((source.url + "/lineup.json").c_str(), body.data(),
-                                      body.size(), body.max_bytes, control);
+                                      body.size(), body.max_bytes, control, &headers);
         if (result.status == iptv::http::Status::ok &&
             !parse_hdhomerun({body.data(), result.bytes}, local_tv_source_id(source), catalog,
                              report))
@@ -141,7 +142,6 @@ iptv::http::FetchResult load_local_tv(const SavedSource &source, iptv::Catalog *
         return result;
     }
     const auto authorization = local_tv_authorization(source);
-    iptv::http::RequestHeaders headers{};
     headers.authorization = authorization.c_str();
     headers.credential_origin = source.url.c_str();
     iptv::M3uParser parser(catalog, local_tv_source_id(source), {}, report);

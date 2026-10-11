@@ -99,6 +99,8 @@ void Model::refresh_guide()
         return;
     }
     guide_file_ = guide_path();
+    guide_http_ =
+        saved_source(selected_source_id_) ? *saved_source(selected_source_id_) : SavedSource{};
     guide_authorization_ =
         active_source_ == iptv::SourceKind::Tvheadend ? local_tv_authorization(local_source_) : "";
     guide_origin_ = active_source_ == iptv::SourceKind::Tvheadend ? local_source_.url : "";
@@ -139,7 +141,8 @@ void Model::run_guide()
             const iptv::http::ListSink sink{
                 [](void *reader, const char *data, std::size_t bytes)
                 { return static_cast<XmltvReader *>(reader)->feed({data, bytes}); }, &reader};
-            iptv::http::RequestHeaders headers{};
+            iptv::http::RequestHeaders headers{guide_http_.user_agent.c_str(),
+                                               guide_http_.referrer.c_str()};
             headers.authorization = guide_authorization_.c_str();
             headers.credential_origin = guide_origin_.empty() ? nullptr : guide_origin_.c_str();
             const auto scoped =
@@ -185,6 +188,7 @@ bool Model::play_programme(unsigned index, const Programme &programme)
     play_request_.urls = {url};
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
+    apply_source_http(play_request_);
     if (active_source_ == iptv::SourceKind::Tvheadend)
     {
         play_request_.authorization = local_tv_authorization(local_source_);

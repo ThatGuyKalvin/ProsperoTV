@@ -35,11 +35,13 @@ unsigned integer(std::string_view text)
     const auto value = std::from_chars(text.data(), text.data() + text.size(), out);
     return value.ec == std::errc{} && value.ptr == text.data() + text.size() ? out : 0;
 }
-bool fetch(const std::string &url, std::string *reply, const iptv::http::RequestControl *control)
+bool fetch(const std::string &url, std::string *reply, const iptv::http::RequestControl *control,
+           const iptv::http::RequestHeaders *headers)
 {
     constexpr std::size_t limit = 16u * 1024u * 1024u;
     auto buffer = std::make_unique<char[]>(limit + 1);
-    const auto result = platform::fetch(url.c_str(), buffer.get(), limit + 1, limit, control);
+    const auto result =
+        platform::fetch(url.c_str(), buffer.get(), limit + 1, limit, control, headers);
     if (result.status != iptv::http::Status::ok)
         return false;
     reply->assign(buffer.get(), result.bytes);
@@ -261,7 +263,7 @@ struct Parser
 
 bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_view series,
               iptv::Catalog *catalog, const iptv::http::RequestControl *control, std::string *error,
-              VodMetadata *metadata)
+              VodMetadata *metadata, const iptv::http::RequestHeaders *headers)
 {
     if (metadata)
         metadata->clear();
@@ -281,7 +283,8 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
     bool ok = false;
     if (kind == VodKind::episodes)
     {
-        if (iptv::BuildXtreamSeriesUrl(account, series, &url) && fetch(url, &reply, control))
+        if (iptv::BuildXtreamSeriesUrl(account, series, &url) &&
+            fetch(url, &reply, control, headers))
         {
             JsonReader reader(reply);
             bool found = false;
@@ -326,7 +329,7 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
         iptv::BuildXtreamApiUrl(
             account, kind == VodKind::movies ? "get_vod_categories" : "get_series_categories",
             &url);
-        if (fetch(url, &reply, control) &&
+        if (fetch(url, &reply, control, headers) &&
             iptv::ParseXtreamCategories(reply, &categories) == iptv::XtreamStatus::ok)
         {
             for (const auto &category : categories)
@@ -351,8 +354,8 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
                                            });
                 },
                 &state};
-            const auto response =
-                platform::fetch_list(url.c_str(), sink, iptv::http::kMaxListBytes, control);
+            const auto response = platform::fetch_list(url.c_str(), sink, iptv::http::kMaxListBytes,
+                                                       control, headers);
             ok = response.status == iptv::http::Status::ok && splitter.complete() &&
                  splitter.found();
         }
@@ -410,16 +413,18 @@ VodLibrary::~VodLibrary()
     stop();
 }
 void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
-                           RefreshSchedule schedule)
+                           RefreshSchedule schedule, std::string user_agent, std::string referrer)
 {
     schedule_ = schedule;
     if (!playlist_ && account.server_url == account_.server_url &&
         account.username == account_.username && account.password == account_.password &&
-        cache == cache_)
+        cache == cache_ && user_agent == user_agent_ && referrer == referrer_)
         return;
     stop();
     playlist_ = nullptr;
     account_ = std::move(account);
+    user_agent_ = std::move(user_agent);
+    referrer_ = std::move(referrer);
     cache_ = std::move(cache);
     key_.clear();
     catalog_.Clear();
@@ -435,7 +440,8 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
 }
 void VodLibrary::configure_like(const VodLibrary &source)
 {
-    configure(source.account_, source.cache_, source.schedule_);
+    configure(source.account_, source.cache_, source.schedule_, source.user_agent_,
+              source.referrer_);
     if (source.playlist_)
         configure_playlist(source.playlist_);
 }
@@ -649,6 +655,7 @@ void *VodLibrary::work(void *self)
         [](void *self) { return static_cast<VodLibrary *>(self)->stop_.load(); }, &v};
     if (platform::network_init() == iptv::http::Status::ok)
     {
+        const iptv::http::RequestHeaders headers{v.user_agent_.c_str(), v.referrer_.c_str()};
         if (!v.detail_id_.empty())
         {
             v.pending_metadata_ = v.metadata_;
@@ -669,7 +676,7 @@ void *VodLibrary::work(void *self)
                 }
             }
             VodDetails detail = v.details(v.detail_id_);
-            if (fetch(url, &reply, &control))
+            if (fetch(url, &reply, &control, &headers))
             {
                 JsonReader reader(reply);
                 bool found = false;
@@ -709,7 +716,7 @@ void *VodLibrary::work(void *self)
         else
         {
             v.ok_ = load_vod(v.account_, v.kind_, v.series_, &v.pending_, &control, &v.error_,
-                             &v.pending_metadata_);
+                             &v.pending_metadata_, &headers);
             if (v.ok_)
             {
                 std::size_t bytes = 0;

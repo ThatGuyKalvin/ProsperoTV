@@ -29,7 +29,8 @@ VodMetadata load_vod_metadata(const std::string &path, const iptv::Catalog &cata
 std::vector<std::string> vod_genres(std::string_view genres);
 bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_view series,
               iptv::Catalog *catalog, const iptv::http::RequestControl *control, std::string *error,
-              VodMetadata *metadata = nullptr);
+              VodMetadata *metadata = nullptr,
+              const iptv::http::RequestHeaders *headers = nullptr);
 
 // Shares the app's network time with live-list and programme-guide downloads.
 // The Model grants that time through poll(can_download).
@@ -37,7 +38,8 @@ class VodLibrary
 {
   public:
     ~VodLibrary();
-    void configure(iptv::XtreamCredentials account, std::string cache, RefreshSchedule schedule);
+    void configure(iptv::XtreamCredentials account, std::string cache, RefreshSchedule schedule,
+                   std::string user_agent = {}, std::string referrer = {});
     void configure_playlist(const iptv::Catalog *playlist);
     void configure_like(const VodLibrary &source);
     void playlist_updated();
@@ -97,7 +99,7 @@ class VodLibrary
     void note_scripts();
     iptv::XtreamCredentials account_;
     const iptv::Catalog *playlist_ = nullptr;
-    std::string cache_, series_, key_, status_;
+    std::string cache_, series_, key_, status_, user_agent_, referrer_;
     RefreshSchedule schedule_ = RefreshSchedule::daily;
     VodKind kind_ = VodKind::movies;
     iptv::Catalog catalog_, pending_;

@@ -77,11 +77,11 @@ void Model::select_source_record(const SavedSource &source)
     if (source.kind == 2)
         xtream_ = {source.url, source.username, source.password};
     if (source.kind == 3)
-        portal_ = {source.url, source.mac};
+        portal_ = {source.url, source.mac, source.user_agent, source.referrer};
     if (source.kind >= 4)
         local_source_ = source;
     vod_.configure(source.kind == 2 ? xtream_ : iptv::XtreamCredentials{},
-                   cache_path(active_source_), schedule_);
+                   cache_path(active_source_), schedule_, source.user_agent, source.referrer);
     if (source.kind == 1)
         vod_.configure_playlist(&catalog_);
     if (changed)
@@ -106,6 +106,69 @@ bool Model::refresh_needed() const
     if (catalog_loaded_ && schedule_ == RefreshSchedule::manual)
         return false;
     return !catalog_loaded_ || refresh_due(schedule_, saved_unix_, platform::unix_time());
+}
+
+void Model::apply_source_http(PlayRequest &request) const
+{
+    if (const auto *source = saved_source(selected_source_id_))
+    {
+        if (request.user_agent.empty())
+            request.user_agent = source->user_agent;
+        if (request.referrer.empty())
+            request.referrer = source->referrer;
+    }
+}
+
+void Model::edit_source_http(std::int64_t id)
+{
+    if (!require_parent() || refreshing() || iptv_ime_busy() || !keyboard_ready_ ||
+        account_step_ != AccountStep::none)
+        return;
+    const auto *source = saved_source(id);
+    if (!source || source->kind == 0)
+        return;
+    if (source->user_agent.size() > IPTV_IME_BUFFER_CHARACTERS ||
+        source->referrer.size() > IPTV_IME_BUFFER_CHARACTERS)
+    {
+        notify(Level::warning, tr("Edit long HTTP settings from the paired phone"));
+        return;
+    }
+    http_form_ = *source;
+    account_step_ = AccountStep::http_user_agent;
+    account_prompt_pending_ = true;
+}
+
+void Model::on_http_user_agent(const char *text, void *self)
+{
+    if (!self)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    if (!text)
+    {
+        model.account_step_ = AccountStep::none;
+        model.http_form_ = {};
+        return;
+    }
+    model.http_form_.user_agent = text;
+    model.account_step_ = AccountStep::http_referrer;
+    model.account_prompt_pending_ = true;
+}
+
+void Model::on_http_referrer(const char *text, void *self)
+{
+    if (!self)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    if (!text)
+    {
+        model.account_step_ = AccountStep::none;
+        model.http_form_ = {};
+        return;
+    }
+    model.http_form_.referrer = text;
+    model.account_step_ = AccountStep::none;
+    model.commit_source(model.http_form_);
+    model.http_form_ = {};
 }
 
 void Model::warn_account_expiry()
@@ -421,6 +484,7 @@ bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series, 
     play_request_.source_id = item.source_id;
     play_request_.user_agent = item.http_user_agent;
     play_request_.referrer = item.http_referrer;
+    apply_source_http(play_request_);
     play_request_.record_channel_result = false;
     play_request_.on_demand = true;
     play_request_.start_position_us = library_.playback_progress(item.id).first;

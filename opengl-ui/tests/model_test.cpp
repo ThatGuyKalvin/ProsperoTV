@@ -1226,3 +1226,60 @@ TEST(ChannelHistory, CountsOnlySessionsThatActuallyPresentedVideo)
     EXPECT_FALSE(ptv::completed_watch("presented_frames=123garbage\n", 20, 1));
     EXPECT_FALSE(ptv::completed_watch("", 20, 1));
 }
+
+TEST_F(ModelTest, PhoneSourceHttpDefaultsApplyToPlaylistAndChannelOverridesWin)
+{
+    std::ofstream(playlist_)
+        << "#EXTM3U\n#EXTINF:-1,A\nhttps://stream.invalid/a.ts\n"
+           "#EXTINF:-1,B\n#EXTVLCOPT:http-user-agent=ChannelPlayer/3\n"
+           "#EXTVLCOPT:http-referrer=https://channel.invalid/watch\nhttps://stream.invalid/b.ts\n";
+    ptv::Model model(dir_);
+    load(model);
+    std::string output;
+    EXPECT_EQ(
+        model.remote_sources(
+            R"({"operation":"save","id":2,"kind":1,"name":"Headers","url":"https://source.invalid/list.m3u","username":"","mac":"","schedule":2,"userAgent":"SourcePlayer/1","referrer":"https://source.invalid/watch"})",
+            output),
+        200)
+        << output;
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play(0));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.user_agent, "SourcePlayer/1");
+    EXPECT_EQ(request.referrer, "https://source.invalid/watch");
+    ASSERT_TRUE(model.play(1));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.user_agent, "ChannelPlayer/3");
+    EXPECT_EQ(request.referrer, "https://channel.invalid/watch");
+    bool fetched_source = false;
+    for (const auto &fetched : host::requests())
+        if (fetched.url == "https://source.invalid/list.m3u")
+        {
+            fetched_source = true;
+            EXPECT_EQ(fetched.user_agent, "SourcePlayer/1");
+            EXPECT_EQ(fetched.referrer, "https://source.invalid/watch");
+        }
+    EXPECT_TRUE(fetched_source);
+    ASSERT_EQ(model.remote_sources("", output), 200);
+    EXPECT_NE(output.find("SourcePlayer/1"), std::string::npos);
+    EXPECT_NE(output.find("https://source.invalid/watch"), std::string::npos);
+    model.close();
+}
+
+TEST_F(ModelTest, SourceHttpControllerFormSavesBothFieldsTogether)
+{
+    ptv::Model model(dir_);
+    load(model);
+    model.edit_source_http(2);
+    model.poll();
+    EXPECT_EQ(host::keyboard_title(), "Source user agent (1 of 2)");
+    host::set_keyboard_text("RemotePlayer/2");
+    model.poll();
+    EXPECT_EQ(host::keyboard_title(), "Source referrer (2 of 2)");
+    host::set_keyboard_text("https://provider.invalid/watch");
+    model.poll();
+    EXPECT_EQ(model.saved_source(2)->user_agent, "RemotePlayer/2");
+    EXPECT_EQ(model.saved_source(2)->referrer, "https://provider.invalid/watch");
+    model.close();
+}

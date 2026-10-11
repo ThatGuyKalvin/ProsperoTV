@@ -218,6 +218,7 @@ class Model
     const std::string &usb_root() const { return usb_root_; }
     void set_usb_root(std::string root) { usb_root_ = std::move(root); }
     void edit_saved_source(std::int64_t id);
+    void edit_source_http(std::int64_t id);
     bool remove_source(std::int64_t id);
     bool set_schedule(std::int64_t id, RefreshSchedule schedule);
     // Called on the menu thread by the authenticated phone remote.
@@ -589,6 +590,8 @@ class Model
         local_address,
         local_username,
         local_password,
+        http_user_agent,
+        http_referrer,
     };
 
     std::string path(const char *name) const;
@@ -603,6 +606,9 @@ class Model
     void set_source_text(std::string title, std::string detail);
     void notify(Level level, std::string title, std::string body = {});
     void warn_account_expiry();
+    void apply_source_http(PlayRequest &request) const;
+    static void on_http_user_agent(const char *text, void *self);
+    static void on_http_referrer(const char *text, void *self);
 
     void apply_custom_url(const char *url);
     void apply_account_server(const char *server);
@@ -717,7 +723,7 @@ class Model
     iptv::XtreamCredentials xtream_;
     iptv::XtreamCredentials account_form_;
     PortalCredentials portal_, portal_form_, refresh_portal_;
-    SavedSource local_source_, local_form_, refresh_local_;
+    SavedSource local_source_, local_form_, refresh_local_, http_form_, refresh_http_, guide_http_;
     AccountStep account_step_ = AccountStep::none;
     bool account_prompt_pending_ = false;
 

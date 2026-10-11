@@ -143,6 +143,11 @@ void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
 {
     auto &model = shared_.model;
     const auto id = focused_id();
+    if (input.is_pressed(Action::jump_next) && id > 1)
+    {
+        model.edit_source_http(id);
+        return;
+    }
     if (input.is_pressed(Action::north) && id > 1)
     {
         model.edit_saved_source(id);
@@ -289,6 +294,8 @@ int SourcesScreen::hints(ui::Hint *out, int capacity) const
         add({ui::Button::triangle, tr("Edit")});
     if (focused_id() > 0)
         add({ui::Button::square, tr("Refresh schedule")});
+    if (focused_id() > 1)
+        add({ui::Button::r2, tr("HTTP settings")});
     return count;
 }
 } // namespace ptv
