@@ -100,7 +100,7 @@ void start(const std::string &logs_dir)
         std::remove(previous.c_str());
         std::rename(g_path.c_str(), previous.c_str());
     }
-    ptv::diag::set_sink(sink);
+    ptv::diag::set_sink(sink, g_path);
     void *thread = ptv::platform::thread_start(writer, nullptr, 64u * 1024u, "TvDiagLog");
     if (thread != nullptr)
         (void)ptv::platform::thread_detach(thread);

@@ -71,6 +71,17 @@ TEST_F(DiagTest, ABuildCanKeepItOnWhateverTheSettingSays)
     EXPECT_EQ(g_lines.size(), 1u);
 }
 
+TEST_F(DiagTest, ReportsTheActualSinkDestinationWithoutBorrowingItsStorage)
+{
+    std::string path = "/data/prosperotv/profiles/test/logs/debug-trace.txt";
+    ptv::diag::set_sink(keep, path);
+    const auto expected = path;
+    path.clear();
+    EXPECT_EQ(ptv::diag::destination(), expected);
+    ptv::diag::set_sink(nullptr);
+    EXPECT_EQ(ptv::diag::destination(), "debug-trace.txt");
+}
+
 TEST_F(DiagTest, ALongLineIsCutNotSplit)
 {
     ptv::diag::set_enabled(true);

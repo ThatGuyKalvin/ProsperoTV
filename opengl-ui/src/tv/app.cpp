@@ -209,7 +209,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_value(kRowSleepRemaining, tr("Time remaining"), tr("Off"));
     form_.add_header(tr("TROUBLESHOOTING"));
     form_.add_toggle(kRowDiagnostics, tr("Diagnostic log"), settings.diagnostics).description =
-        tr("Records what the app does in logs/debug-trace.txt, to send with a report.");
+        std::string(tr("Records playback and decoder details for a problem report.")) + " " +
+        diag::destination();
     form_.add_action(kRowReport, tr("Export failure report to USB")).description =
         tr("Saves the most recent playback failure without account details or stream addresses.");
     form_.add_header(tr("HOUSEHOLD"));

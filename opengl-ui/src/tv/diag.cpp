@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <mutex>
 
 namespace ptv::diag
 {
@@ -17,12 +18,24 @@ namespace
 std::atomic<bool> g_enabled{false};
 std::atomic<bool> g_forced{false};
 std::atomic<Sink> g_sink{nullptr};
+std::mutex g_destination_mutex;
+std::string g_destination = "debug-trace.txt";
 
 } // namespace
 
-void set_sink(Sink sink)
+void set_sink(Sink sink, std::string_view destination)
 {
+    {
+        const std::lock_guard lock(g_destination_mutex);
+        g_destination = destination.empty() ? "debug-trace.txt" : destination;
+    }
     g_sink.store(sink, std::memory_order_release);
+}
+
+std::string destination()
+{
+    const std::lock_guard lock(g_destination_mutex);
+    return g_destination;
 }
 
 void set_enabled(bool on)
