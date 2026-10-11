@@ -1320,9 +1320,9 @@ int main()
             next_channel.reset();
         }
         std::string storage_result;
-        // Portal switches use the existing cancellable create_link screen.
-        // Other channels go straight from one fully closed player to the next.
-        if ((!switching || !request.portal_command.empty()) &&
+        // A quality restart reuses its already resolved portal URL and credentials.
+        // Other portal switches still use the cancellable create_link screen.
+        if ((!switching || (!resume && !request.portal_command.empty())) &&
             !run_menu(model, &settings, last, &request, script, menu_notice, &storage_result))
             sys::park();
         menu_notice.clear();
