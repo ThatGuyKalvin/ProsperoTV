@@ -341,3 +341,13 @@ all five signals, preserved termination, custom/ignored handlers and malformed f
 Capture is best effort: stack exhaustion, forced termination, power loss and hangs may
 produce no record; a blocked filesystem may delay a fatal handler. Native signal
 delivery and export still require console validation. No console crash was induced.
+
+Integrated validation at `ba9182a`: the PS5 application links successfully (40,287,388-byte
+ELF, SHA-256 `eef0c65391ece71c5dee35b404ed1b8579e64ff1159ea4856edc63a82380fb31`),
+with evidence in `results/integration/console-81`. The 251-test sanitizer run passed
+250 tests; editing a translation during compilation left its implementation object stale.
+Rebuilding the stable tree passed all six targeted translation, report-redaction and
+source-check tests. The additional checker/viewing-allowance integration regression
+passes in the root tree and proves checks preserve the parental file byte for byte,
+including after quota exhaustion. The latest console preflight found `PPSA99008_000`
+running, so this candidate has not been installed or exercised on the console.
