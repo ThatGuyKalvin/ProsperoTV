@@ -202,7 +202,7 @@ void PlaybackOsd::set_quality_state(const iptv_player_quality_state_t &state)
     {
         quality_ = state;
         quality_.count = std::min(quality_.count, unsigned(IPTV_HLS_MAX_VARIANTS));
-        quality_focus_ = std::min(quality_focus_, quality_.count);
+        quality_focus_ = std::min(quality_focus_, quality_.count + 1);
         dirty_ = true;
     }
 }
@@ -210,6 +210,11 @@ std::optional<iptv_hls_quality_t> PlaybackOsd::quality_selection()
 {
     std::lock_guard lock(mutex_);
     return quality_selection_;
+}
+bool PlaybackOsd::auto_quality_selection()
+{
+    std::lock_guard lock(mutex_);
+    return auto_quality_selection_;
 }
 PlaybackResume PlaybackOsd::resume_state()
 {
@@ -484,17 +489,29 @@ int PlaybackOsd::input(int action, std::uint64_t now)
         }
         if (tab_ == (live_ ? 3u : 4u))
         {
+            const bool auto_available =
+                quality_.selected < quality_.count &&
+                quality_.variants[quality_.selected].bandwidth &&
+                std::count_if(quality_.variants, quality_.variants + quality_.count,
+                              [](const auto &v) { return v.bandwidth != 0; }) > 1;
             if (action == IPTV_INPUT_CIRCLE)
                 audio_menu_ = false;
             else if (action == IPTV_INPUT_UP || action == IPTV_INPUT_LEFT)
                 quality_focus_ = quality_focus_ ? quality_focus_ - 1 : 0;
             else if (action == IPTV_INPUT_DOWN || action == IPTV_INPUT_RIGHT)
-                quality_focus_ = std::min(quality_focus_ + 1, quality_.count);
+                quality_focus_ = std::min(quality_focus_ + 1, quality_.count + 1);
             else if (action == IPTV_INPUT_CROSS && quality_.count > 1 &&
-                     (!quality_focus_ || quality_.variants[quality_focus_ - 1].bandwidth))
+                     (!quality_focus_ ||
+                      (quality_focus_ == quality_.count + 1
+                           ? auto_available
+                           : quality_.variants[quality_focus_ - 1].bandwidth != 0)))
             {
-                quality_selection_ =
-                    quality_focus_ ? quality_.variants[quality_focus_ - 1] : iptv_hls_quality_t{};
+                auto_quality_selection_ = quality_focus_ == quality_.count + 1;
+                quality_selection_ = quality_focus_ && !auto_quality_selection_
+                                         ? quality_.variants[quality_focus_ - 1]
+                                     : auto_quality_selection_
+                                         ? quality_.variants[quality_.selected]
+                                         : iptv_hls_quality_t{};
                 audio_menu_ = false;
                 return 2;
             }
@@ -717,14 +734,26 @@ void PlaybackOsd::paint()
         if (quality_.count > 1)
         {
             const unsigned begin = quality_focus_ / 9 * 9;
-            for (unsigned row = 0; row < 9 && begin + row <= quality_.count; ++row)
+            for (unsigned row = 0; row < 9 && begin + row <= quality_.count + 1; ++row)
             {
                 const auto index = begin + row, top = 110 + row * 66;
                 if (index == quality_focus_)
                     for (unsigned y = top; y < top + 60; ++y)
                         std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
                 std::string label = tr("Best available");
-                if (index)
+                if (index == quality_.count + 1)
+                {
+                    const bool available =
+                        quality_.selected < quality_.count &&
+                        quality_.variants[quality_.selected].bandwidth &&
+                        std::count_if(quality_.variants, quality_.variants + quality_.count,
+                                      [](const auto &v) { return v.bandwidth != 0; }) > 1;
+                    label = tr(available ? "Auto (reduce on buffering)"
+                                         : "Auto unavailable (missing bitrate)");
+                    if (quality_.automatic)
+                        label = std::string(tr("Playing")) + ": " + label;
+                }
+                else if (index)
                 {
                     const auto &v = quality_.variants[index - 1];
                     label = v.bandwidth ? std::to_string(v.bandwidth / 1000) + " kbps"

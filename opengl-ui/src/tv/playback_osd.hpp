@@ -44,6 +44,7 @@ class PlaybackOsd
     void set_paused(bool paused);
     void set_quality_state(const iptv_player_quality_state_t &state);
     std::optional<iptv_hls_quality_t> quality_selection();
+    bool auto_quality_selection();
     PlaybackResume resume_state();
     void restore_playback(const PlaybackResume &state);
     bool copy_picture_settings(Settings &settings);
@@ -88,6 +89,7 @@ class PlaybackOsd
     iptv_player_quality_state_t quality_{};
     unsigned quality_focus_ = 0;
     std::optional<iptv_hls_quality_t> quality_selection_;
+    bool auto_quality_selection_ = false;
     std::optional<iptv_player_audio_state_t> restore_audio_;
     std::optional<iptv::SubtitleState> restore_subtitles_;
     std::optional<iptv_player_media_state_t> restore_media_;

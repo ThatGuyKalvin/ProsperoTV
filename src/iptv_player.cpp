@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_player.h"
+#include "iptv_hls_auto.hpp"
 #include <algorithm>
 #if IPTV_PROBE || IPTV_NETWORK_COMPAT
 #include <curl/curl.h>
@@ -142,6 +143,15 @@ constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
 constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
 std::mutex gQualityMutex;
 iptv_player_quality_state_t gQualityState{};
+iptv::HlsAutoReduction gAutoQuality;
+iptv_hls_quality_t gAutoPending{};
+std::atomic<bool> gAutoReplay{false};
+void ResetAutoSamples()
+{
+    std::lock_guard lock(gQualityMutex);
+    gAutoQuality.reset_samples();
+    gAutoPending = {};
+}
 std::mutex gLiveMutex;
 iptv_player_live_state_t gLiveState{};
 int gLivePauseRequest = -1;
@@ -727,6 +737,12 @@ void BuildNativeCandidates(iptv_hls_playlist_t *master, const iptv_hls_limits_t 
         if (selected == IPTV_HLS_NO_VARIANT)
             break;
         excluded |= UINT32_C(1) << selected;
+        {
+            std::lock_guard lock(gQualityMutex);
+            if (gQualityState.automatic &&
+                master->variants[selected].bandwidth > gAutoQuality.ceiling)
+                continue;
+        }
         if (!iptv::HlsVariantManifest(*master, selected, candidates->manifests[candidates->count]))
             continue;
         std::snprintf(candidates->urls[candidates->count], IPTV_HLS_URL_BYTES, "%s",
@@ -885,6 +901,7 @@ class StreamRunner
 
     bool Start(bool keep_history = false)
     {
+        ResetAutoSamples();
         if (keep_history)
         {
             std::uint32_t selected = 0;
@@ -1196,6 +1213,7 @@ class StreamRunner
         UpdateMediaControls();
         if (gMediaSeekRequest.load(std::memory_order_acquire) >= 0)
         {
+            ResetAutoSamples();
             playback_stop_requested_ = true;
             if (adapter_.initialized)
                 iptv_native_backend_request_stop(&adapter_.backend);
@@ -1218,6 +1236,7 @@ class StreamRunner
         iptv_input_poll();
         if (gControls && gControls(gControlsContext, -1) == 2)
         {
+            ResetAutoSamples();
             playback_stop_requested_ = true;
             if (adapter_.initialized)
                 iptv_native_backend_request_stop(&adapter_.backend);
@@ -1260,11 +1279,22 @@ class StreamRunner
             if (handled == 2 || event.action == IPTV_INPUT_CIRCLE ||
                 event.action == IPTV_INPUT_OPTIONS)
             {
+                ResetAutoSamples();
                 playback_stop_requested_ = true;
                 if (adapter_.initialized)
                 {
                     iptv_native_backend_request_stop(&adapter_.backend);
                 }
+                return true;
+            }
+        }
+        {
+            std::lock_guard lock(gQualityMutex);
+            if (gAutoPending.bandwidth)
+            {
+                playback_stop_requested_ = true;
+                if (adapter_.initialized)
+                    iptv_native_backend_request_stop(&adapter_.backend);
                 return true;
             }
         }
@@ -1284,6 +1314,33 @@ class StreamRunner
     bool NativeTelemetry(iptv_native_telemetry_t *telemetry) const
     {
         return telemetry && iptv_native_backend_get_telemetry(&adapter_.backend, telemetry) == 0;
+    }
+
+    void NetworkSample(std::uint64_t bytes, std::uint64_t elapsed)
+    {
+        iptv_native_telemetry_t telemetry{};
+        if (!NativeTelemetry(&telemetry))
+            return;
+        const bool suspended = Paused() || gMediaSeekRequest.load() >= 0 || gAutoReplay.load();
+        const auto now = MonotonicUsec();
+        std::lock_guard lock(gQualityMutex);
+        if (!gQualityState.automatic || gAutoPending.bandwidth || gQualityState.count < 2 ||
+            gQualityState.selected >= gQualityState.count)
+            return;
+        const auto current = gQualityState.variants[gQualityState.selected];
+        if (!gAutoQuality.sample(now, bytes, elapsed, current.bandwidth, PresentedFrames(),
+                                 telemetry.video_queue_underruns + telemetry.audio_queue_underruns,
+                                 suspended))
+            return;
+        const auto lower_index =
+            gAutoQuality.lower(gQualityState.variants, gQualityState.count, gQualityState.selected);
+        if (lower_index != IPTV_HLS_NO_VARIANT)
+        {
+            const auto lower = gQualityState.variants[lower_index];
+            gAutoPending = lower;
+            tv_diag_line(
+                "[player] auto quality: sustained slow downloads and starvation; reducing");
+        }
     }
 
     bool HasPresentedVideo() const
@@ -1973,6 +2030,8 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
     {
         const std::uint64_t read_started = MonotonicUsec();
         const int read = iptv::http::ReadStream(request, buffer, buffer_bytes);
+        runner->NetworkSample(read > 0 ? static_cast<std::uint64_t>(read) : 0,
+                              MonotonicUsec() - read_started);
         if (diagnostics)
         {
             const std::uint64_t elapsed = MonotonicUsec() - read_started;
@@ -2161,7 +2220,9 @@ int OpenAndFeedSegment(const char *url, StreamRunner *runner, std::uint8_t *buff
     for (unsigned attempt = 0; attempt < 3u; ++attempt)
     {
         iptv::http::StreamRequest request{};
+        const auto opened_at = MonotonicUsec();
         const auto status = iptv::http::OpenStream(url, "video/mp2t, */*", &request, headers);
+        runner->NetworkSample(0, MonotonicUsec() - opened_at);
         if (status != iptv::http::Status::ok)
         {
             if (attempt == 2u)
@@ -2416,7 +2477,11 @@ int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buff
     {
         {
             std::lock_guard lock(gQualityMutex);
+            if (gQualityState.automatic &&
+                gQualityState.variants[candidates->indices[index]].bandwidth > gAutoQuality.ceiling)
+                continue;
             gQualityState.selected = candidates->indices[index];
+            gAutoQuality.reset_samples();
         }
         if (index && !runner->Start())
         {
@@ -2437,6 +2502,11 @@ int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buff
                     : RunContainer(effective_url, runner, headers, &candidates->manifests[index]);
         if (result >= 0)
             break;
+        {
+            std::lock_guard lock(gQualityMutex);
+            if (gQualityState.automatic)
+                gAutoQuality.failed(gQualityState.variants[candidates->indices[index]].bandwidth);
+        }
     }
 
     delete candidates;
@@ -2456,6 +2526,8 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
         std::int64_t position = 0, size = -1;
         std::int64_t end = -1;
         const std::string *manifest = nullptr;
+        iptv::HlsMediaPrefix resource_prefix{};
+        std::uint64_t opening_usec = 0, sample_bytes = 0;
         std::uint64_t window_started_usec = 0, window_bytes = 0, window_reads = 0,
                       window_network_usec = 0;
         ~File()
@@ -2481,6 +2553,7 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
             const std::uint64_t started = MonotonicUsec();
             const bool opened = iptv::http::OpenStream(url.c_str(), "*/*", &request, &headers) ==
                                 iptv::http::Status::ok;
+            opening_usec += MonotonicUsec() - started;
             trace(opened ? "request opened" : "request FAILED", position, started);
             if (!opened)
                 return false;
@@ -2511,6 +2584,13 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
             const int count =
                 iptv::http::ReadStream(&request, buffer, static_cast<std::size_t>(bytes));
             const std::uint64_t ended = MonotonicUsec();
+            const auto media_kind = resource_prefix.observe(buffer, count > 0 ? count : 0);
+            sample_bytes += count > 0 ? static_cast<std::uint64_t>(count) : 0;
+            opening_usec += ended - started;
+            if (media_kind > 0)
+                runner->NetworkSample(sample_bytes, opening_usec);
+            if (media_kind)
+                sample_bytes = opening_usec = 0;
             if (ended - started >= 1000000u)
                 trace(count > 0 ? "read waited" : "read waited and FAILED", position, started);
             if (count > 0)
@@ -3122,6 +3202,7 @@ void iptv_player_media_state(iptv_player_media_state_t *state)
 }
 int iptv_player_seek_media(uint64_t position_us)
 {
+    ResetAutoSamples();
     std::lock_guard lock(gMediaMutex);
     if (!gMediaState.available || !gMediaState.seekable || !gMediaState.duration_us)
         return IPTV_STREAM_INVALID_STATE;
@@ -3152,6 +3233,7 @@ int iptv_player_set_speed(unsigned percent)
 
 int iptv_player_pause_media(int paused)
 {
+    ResetAutoSamples();
     std::lock_guard lock(gMediaMutex);
     if (!gMediaState.available)
         return IPTV_STREAM_INVALID_STATE;
@@ -3209,6 +3291,7 @@ void iptv_player_live_state(iptv_player_live_state_t *state)
 }
 int iptv_player_pause_live(int paused)
 {
+    ResetAutoSamples();
     std::lock_guard lock(gLiveMutex);
     if (!gLiveState.available)
         return IPTV_STREAM_INVALID_STATE;
@@ -3217,6 +3300,7 @@ int iptv_player_pause_live(int paused)
 }
 int iptv_player_seek_live(int seconds)
 {
+    ResetAutoSamples();
     std::lock_guard lock(gLiveMutex);
     if (!gLiveState.available)
         return IPTV_STREAM_INVALID_STATE;
@@ -3224,14 +3308,17 @@ int iptv_player_seek_live(int seconds)
                                    seconds))
         return IPTV_STREAM_INVALID_STATE;
     gLivePauseRequest = -1; // A seek resumes; a later pause request wins in turn.
+    gAutoReplay.store(true);
     return IPTV_STREAM_OK;
 }
 int iptv_player_go_live()
 {
+    ResetAutoSamples();
     std::lock_guard lock(gLiveMutex);
     if (!gLiveState.available)
         return IPTV_STREAM_INVALID_STATE;
     gLiveSeekRequest.live(gLiveState.last_us);
+    gAutoReplay.store(false);
     gLivePauseRequest = -1;
     return IPTV_STREAM_OK;
 }
@@ -3306,6 +3393,30 @@ extern "C" void iptv_player_set_quality(const iptv_hls_quality_t *quality)
 {
     std::lock_guard lock(gQualityMutex);
     gQualityState.preference = quality ? *quality : iptv_hls_quality_t{};
+    gAutoPending = {};
+    gAutoReplay.store(false);
+    gAutoQuality.reset_samples();
+}
+extern "C" void iptv_player_set_auto_quality(int enabled)
+{
+    std::lock_guard lock(gQualityMutex);
+    if (!enabled || !gQualityState.automatic)
+        gAutoQuality.reset();
+    if (enabled && gQualityState.preference.bandwidth)
+        gAutoQuality.ceiling = std::min(gAutoQuality.ceiling, gQualityState.preference.bandwidth);
+    gQualityState.automatic = enabled != 0;
+    gAutoPending = {};
+}
+extern "C" int iptv_player_take_auto_quality(iptv_hls_quality_t *quality)
+{
+    if (!quality)
+        return 0;
+    std::lock_guard lock(gQualityMutex);
+    *quality = gAutoPending;
+    gAutoPending = {};
+    if (quality->bandwidth)
+        gAutoQuality.reduced(MonotonicUsec(), quality->bandwidth);
+    return quality->bandwidth != 0;
 }
 
 extern "C" void iptv_player_set_initial_controls(int paused, unsigned speed, int delay)

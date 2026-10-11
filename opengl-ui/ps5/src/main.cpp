@@ -1331,6 +1331,7 @@ int main()
     std::optional<ptv::PlayRequest> next_channel;
     std::optional<ptv::PlaybackResume> next_resume;
     std::optional<iptv_hls_quality_t> next_quality;
+    bool next_auto_quality = false;
     for (;;)
     {
         ptv::crash::phase(ptv::crash::Phase::menu);
@@ -1341,6 +1342,8 @@ int main()
         next_resume.reset();
         next_quality.reset();
         iptv_player_set_quality(quality ? &*quality : nullptr);
+        iptv_player_set_auto_quality(next_auto_quality);
+        next_auto_quality = false;
         const bool switching = next_channel.has_value();
         if (switching)
         {
@@ -1648,7 +1651,15 @@ int main()
         }
         iptv_player_media_state_t media{};
         iptv_player_media_state(&media);
-        const auto selected_quality = controls.quality_selection();
+        auto selected_quality = controls.quality_selection();
+        bool automatic_quality = controls.auto_quality_selection();
+        iptv_hls_quality_t reduction{};
+        const bool auto_reduction = iptv_player_take_auto_quality(&reduction) != 0;
+        if (!selected_quality && auto_reduction)
+        {
+            selected_quality = reduction;
+            automatic_quality = true;
+        }
         if ((media.presented || outcome.result == 0) &&
             model.finish_vod(request, media.position_us, media.duration_us,
                              outcome.result == 0 && !viewing_blocked && phone.selected.empty() &&
@@ -1665,6 +1676,7 @@ int main()
             next_channel->start_position_us = request.live ? 0 : media.position_us;
             next_resume = controls.resume_state();
             next_quality = selected_quality;
+            next_auto_quality = automatic_quality;
         }
         if (const auto selected = controls.selected_channel(); selected && outcome.result >= 0 &&
                                                                !model.sleep_timer.sleeping() &&
@@ -1676,6 +1688,7 @@ int main()
                 next_channel = std::move(next);
                 next_resume.reset();
                 next_quality.reset();
+                next_auto_quality = false;
             }
         }
         if (!phone.selected.empty() && outcome.result >= 0 && !model.sleep_timer.sleeping())
