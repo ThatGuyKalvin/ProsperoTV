@@ -850,8 +850,8 @@ controls. Long footer hints wrap into two rows.
 
 The screensaver blanks idle menus and paused SDR/Main10 video; active
 multiview stays visible and idle live preview stops. The first button wakes
-without activating the underlying control. VOD pause state must be wired
-through PlaybackOsd::set_paused by the VOD media-state integration.
+without activating the underlying control. VOD pause state reaches
+PlaybackOsd::set_paused through the media-state integration.
 
 Host validation covers settings navigation/persistence, glyph measurement
 and rendering scale, palette/image preservation, glass geometry, menu wake
