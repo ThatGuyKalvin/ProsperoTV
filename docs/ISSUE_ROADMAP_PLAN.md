@@ -68,3 +68,19 @@ been installed or run there. Runtime acceptance remains pending, including actua
 quality reduction and sharing between consoles. Surround output still lacks a
 verified PS5 output-route contract, and spoken focus has no verified SDK API;
 neither is claimed implemented. Roadmap checkboxes remain open until acceptance.
+
+## Source User-Agent presets
+
+Candidate `6672d7f` adds the default, Smarters, VLC and custom chooser for #40,
+with all eight translations and preserved source credentials/headers. Thirteen
+focused sanitizer tests pass, plus two translated/RTL menu checks. The corrected
+Arabic chooser was visually checked with large text and high contrast. Full
+formatting/assets/metadata lint passes after adding the missing attribution to
+the Auto helper (137 attributed files).
+
+Application-only case 88 passes: 41,815,852 bytes, SHA-256
+`73b0a1110a2d79fc87af6a9a13cc98a694a4c16843b988a001e1d3ddbdf6e522`.
+Draft PRs #41–#46 separate the completed implementation groups; their bodies
+identify the prerequisite order and pending native acceptance. No new console
+installation or runtime acceptance is claimed. One obsolete worktree test cache
+was removed, freeing 199,290,676 bytes without deleting source or current evidence.
