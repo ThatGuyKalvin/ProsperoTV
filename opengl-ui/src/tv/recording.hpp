@@ -23,6 +23,7 @@ class ProgrammeJobs
   public:
     ~ProgrammeJobs();
     bool open(const std::string &path);
+    bool close();
     std::vector<ProgrammeJob> list() const;
     bool save(ProgrammeJob &job);
     bool finish(std::int64_t id, int state, const std::string &result);

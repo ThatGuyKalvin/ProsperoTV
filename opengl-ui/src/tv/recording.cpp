@@ -15,7 +15,16 @@ namespace ptv
 {
 ProgrammeJobs::~ProgrammeJobs()
 {
-    sqlite3_close(db_);
+    close();
+}
+bool ProgrammeJobs::close()
+{
+    if (!db_)
+        return true;
+    if (sqlite3_close(db_) != SQLITE_OK)
+        return false;
+    db_ = nullptr;
+    return true;
 }
 bool ProgrammeJobs::open(const std::string &path)
 {

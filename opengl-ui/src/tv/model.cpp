@@ -310,10 +310,10 @@ bool Model::open()
     catalog_failed_ = false;
     catalog_error_.clear();
 
+    if (!programme_jobs_.open(path("prosperotv-programmes.sqlite3")))
+        notify(Level::error, "Programme schedules could not be opened");
     if (first)
     {
-        if (!programme_jobs_.open(path("prosperotv-programmes.sqlite3")))
-            notify(Level::error, "Programme schedules could not be opened");
         if (!parental_.load(path("prosperotv-parental-v1.txt")))
             notify(Level::error, tr("Parental settings could not be read"),
                    tr("Playback is locked until the profile settings are recovered."));
@@ -415,8 +415,15 @@ bool Model::close_for_storage()
 {
     recorder_.cancel();
     recorder_.join();
+    if (recording_job_ != 0)
+    {
+        programme_jobs_.finish(recording_job_, recorder_.succeeded() ? 2 : 3, recorder_.result());
+        recording_job_ = 0;
+    }
     close();
-    return library_.close();
+    const bool programmes_closed = programme_jobs_.close();
+    const bool library_closed = library_.close();
+    return programmes_closed && library_closed;
 }
 
 void Model::poll()
