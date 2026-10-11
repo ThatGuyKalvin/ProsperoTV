@@ -1207,3 +1207,74 @@ TEST_F(VodTest, HomeInheritsNewLoadedParentPolicyAndKeepsItOffline)
     EXPECT_FALSE(offline.play_home(id, true));
     offline.close();
 }
+
+TEST_F(VodTest, HomeParentPolicyWithLargeLoadedShowCatalog)
+{
+    constexpr unsigned count = 100000;
+    host::set_network_piece(65536);
+    std::string shows = "[";
+    for (unsigned i = 0; i < count; ++i)
+        shows += (i ? "," : "") + std::string(R"({"series_id":)") + std::to_string(i) +
+                 R"(,"name":"Show","category_id":4})";
+    shows += "]";
+    response("get_series", shows);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        for (unsigned i = 0; i < 50; ++i)
+        {
+            iptv::Channel item;
+            item.id = "resume-" + std::to_string(i);
+            item.name = "Saved episode";
+            item.url = "https://provider.invalid/episode.mp4";
+            item.source_id = iptv::XtreamSourceId(account);
+            item.media_kind = iptv::MediaKind::episode;
+            ASSERT_TRUE(
+                library.remember_vod(3, item.source_id, item, std::to_string(count - 1 - i), 1));
+            ASSERT_TRUE(library.save_playback_progress(item.id, 10000000, 100000000));
+        }
+    }
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::series);
+    for (unsigned i = 0; i < 5000 && (model.vod().requested() || model.vod().busy()); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_EQ(model.vod().catalog().size(), count);
+    EXPECT_EQ(model.vod().find_series("99999", iptv::XtreamSourceId(account) + 1),
+              iptv::Catalog::npos);
+    EXPECT_EQ(model.vod().find_series("missing", iptv::XtreamSourceId(account)),
+              iptv::Catalog::npos);
+    std::vector<long long> elapsed;
+    for (unsigned trial = 0; trial < 5; ++trial)
+    {
+        const auto began = std::chrono::steady_clock::now();
+        const auto home = model.home_items();
+        elapsed.push_back(std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - began)
+                              .count());
+        EXPECT_EQ(home[0].size(), 50u);
+    }
+    std::sort(elapsed.begin(), elapsed.end());
+    std::printf("Home 100000 shows / 50 resumes median=%lld us min=%lld us max=%lld us\n",
+                elapsed[2], elapsed.front(), elapsed.back());
+    EXPECT_TRUE(model.hide_category("Comedy", true));
+    EXPECT_TRUE(model.home_items()[0].empty());
+    model.close();
+}
+
+TEST(VodLibrary, PlaylistParentLookupUsesExactGroupingKeyAndSource)
+{
+    auto catalog = iptv::ParseExtendedM3u(
+        "#EXTM3U\n#EXTINF:-1 group-title=\"Kids\",Show S01E01\nhttps://host/series/1.mp4\n", 123);
+    ASSERT_EQ(catalog.size(), 1u);
+    ptv::VodLibrary vod;
+    vod.configure_playlist(&catalog);
+    vod.select(ptv::VodKind::series);
+    ASSERT_EQ(vod.catalog().size(), 1u);
+    EXPECT_EQ(vod.find_series("Kids\nShow", 123), 0u);
+    EXPECT_EQ(vod.find_series("Kids\nShow", 124), iptv::Catalog::npos);
+    EXPECT_EQ(vod.find_series("Show", 123), iptv::Catalog::npos);
+}

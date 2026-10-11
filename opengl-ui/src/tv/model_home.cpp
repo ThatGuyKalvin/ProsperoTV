@@ -93,12 +93,13 @@ bool Model::home_vod_allowed(const ResumeItem &item) const
             at != iptv::Catalog::npos && !search_vod_allowed((*catalog)[at]))
             return false;
     for (const auto *shows : {&vod_, &search_shows_})
-        if (!item.series.empty() && shows->kind() == VodKind::series)
-            for (const auto parent : shows->catalog())
-                if (parent.source_id == item.channel.source_id && parent.tvg_id == item.series &&
-                    (hidden_channels_.contains(std::string(parent.id)) ||
-                     !search_vod_allowed(parent)))
-                    return false;
+        if (const auto at = shows->find_series(item.series, item.channel.source_id);
+            at != iptv::Catalog::npos)
+        {
+            const auto parent = shows->catalog()[at];
+            if (hidden_channels_.contains(std::string(parent.id)) || !search_vod_allowed(parent))
+                return false;
+        }
     return true;
 }
 bool Model::queue_home_vod(ResumeItem item)
@@ -139,10 +140,9 @@ bool Model::queue_home_vod(ResumeItem item)
             }
         }
     for (const auto *shows : {&vod_, &search_shows_})
-        if (!item.series.empty() && shows->kind() == VodKind::series)
-            for (const auto parent : shows->catalog())
-                if (parent.source_id == item.channel.source_id && parent.tvg_id == item.series)
-                    inherit_policy(parent);
+        if (const auto at = shows->find_series(item.series, item.channel.source_id);
+            at != iptv::Catalog::npos)
+            inherit_policy(shows->catalog()[at]);
     if (item.channel.alternate_group_titles.size() > 4 || !home_vod_allowed(item))
         return false;
     if (!item.series.empty())
