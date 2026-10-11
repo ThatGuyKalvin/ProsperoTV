@@ -111,6 +111,7 @@ class AppTest : public ::testing::Test
         }
         ASSERT_TRUE(model_->has_catalog());
         model_->take_notices();
+        model_->view.tab = 1; // Most regressions exercise the Live TV screen.
         make_app();
     }
 
@@ -364,9 +365,38 @@ TEST_F(AppTest, MultiviewChannelPickerDoesNotStartForegroundPlayback)
     host::set_preview(false);
 }
 
+TEST_F(AppTest, HomeStartsFirstRoutesFavoritesAndKeepsLiveAndVodAdjacent)
+{
+    model_->view.tab = 0;
+    ASSERT_EQ(model_->toggle_favorite(3), ptv::Model::Starred::added);
+    model_->report_watch(model_->channel(3).id);
+    auto rows = model_->home_items();
+    ASSERT_EQ(rows[1].size(), 1u);
+    ASSERT_EQ(rows[2].size(), 1u);
+    EXPECT_EQ(rows[1][0].id, rows[2][0].id);
+    make_app();
+    EXPECT_EQ(app_->tab(), 0);
+    move(Direction::right);
+    press(Action::confirm);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, model_->channel(3).id);
+    ASSERT_TRUE(model_->hide_channel(request.channel_id, true));
+    EXPECT_TRUE(model_->home_items()[1].empty());
+    EXPECT_TRUE(model_->home_items()[2].empty());
+    EXPECT_FALSE(model_->play_home(request.channel_id, false));
+    press(Action::north);
+    EXPECT_TRUE(app_->searching());
+    press(Action::back);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 2);
+}
+
 TEST_F(AppTest, OpensOnLiveTvWithTheWholeCatalog)
 {
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     EXPECT_EQ(model_->group(), ptv::Group::all);
     EXPECT_EQ(model_->visible_count(), 60u);
     EXPECT_FALSE(frame_.scene.empty());
@@ -433,13 +463,13 @@ TEST_F(AppTest, PhoneBackDismissesSearchAndShouldersChangeTabs)
     EXPECT_FALSE(app_->searching());
     EXPECT_TRUE(model_->query().empty());
     frame(ptv::remote_input(IPTV_INPUT_R1));
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), 2);
     EXPECT_FALSE(app_->remote_search("Channel")); // On demand is not the live channel search.
     frame(ptv::remote_input(IPTV_INPUT_R1));
-    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_EQ(app_->tab(), 3);
     EXPECT_TRUE(app_->remote_search("Channel")); // Favorites remains a channel list.
     frame(ptv::remote_input(IPTV_INPUT_L1));
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), 2);
 }
 
 TEST_F(AppTest, TheMenuComesBackWhereItWas)
@@ -464,29 +494,29 @@ TEST_F(AppTest, TheMenuComesBackWhereItWas)
     EXPECT_EQ(request.channel_id, focused);
 }
 
-TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsHome)
+TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsLiveTv)
 {
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), 2);
     EXPECT_EQ(model_->group(), ptv::Group::all);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_EQ(app_->tab(), 3);
     EXPECT_EQ(model_->group(), ptv::Group::favorites);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
-    EXPECT_EQ(model_->view.tab, 3);
-    press(Action::page_next); // Settings
     EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(model_->view.tab, 4);
+    press(Action::page_next); // Settings
+    EXPECT_EQ(app_->tab(), 5);
     press(Action::page_next); // About
-    EXPECT_EQ(app_->tab(), 5);
+    EXPECT_EQ(app_->tab(), 6);
     press(Action::page_next); // the last tab: nothing further
-    EXPECT_EQ(app_->tab(), 5);
+    EXPECT_EQ(app_->tab(), 6);
     // About only reads: nothing on it answers Cross.
     press(Action::confirm);
-    EXPECT_EQ(app_->tab(), 5);
+    EXPECT_EQ(app_->tab(), 6);
     EXPECT_FALSE(frame_.scene.empty());
     press(Action::back);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     EXPECT_EQ(model_->group(), ptv::Group::all);
 }
 
@@ -506,7 +536,7 @@ TEST_F(AppTest, SquareStarsAndTheFavoritesTabListsIt)
     EXPECT_EQ(model_->visible_count(), 0u);
     // An empty list offers the way back to Live TV.
     press(Action::confirm);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
 }
 
 TEST_F(AppTest, TheListsAreReachedFromTheTopRow)
@@ -598,7 +628,7 @@ TEST_F(AppTest, TheSearchDrawerNarrowsTheListBehindIt)
     press(Action::back);
     EXPECT_FALSE(model_->filtering());
     EXPECT_EQ(model_->visible_count(), 60u);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
 }
 
 TEST_F(AppTest, UnifiedSearchResultsOpenTheSelectedLiveChannel)
@@ -638,7 +668,7 @@ TEST_F(AppTest, AChannelThatFailedIsAskedAboutFirst)
     ASSERT_TRUE(app_->asking());
     // The dialog takes the input: the tabs do not turn under it.
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     press(Action::confirm); // Try again
     EXPECT_FALSE(app_->asking());
     ptv::PlayRequest request;
@@ -669,13 +699,17 @@ TEST_F(AppTest, ASourceIsSetUpFromItsRow)
 
 TEST_F(AppTest, SettingsAreChangedAndReported)
 {
-    press(Action::page_prev); // wraps to nothing: stays on Live TV
+    press(Action::page_prev); // Home precedes Live TV.
+    EXPECT_EQ(app_->tab(), 0);
+    press(Action::page_prev); // The first tab does not wrap.
     EXPECT_EQ(app_->tab(), 0);
     press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 1);
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    ASSERT_EQ(app_->tab(), 4);
+    press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 5);
     EXPECT_FALSE(app_->take_settings_changed());
     press(Action::confirm); // Reduce motion
     EXPECT_TRUE(app_->settings().reduced_motion);
@@ -708,18 +742,18 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     EXPECT_TRUE(app_->take_pair_phone_requested());
     EXPECT_FALSE(app_->take_pair_phone_requested());
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     app_->set_pairing_info("http://192.0.2.1:8888", "", 0, 1);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_pair_phone_requested());
     press(Action::back);
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     press(Action::confirm);
     EXPECT_TRUE(app_->pairing_open());
     app_->phone_connected();
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     move(Direction::down);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_forget_phones_requested());
@@ -735,7 +769,7 @@ TEST_F(AppTest, ParentPinMasksInputLocksRestoreAndRequiresUnlockToLeaveKidsMode)
     press(Action::confirm);
     ASSERT_TRUE(model_->pin_prompt());
     press(Action::page_next); // IME must own input while the PIN is being entered.
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     host::set_keyboard_text("483920");
     idle();
     EXPECT_EQ(host::keyboard_title(), "Confirm parent PIN");
@@ -793,7 +827,7 @@ TEST_F(AppTest, UsbRestoreRequiresConfirmationAndCanChooseAnotherDrive)
     EXPECT_TRUE(app_->storage_busy());
     EXPECT_FALSE(app_->accepts_remote_search());
     press(Action::page_prev); // Controls cannot change settings during the job.
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
     EXPECT_FALSE(frame_.overlay.empty());
 }
@@ -866,7 +900,7 @@ TEST_F(AppTest, UsbActionsLeaveSettingsUsableWhenNoDriveIsAttached)
     EXPECT_FALSE(app_->storage_busy());
     EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
     press(Action::page_prev);
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), 4);
 }
 
 std::vector<std::string> g_traced;
@@ -892,7 +926,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     EXPECT_TRUE(g_traced.empty());
 
     // Diagnostic log follows the channel-list switches.
@@ -911,7 +945,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     press(Action::page_prev);
     press(Action::page_prev);
     press(Action::page_prev);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     move(Direction::right);
     EXPECT_TRUE(traced("input right on Live TV"));
     press(Action::confirm);
@@ -1011,7 +1045,7 @@ TEST_F(AppTest, ProviderCategoriesAreBrowsableAndCanBeHiddenFromTheController)
     press(Action::touch);
     EXPECT_FALSE(app_->accepts_remote_search());
     press(Action::page_next); // Opens the number pad, never the next main tab.
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     press(Action::back); // Return to the same provider category list.
     move(Direction::down);
     press(Action::west);
@@ -1089,7 +1123,7 @@ TEST_F(AppTest, GuideCapturesControllerNavigationAndCanOpenAChannel)
     EXPECT_FALSE(app_->accepts_remote_search());
     EXPECT_FALSE(frame_.overlay.empty());
     press(Action::page_next); // Tomorrow, not the next app tab.
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     press(Action::west); // Now
     move(Direction::down);
     press(Action::confirm);
@@ -1185,7 +1219,7 @@ TEST_F(AppTest, CircleAndLeftLeaveTheLetters)
     EXPECT_EQ(position(), 0);
     press(Action::back);
     EXPECT_FALSE(app_->on_letters());
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     for (int i = 0; i < 5; ++i)
         move(Direction::right);
     ASSERT_TRUE(app_->on_letters());
@@ -1370,7 +1404,7 @@ TEST_F(AppTest, ANewerVersionIsOfferedAndLaterLeavesEverythingAlone)
     EXPECT_TRUE(frame_.glass);
     // The offer has the controller: the tabs do not turn behind it.
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     move(Direction::right);
     EXPECT_EQ(app_->update_sheet().focus(), 1);
     press(Action::confirm);
@@ -1381,7 +1415,7 @@ TEST_F(AppTest, ANewerVersionIsOfferedAndLaterLeavesEverythingAlone)
     idle(60);
     EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), 2);
 }
 
 // Release notes as the catalog gives them: headings, list items, callouts.
@@ -1449,7 +1483,7 @@ TEST_F(AppTest, AReleaseWithNotesOffersWhatsNewAndTheNotesScroll)
     press(Action::back);
     ASSERT_EQ(sheet.stage(), Stage::offer);
     EXPECT_EQ(sheet.focus(), 1);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
 
     // And the update can be started from the notes.
     press(Action::confirm);
@@ -1477,12 +1511,12 @@ TEST_F(AppTest, TheOpeningPlaysOnceKeepsTheControllerAndEndsByItself)
     ASSERT_TRUE(app_->intro_playing());
     // The controller is not read while it plays: the tab stays.
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 0);
+    EXPECT_EQ(app_->tab(), 1);
     // That button took it to its last moment; it is over within a second.
     idle(70);
     EXPECT_FALSE(app_->intro_playing());
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), 2);
 
     // Left alone it runs its whole length, then hands over.
     app_->play_intro();
@@ -1555,7 +1589,7 @@ TEST_F(AppTest, CancelStopsAnUpdateAndTheMenuComesBack)
     EXPECT_EQ(host::update_calls().apply, 0);
     EXPECT_FALSE(app_->wants_quit());
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), 2);
 }
 
 TEST_F(AppTest, AFailedUpdateSaysSoAndCanBeTriedAgain)
@@ -1599,7 +1633,7 @@ TEST_F(AppTest, AVersionTheAppCannotInstallIsOnlyAnnounced)
     EXPECT_EQ(app_->update_sheet().stage(), Stage::closed);
     EXPECT_FALSE(frame_.overlay.empty()); // the notice at the top right
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 1);
+    EXPECT_EQ(app_->tab(), 2);
 }
 
 TEST(ShownNames, AreWrittenInTheScriptsTheFontsHold)
@@ -1733,7 +1767,7 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
             make_app();
         }
         ASSERT_GE(app_->tab(), 0);
-        ASSERT_LT(app_->tab(), 6);
+        ASSERT_LT(app_->tab(), 7);
         ASSERT_FALSE(frame_.scene.empty());
     }
 }

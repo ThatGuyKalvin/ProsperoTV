@@ -100,9 +100,21 @@ TEST_F(GuideTest, UnifiedSearchFindsFutureAndPastTitlesAndHonoursHiddenChannels)
     EXPECT_EQ(rows[0].kind, ptv::Model::SearchResult::Kind::programme);
     EXPECT_NE(rows[0].programme_start, rows[1].programme_start);
     EXPECT_FALSE(model.search_results("Sports One").empty());
+    model.report_watch(rows[0].id);
+    const auto home = model.home_items();
+    ASSERT_EQ(home[2].size(), 1u);
+    EXPECT_EQ(home[2][0].detail, "Football & friends");
+    const auto revision = model.revision();
+    model.poll();
+    EXPECT_EQ(model.revision(), revision);
+    host::set_unix_time(static_cast<std::uint64_t>(now + 45 * 60));
+    model.poll();
+    EXPECT_GT(model.revision(), revision);
+    EXPECT_EQ(model.home_items()[2][0].detail, "Post-match <analysis>");
     ASSERT_TRUE(model.hide_category("US / Sports", true));
     EXPECT_TRUE(model.search_results("match").empty());
     EXPECT_TRUE(model.search_results("Sports One").empty());
+    EXPECT_TRUE(model.home_items()[2].empty());
     EXPECT_EQ(model.search_results("Weather").size(), 1u);
     model.close();
 }

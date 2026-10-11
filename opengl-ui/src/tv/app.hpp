@@ -12,6 +12,7 @@
 #include "tv/library_sheet.hpp"
 #include "tv/guide_sheet.hpp"
 #include "tv/vod_screen.hpp"
+#include "tv/home_screen.hpp"
 #include "tv/backup.hpp"
 #include "tv/multiview.hpp"
 #include "ui/components/dialog.hpp"
@@ -177,6 +178,7 @@ class App
   private:
     enum Tab : int
     {
+        kHome,
         kLive,
         kVod,
         kFavorites,
@@ -216,6 +218,7 @@ class App
     BrowseScreen browse_;
     SourcesScreen sources_;
     VodScreen vod_;
+    HomeScreen home_;
     SearchSheet search_;
     LibrarySheet library_sheet_;
     GuideSheet guide_sheet_;

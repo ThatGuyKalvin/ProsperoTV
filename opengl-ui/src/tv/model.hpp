@@ -261,6 +261,14 @@ class Model
         return search_busy() || search_pending();
     }
     bool search_vod_allowed(const iptv::ChannelView &item) const;
+    struct HomeItem
+    {
+        std::string id, title, detail, logo;
+        bool on_demand = false;
+        std::uint64_t position_us = 0, duration_us = 0;
+    };
+    std::array<std::vector<HomeItem>, 3> home_items() const;
+    bool play_home(std::string_view id, bool on_demand);
     bool play_vod(unsigned index);
     bool save_vod_progress(std::string_view id, std::uint64_t position_us,
                            std::uint64_t duration_us);
@@ -327,12 +335,12 @@ class Model
     // European ones: the faces for them are large, and loaded only when asked for.
     bool uses_east_asian() const
     {
-        return index_.east_asian || vod_.east_asian() || search_movies_.east_asian() ||
+        return home_east_asian_ || index_.east_asian || vod_.east_asian() || search_movies_.east_asian() ||
                search_shows_.east_asian();
     }
     bool uses_korean() const
     {
-        return index_.korean || vod_.korean() || search_movies_.korean() || search_shows_.korean();
+        return home_korean_ || index_.korean || vod_.korean() || search_movies_.korean() || search_shows_.korean();
     }
     // Changes whenever the visible list may have changed.
     unsigned revision() const
@@ -653,6 +661,7 @@ class Model
     bool hide_failed_ = false;
     bool resume_attempted_ = false;
     Guide guide_, pending_guide_;
+    mutable bool home_east_asian_ = false, home_korean_ = false;
     VodLibrary vod_;
     VodLibrary search_movies_, search_shows_;
     bool searching_ = false;
@@ -664,7 +673,8 @@ class Model
     {
         return searching_ && (search_movies_.requested() || search_shows_.requested());
     }
-    bool queue_vod(const iptv::ChannelView &item, const std::string &series);
+    bool home_vod_allowed(const ResumeItem &item) const;
+    bool queue_vod(const iptv::ChannelView &item, const std::string &series, bool inherit_series = true);
     void *guide_thread_ = nullptr;
     std::atomic<bool> guide_done_{false}, guide_stop_{false};
     std::vector<std::string> guide_urls_;

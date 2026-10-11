@@ -64,8 +64,13 @@ void Model::poll_guide()
     if (now / 60 != guide_minute_)
     {
         guide_minute_ = now / 60;
-        if (!query_.empty() && guide_.count())
-            rebuild_visible();
+        if (guide_.count())
+        {
+            if (!query_.empty())
+                rebuild_visible();
+            else
+                ++revision_; // Refresh Home and guide labels once per minute.
+        }
     }
     if (!refreshing() && !guide_thread_ && has_catalog() && now >= next_guide_check_)
     {
