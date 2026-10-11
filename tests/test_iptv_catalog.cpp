@@ -26,6 +26,31 @@ bool HasIssue(const iptv::ParseReport &report, iptv::ParseIssueCode code)
                        { return diagnostic.code == code; });
 }
 
+TEST(IptvCatalogTest, PreservesProviderNumbersAcrossViewsAndCatalogCopies)
+{
+    for (const auto &attribute : {"tvg-chno", "channel-number"})
+    {
+        auto catalog = iptv::ParseExtendedM3u(
+            std::string("#EXTM3U\n#EXTINF:-1 ") + attribute +
+                "=\" 007.2 \" tvg-id=\"a\",News\nhttps://provider.invalid/a.ts\n",
+            kSourceId);
+        ASSERT_EQ(catalog.size(), 1u);
+        EXPECT_EQ(catalog[0].channel_number, "007.2");
+        EXPECT_EQ(catalog[0].Copy().channel_number, "007.2");
+        const iptv::Catalog copy = catalog;
+        EXPECT_EQ(copy[0].channel_number, "007.2");
+    }
+    for (const auto &value : {"-3", "1..2", ".1", "1.", "BBC", "99999999999999999"})
+    {
+        auto catalog =
+            iptv::ParseExtendedM3u(std::string("#EXTM3U\n#EXTINF:-1 tvg-chno=\"") + value +
+                                       "\",News\nhttps://provider.invalid/a.ts\n",
+                                   kSourceId);
+        ASSERT_EQ(catalog.size(), 1u);
+        EXPECT_TRUE(catalog[0].channel_number.empty());
+    }
+}
+
 TEST(IptvCatalogTest, ClassifiesMixedMediaWithoutGuessingFromGroupNames)
 {
     const std::vector<std::pair<std::string, iptv::MediaKind>> cases = {
@@ -399,13 +424,13 @@ std::string ProviderPlaylist(int channels)
     char entry[512];
     for (int i = 0; i < channels; ++i)
     {
-        std::snprintf(
-            entry, sizeof(entry),
-            "#EXTINF:-1 tvg-id=\"chan%d.example\" tvg-name=\"UK: Example Channel %d FHD\" "
-            "tvg-logo=\"http://logos.provider.example:8080/images/channels/logo_%d.png\" "
-            "group-title=\"UK | Entertainment %d\",UK: Example Channel %d FHD\n"
-            "http://line.provider.example:8080/someuser1234/somepass5678/%d\n",
-            i, i, i, i % 700, i, 100000 + i);
+        std::snprintf(entry, sizeof(entry),
+                      "#EXTINF:-1 tvg-chno=\"%d\" tvg-id=\"chan%d.example\" tvg-name=\"UK: Example "
+                      "Channel %d FHD\" "
+                      "tvg-logo=\"http://logos.provider.example:8080/images/channels/logo_%d.png\" "
+                      "group-title=\"UK | Entertainment %d\",UK: Example Channel %d FHD\n"
+                      "http://line.provider.example:8080/someuser1234/somepass5678/%d\n",
+                      i + 1, i, i, i, i % 700, i, 100000 + i);
         playlist += entry;
     }
     return playlist;
@@ -439,13 +464,15 @@ TEST(IptvCatalogTest, HoldsAQuarterOfAMillionChannelsAndNoMore)
     EXPECT_TRUE(HasIssue(report, iptv::ParseIssueCode::catalog_full));
     EXPECT_EQ(catalog.front().name, "UK: Example Channel 0 FHD");
     EXPECT_EQ(catalog.back().tvg_id, "chan249999.example");
+    EXPECT_EQ(catalog.back().channel_number, "250000");
     EXPECT_EQ(catalog[123456].url,
               "http://line.provider.example:8080/someuser1234/somepass5678/223456");
     EXPECT_EQ(catalog[123456].group_title, "UK | Entertainment 256");
     const std::string id(catalog[123456].id);
     EXPECT_EQ(catalog.Find(id), 123456u);
     // About a quarter of what a string per field costs.
-    EXPECT_LT(catalog.MemoryBytes() / catalog.size(), 320u);
+    // The optional provider-number reference adds eight aligned bytes per record.
+    EXPECT_LT(catalog.MemoryBytes() / catalog.size(), 328u);
     EXPECT_LT(catalog.MemoryBytes(), 80u * 1024u * 1024u);
 }
 

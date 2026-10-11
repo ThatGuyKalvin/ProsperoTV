@@ -311,8 +311,8 @@ int BrowseScreen::current_chip() const
     const Model &model = shared_.model;
     if (!chip_categories_.empty())
     {
-        const auto at = std::find(chip_categories_.begin(), chip_categories_.end(),
-                                  model.provider_category());
+        const auto at =
+            std::find(chip_categories_.begin(), chip_categories_.end(), model.provider_category());
         if (at != chip_categories_.end())
             return 2 + static_cast<int>(at - chip_categories_.begin());
         return model.view.live_group == Group::recent ? 1 : 0;
@@ -717,7 +717,7 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     list.push_opacity(appear(0));
     const std::string kicker =
         (favorites_ ? std::string(tr("FAVORITE"))
-                    : tr("CHANNEL ") + group_digits(shared_.model.number_of(index))) +
+                    : tr("CHANNEL ") + shared_.model.number_label(index)) +
         "  \xC2\xB7  " +
         ui::upper(
             readable(face_for(fonts, fonts.semibold, category_of(channel)), category_of(channel)));

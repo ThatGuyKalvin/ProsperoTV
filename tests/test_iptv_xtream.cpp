@@ -114,7 +114,7 @@ TEST(IptvXtreamTest, ConvertsLiveJsonIntoTheSharedCatalog)
                                   "cias");
 
     constexpr std::string_view streams =
-        R"([{"stream_id":101,"name":"Canal \u00c1","stream_icon":"https:\/\/images.example\/101.png","epg_channel_id":"canal.a","category_id":"7","container_extension":"m3u8","direct_source":"https:\/\/cdn.example\/live\/master.m3u8","ignored":{"nested":[1,true,null]}},{"stream_id":"102","name":"Sports HD","category_id":8,"container_extension":"ts","stream_url":"https:\/\/cdn.example\/sports.ts"},{"name":"Missing id"}])";
+        R"([{"stream_id":101,"num":701,"name":"Canal \u00c1","stream_icon":"https:\/\/images.example\/101.png","epg_channel_id":"canal.a","category_id":"7","container_extension":"m3u8","direct_source":"https:\/\/cdn.example\/live\/master.m3u8","ignored":{"nested":[1,true,null]}},{"stream_id":"102","name":"Sports HD","category_id":8,"container_extension":"ts","stream_url":"https:\/\/cdn.example\/sports.ts"},{"name":"Missing id"}])";
     iptv::Catalog catalog;
     iptv::ParseReport report;
     ASSERT_EQ(iptv::ParseXtreamLiveStreams(streams, credentials, categories, 0x5854000000001234u,
@@ -125,6 +125,7 @@ TEST(IptvXtreamTest, ConvertsLiveJsonIntoTheSharedCatalog)
     EXPECT_EQ(catalog[0].group_title, "Not\xc3\xad"
                                       "cias");
     EXPECT_EQ(catalog[0].tvg_id, "canal.a");
+    EXPECT_EQ(catalog[0].channel_number, "701");
     EXPECT_EQ(catalog[0].url, "https://cdn.example/live/master.m3u8");
     ASSERT_EQ(catalog[0].alternate_urls.size(), 1u);
     EXPECT_EQ(catalog[0].alternate_urls[0],
@@ -266,7 +267,7 @@ TEST(IptvXtreamTest, ReadsAnAnswerInPiecesOfAnySize)
     const std::vector<iptv::XtreamCategory> categories = {{"7", "News"}, {"8", "Sports"}};
     // Both shapes providers send: the list itself, and the list as "data".
     const std::string list =
-        R"( [ {"stream_id":101,"name":"Canal Á \"uno\"","stream_icon":"https:\/\/images.example\/101.png","epg_channel_id":"canal.a","category_id":"7","container_extension":"m3u8","direct_source":"https:\/\/cdn.example\/live\/master.m3u8","ignored":{"nested":[1,true,null,"]}"]}} ,
+        R"( [ {"stream_id":101,"num":701,"name":"Canal Á \"uno\"","stream_icon":"https:\/\/images.example\/101.png","epg_channel_id":"canal.a","category_id":"7","container_extension":"m3u8","direct_source":"https:\/\/cdn.example\/live\/master.m3u8","ignored":{"nested":[1,true,null,"]}"]}} ,
  {"stream_id":"102","name":"Sports [HD] {1}","category_id":8,"container_extension":"ts","stream_url":"https:\/\/cdn.example\/sports.ts"},{"name":"Missing id"},
  {"stream_id":101,"name":"Twice"} ] )";
     const std::string wrapped =

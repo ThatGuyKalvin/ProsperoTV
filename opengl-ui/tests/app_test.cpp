@@ -987,8 +987,9 @@ TEST_F(AppTest, ProviderCategoriesAreBrowsableAndCanBeHiddenFromTheController)
     const auto category = model_->provider_categories().front().value;
     press(Action::touch);
     EXPECT_FALSE(app_->accepts_remote_search());
-    press(Action::page_next);
+    press(Action::page_next); // Opens the number pad, never the next main tab.
     EXPECT_EQ(app_->tab(), 0);
+    press(Action::back); // Return to the same provider category list.
     move(Direction::down);
     press(Action::west);
     EXPECT_TRUE(model_->category_hidden(category));

@@ -104,6 +104,7 @@ struct Channel
     std::string tvg_language;
     std::string http_user_agent;
     std::string http_referrer;
+    std::string channel_number;
     std::string catchup;
     std::string catchup_source;
     std::string catchup_days;
@@ -116,6 +117,9 @@ struct Channel
     int playback_result = 0;
     std::uint64_t playback_checked_unix = 0;
 };
+
+// Provider numbers may include a subchannel, for example 7.2.
+bool ValidChannelNumber(std::string_view value);
 
 class Catalog;
 
@@ -197,6 +201,7 @@ struct ChannelView
     std::string_view tvg_language;
     std::string_view http_user_agent;
     std::string_view http_referrer;
+    std::string_view channel_number;
     std::string_view catchup;
     std::string_view catchup_source;
     std::string_view catchup_days;
@@ -235,6 +240,7 @@ class Catalog
         tvg_id,
         tvg_name,
         tvg_logo,
+        channel_number,
         group_title,
         tvg_country,
         tvg_language,

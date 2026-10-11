@@ -275,6 +275,10 @@ const Step kWalk[] = {
         },
         2.0f, "46-now-next"),
     press(Action::touch, 0.6f, "47-category-countries"),
+    press(Action::page_next),
+    press(Action::confirm),
+    press(Action::confirm, 0.6f, "47a-channel-number-pad"),
+    press(Action::back),
     move(Direction::down),
     press(Action::confirm, 0.6f, "48-category-children"),
     move(Direction::down),
@@ -466,7 +470,8 @@ int main(int argc, char **argv)
     ptv::App app(model, fonts, renderer.glass_texture(), ptv::load_settings(data_dir),
                  "host build");
     app.configure_images(
-        [&renderer](const ptv::ImagePixels &pixels) {
+        [&renderer](const ptv::ImagePixels &pixels)
+        {
             return renderer.batch().create_texture(pixels.width, pixels.height, pixels.rgba.data());
         },
         [](std::uint32_t texture) { glDeleteTextures(1, &texture); });

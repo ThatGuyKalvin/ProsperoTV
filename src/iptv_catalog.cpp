@@ -601,6 +601,7 @@ ChannelView Catalog::operator[](std::size_t index) const
     view.tvg_language = text(Field::tvg_language);
     view.http_user_agent = text(Field::http_user_agent);
     view.http_referrer = text(Field::http_referrer);
+    view.channel_number = text(Field::channel_number);
     const auto archive = storage.archives.find(static_cast<std::uint32_t>(index));
     if (archive != storage.archives.end())
     {
@@ -656,6 +657,7 @@ bool Catalog::Add(const ChannelView &channel)
         channel.tvg_id,
         channel.tvg_name,
         channel.tvg_logo,
+        channel.channel_number,
         channel.group_title,
         channel.tvg_country,
         channel.tvg_language,
@@ -921,11 +923,12 @@ ChannelView::ChannelView(const Channel &channel)
       tvg_logo(channel.tvg_logo), group_title(channel.group_title),
       alternate_group_titles(channel.alternate_group_titles), tvg_country(channel.tvg_country),
       tvg_language(channel.tvg_language), http_user_agent(channel.http_user_agent),
-      http_referrer(channel.http_referrer), catchup(channel.catchup),
-      catchup_source(channel.catchup_source), catchup_days(channel.catchup_days),
-      portal_command(channel.portal_command), adult(channel.adult), media_kind(channel.media_kind),
-      source_line(channel.source_line), playback_status(channel.playback_status),
-      playback_result(channel.playback_result), playback_checked_unix(channel.playback_checked_unix)
+      http_referrer(channel.http_referrer), channel_number(channel.channel_number),
+      catchup(channel.catchup), catchup_source(channel.catchup_source),
+      catchup_days(channel.catchup_days), portal_command(channel.portal_command),
+      adult(channel.adult), media_kind(channel.media_kind), source_line(channel.source_line),
+      playback_status(channel.playback_status), playback_result(channel.playback_result),
+      playback_checked_unix(channel.playback_checked_unix)
 {
 }
 
@@ -946,6 +949,7 @@ Channel ChannelView::Copy() const
     channel.tvg_language = tvg_language;
     channel.http_user_agent = http_user_agent;
     channel.http_referrer = http_referrer;
+    channel.channel_number = channel_number;
     channel.catchup = catchup;
     channel.catchup_source = catchup_source;
     channel.catchup_days = catchup_days;
@@ -959,6 +963,22 @@ Channel ChannelView::Copy() const
     return channel;
 }
 
+bool ValidChannelNumber(std::string_view value)
+{
+    if (value.empty() || value.size() > 16 || value.front() == '.' || value.back() == '.')
+        return false;
+    unsigned dots = 0;
+    for (const char c : value)
+        if (c == '.')
+        {
+            if (++dots > 1)
+                return false;
+        }
+        else if (c < '0' || c > '9')
+            return false;
+    return true;
+}
+
 // ---- the playlist ---------------------------------------------------------------
 
 namespace
@@ -967,6 +987,7 @@ namespace
 struct EntryMetadata
 {
     std::string title;
+    std::string channel_number;
     std::string tvg_id;
     std::string tvg_name;
     std::string tvg_logo;
@@ -1036,7 +1057,12 @@ bool IsAttributeKeyChar(char value)
 
 void SetAttribute(std::string_view key, std::string &&value, EntryMetadata *metadata)
 {
-    if (key == "type" || key == "stream-type" || key == "tvg-type")
+    if (key == "tvg-chno" || key == "channel-number")
+    {
+        if (ValidChannelNumber(Trim(value)))
+            metadata->channel_number = Trim(value);
+    }
+    else if (key == "type" || key == "stream-type" || key == "tvg-type")
     {
         const std::string kind = LowerTrimmed(value);
         if (kind == "live" || kind == "movie" || kind == "vod" || kind == "series" ||
@@ -1351,6 +1377,7 @@ void MergeChannel(Catalog *catalog, std::size_t index, const EntryMetadata &meta
     fill(Catalog::Field::name, existing.name, metadata.title);
     fill(Catalog::Field::tvg_id, existing.tvg_id, metadata.tvg_id);
     fill(Catalog::Field::tvg_name, existing.tvg_name, metadata.tvg_name);
+    fill(Catalog::Field::channel_number, existing.channel_number, metadata.channel_number);
     fill(Catalog::Field::tvg_logo, existing.tvg_logo, metadata.tvg_logo);
     fill(Catalog::Field::tvg_country, existing.tvg_country, metadata.tvg_country);
     fill(Catalog::Field::tvg_language, existing.tvg_language, metadata.tvg_language);
@@ -1562,6 +1589,7 @@ struct M3uParser::State
         channel.url = canonical_url;
         channel.tvg_id = metadata.tvg_id;
         channel.tvg_name = metadata.tvg_name;
+        channel.channel_number = metadata.channel_number;
         channel.tvg_logo = metadata.tvg_logo;
         channel.group_title = metadata.group_title;
         channel.tvg_country = metadata.tvg_country;

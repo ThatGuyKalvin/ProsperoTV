@@ -92,9 +92,13 @@ void LibrarySheet::sync()
     dirty_ = false;
 }
 
-void LibrarySheet::open(bool folders, std::string channel, ui::Feedback &feedback)
+void LibrarySheet::open(bool folders, std::string channel, ui::Feedback &feedback, bool allow_play)
 {
     folders_ = folders;
+    allow_play_ = allow_play;
+    number_pad_ = false;
+    number_.clear();
+    number_key_ = 0;
     category_path_.clear();
     channel_ = std::move(channel);
     open_ = true;
@@ -124,6 +128,19 @@ void LibrarySheet::named(const char *text, void *context)
 
 void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
 {
+    if (number_pad_)
+    {
+        handle_number_pad(input, feedback);
+        return;
+    }
+    if (allow_play_ && input.is_pressed(Action::page_next))
+    {
+        number_pad_ = true;
+        number_.clear();
+        number_key_ = 0;
+        feedback.play(audio::Cue::open);
+        return;
+    }
     if (input.is_pressed(Action::back) || input.is_pressed(Action::touch))
     {
         if (!folders_ && !category_path_.empty() && input.is_pressed(Action::back))
@@ -224,6 +241,88 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
     }
 }
 
+void LibrarySheet::handle_number_pad(const InputFrame &input, ui::Feedback &feedback)
+{
+    if (input.is_pressed(Action::back) || input.is_pressed(Action::touch))
+    {
+        number_pad_ = false;
+        feedback.play(audio::Cue::back);
+        return;
+    }
+    if (input.nav == Direction::left && number_key_ % 3 > 0)
+        --number_key_;
+    if (input.nav == Direction::right && number_key_ % 3 < 2)
+        ++number_key_;
+    if (input.nav == Direction::up && number_key_ >= 3)
+        number_key_ -= 3;
+    if (input.nav == Direction::down && number_key_ < 12)
+        number_key_ += 3;
+    if (input.is_pressed(Action::west))
+    {
+        if (!number_.empty())
+            number_.pop_back();
+    }
+    if (!input.is_pressed(Action::confirm))
+        return;
+    if (number_key_ == 12)
+        number_.clear();
+    else if (number_key_ == 14)
+        number_pad_ = false;
+    else if (number_key_ == 13)
+    {
+        auto &model = shared_.model;
+        const int position = model.position_for_number(number_);
+        if (position < 0)
+        {
+            model.announce(Level::warning,
+                           position == -2 ? tr("Several channels use this number")
+                                          : tr("No channel with this number"),
+                           tr("Choose a narrower list if numbers repeat."), 4);
+            feedback.play(audio::Cue::error);
+        }
+        else if (model.play(model.visible(static_cast<unsigned>(position))))
+            dismiss();
+    }
+    else if (number_key_ == 11)
+    {
+        if (!number_.empty())
+            number_.pop_back();
+    }
+    else if (number_.size() < 16)
+    {
+        const char digit = number_key_ < 9    ? static_cast<char>('1' + number_key_)
+                           : number_key_ == 9 ? '.'
+                                              : '0';
+        if (digit != '.' || (!number_.empty() && number_.find('.') == std::string::npos))
+            number_ += digit;
+    }
+}
+
+void LibrarySheet::draw_number_pad(ui::Canvas &canvas) const
+{
+    auto &draw = canvas.list;
+    const auto &fonts = canvas.fonts;
+    draw.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.95f));
+    draw_glass(canvas, shared_.theme, {570, 100, 780, 870}, 28);
+    ui::text(draw, fonts.display, tr("Channel number"), 630, 175, 42, shared_.theme.text);
+    ui::text(draw, fonts.regular, tr("Watch a channel in the current list"), 630, 220, 24,
+             shared_.theme.text_muted);
+    ui::text(draw, fonts.mono, number_.empty() ? "_" : number_, 630, 295, 48, shared_.theme.text);
+    const char *keys[] = {"1", "2", "3", "4",      "5",     "6",     "7",   "8",
+                          "9", ".", "0", "Delete", "Clear", "Watch", "Back"};
+    for (int i = 0; i < 15; ++i)
+    {
+        const float x = 630.0f + static_cast<float>(i % 3) * 220.0f;
+        const float y = 330.0f + static_cast<float>(i / 3) * 108.0f;
+        draw.rounded_rect({x, y, 200, 88}, 16,
+                          i == number_key_ ? tone::accent : shared_.theme.surface);
+        ui::text(draw, fonts.semibold, tr(keys[i]), x + 100, y + 56, 30,
+                 i == number_key_ ? tone::ink : shared_.theme.text, gfx::Align::center);
+    }
+    ui::text(draw, fonts.regular, tr("Cross: Enter   Square: Delete   Circle: Back"), 630, 925, 22,
+             shared_.theme.text_muted);
+}
+
 void LibrarySheet::update(float dt)
 {
     if (open_ && (dirty_ || seen_revision_ != shared_.model.revision()))
@@ -236,6 +335,11 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
 {
     if (!open_)
         return;
+    if (number_pad_)
+    {
+        draw_number_pad(canvas);
+        return;
+    }
     auto &draw = canvas.list;
     const auto &fonts = canvas.fonts;
     draw.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.9f));
@@ -243,13 +347,16 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
     ui::text(draw, fonts.display, folders_ ? tr("Favorite folders") : tr("Provider categories"),
              400, 190, 42, shared_.theme.text);
     list_.draw(canvas);
-    ui::text(
-        draw, fonts.regular,
-        folders_
-            ? tr("Cross: Open   Square: Add/remove channel   Triangle: New folder   Options: Delete   "
-                 "Circle: Back")
-            : tr("Cross: Browse   Square: Show/hide   Triangle: Normal / PIN / Kids   Circle: "
-                 "Back"),
-        400, 915, 21, shared_.theme.text_muted);
+    if (allow_play_)
+        ui::text(draw, fonts.regular, tr("R1: Channel number"), 1180, 190, 24,
+                 shared_.theme.text_muted);
+    ui::text(draw, fonts.regular,
+             folders_
+                 ? tr("Cross: Open   Square: Add/remove channel   Triangle: New folder   Options: "
+                      "Delete   "
+                      "Circle: Back")
+                 : tr("Cross: Browse   Square: Show/hide   Triangle: Normal / PIN / Kids   Circle: "
+                      "Back"),
+             400, 915, 21, shared_.theme.text_muted);
 }
 } // namespace ptv

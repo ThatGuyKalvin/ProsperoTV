@@ -522,7 +522,8 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     {
         const auto channel = browse_.focused();
         library_sheet_.open(tabs_.active() == kFavorites,
-                            channel ? std::string(channel->id) : std::string(), feedback);
+                            channel ? std::string(channel->id) : std::string(), feedback,
+                            !multiview_.choosing());
         return;
     }
     const int turn = input.is_pressed(Action::page_next)   ? 1
@@ -1058,7 +1059,8 @@ void App::draw_about(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, words, x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
         y += 36.0f;
     };
-    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
+    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f)
+    {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
     const auto rule = [&]()

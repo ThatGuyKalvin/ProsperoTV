@@ -33,7 +33,7 @@ class PortalTest : public ::testing::Test
             R"({"js":[{"id":"1","title":"US"},{"id":"2","title":"Sports","parent_id":"1"},{"id":"3","title":"Football","parent_id":"2"}]})");
         response(
             "type=itv&action=get_all_channels",
-            R"({"js":{"total_items":2,"data":[{"id":"12","name":"Sports One","cmd":"ffmpeg http://localhost/ch/12_","tv_genre_id":"3","logo":"/logos/sports.png","xmltv_id":"sports.one"},{"id":13,"name":"News","cmd":"ffmpeg https://live.invalid/news.ts","logo":null,"tv_genre_id":1}]}})");
+            R"({"js":{"total_items":2,"data":[{"id":"12","number":"007.2","name":"Sports One","cmd":"ffmpeg http://localhost/ch/12_","tv_genre_id":"3","logo":"/logos/sports.png","xmltv_id":"sports.one"},{"id":13,"name":"News","cmd":"ffmpeg https://live.invalid/news.ts","logo":null,"tv_genre_id":1}]}})");
         ptv::platform::network_init();
     }
     void TearDown() override
@@ -99,6 +99,7 @@ TEST_F(PortalTest, SignsInStreamsNestedCategoriesAndPersistsOpaqueCommands)
     ASSERT_TRUE(client.load(&catalog, &report)) << client.error();
     ASSERT_EQ(catalog.size(), 2u);
     EXPECT_EQ(report.accepted, 2u);
+    EXPECT_EQ(catalog[0].channel_number, "007.2");
     EXPECT_EQ(catalog[0].group_title, "US / Sports / Football");
     EXPECT_EQ(catalog[0].tvg_logo, "https://portal.invalid/logos/sports.png");
     EXPECT_EQ(catalog[0].tvg_id, "sports.one");
@@ -115,6 +116,7 @@ TEST_F(PortalTest, SignsInStreamsNestedCategoriesAndPersistsOpaqueCommands)
     ASSERT_EQ(iptv::LoadCatalog(dir + "/catalog.sqlite3", &loaded), iptv::StoreStatus::ok);
     EXPECT_EQ(loaded[0].portal_command, "ffmpeg http://localhost/ch/12_");
     EXPECT_EQ(loaded[0].id, catalog[0].id);
+    EXPECT_EQ(loaded[0].channel_number, "007.2");
 }
 
 TEST_F(PortalTest, ResolvesACommandOnlyThroughTheProvidersCreateLink)
