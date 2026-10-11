@@ -17,8 +17,9 @@ the GitHub Release. The repository's root `Makefile` still builds the
 interface of 01.000.015 and earlier, which shares those sources and keeps
 their tests; it builds nothing of this folder.
 
-The kit is a dependency fetched when something is built; none of its code is
-kept in this repository. It compiles against two source trees:
+The kit is fetched when something is built. The app-owned text/layout patch
+is versioned in `tools/kit-text.patch` and applied to the pinned checkout.
+It compiles against two source trees:
 
 | Needs | Default path | Override |
 | --- | --- | --- |
@@ -162,10 +163,12 @@ in `/data/prosperotv`, so an update never touches them.
 
 ## Fonts
 
-The kit bakes printable ASCII. A channel list needs more, so
-`tools/bake-fonts.sh` runs the kit's baker over the kit's own font files (Inter,
-Montserrat, DejaVu Sans Mono) with its European alphabet: Latin-1, Latin
-Extended-A, Greek and Cyrillic.
+`tools/bake-fonts.sh` bakes the kit's Inter, Montserrat and DejaVu Sans Mono
+faces plus a pinned DejaVu Sans Arabic/Hebrew fallback. Glyph-ID bundles retain
+OpenType tables for HarfBuzz shaping and FriBidi paragraph ordering, including
+provider names when the interface is English. Host builds require Meson and
+Ninja; source archives and font checksums are pinned. See
+[Arabic and Hebrew rendering](../docs/RTL_TEXT.md) for limits and validation.
 
 Chinese, Japanese and Korean names have two faces of their own, baked from
 Noto Sans SC and Noto Sans KR (SIL Open Font License; fetched at a pinned
@@ -178,9 +181,9 @@ files are 26 and 16 megabytes, so the console loads each one only when the
 list on screen has a name or a group that needs it (`Model::uses_east_asian`,
 `uses_korean`); `face_for` in `draw.cpp` picks the face a text is written with.
 
-Names in other scripts (Arabic, Hebrew, Devanagari, Thai: they need shaping,
-which the kit's text does not do) fall back to what the fonts can write, then
-to the playlist's id for the channel (`shown_name` in `draw.cpp`).
+Names needing glyphs outside the bundled fonts (such as Devanagari or Thai)
+fall back to what those fonts can write, then to the playlist's channel ID
+(`shown_name` in `draw.cpp`).
 
 ## What has run on a console
 

@@ -149,7 +149,7 @@ TEST(VideoPanel, BakedUnicodeFontDrawsClippedAntialiasedText)
     ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
     std::string data;
     ASSERT_TRUE(hui::save::read_file(
-        std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont", &data));
+        std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont", &data, 64u << 20));
     hui::gfx::Font font;
     ASSERT_TRUE(font.load(data));
     ptv::VideoPanel panel;
@@ -234,6 +234,13 @@ TEST(PlaybackSubtitles, SizeAndColorAffectDecodedSurfaceAndSurviveSettingsCopy)
     EXPECT_EQ(restored.picture_mode, 6);
     std::vector<std::uint16_t> hdr(frame.size(), 512);
     ASSERT_TRUE(osd.draw(hdr.data(), hdr.size() * 2, 640, 360, 640, 360, 10, 2, cues, 1));
-    EXPECT_GT(std::count_if(hdr.begin() + 640 * 360, hdr.end(), [](auto v) { return v < 450; }),
-              10);
+    // Integrate blue chroma rather than counting an exact antialiased glyph edge.
+    unsigned yellow_chroma = 0, red_chroma = 0;
+    for (std::size_t i = 640 * 360; i < hdr.size(); i += 2)
+    {
+        yellow_chroma += 512 - std::min<unsigned>(512, hdr[i]);
+        red_chroma += std::max<unsigned>(512, hdr[i + 1]) - 512;
+    }
+    EXPECT_GT(yellow_chroma, 512u);
+    EXPECT_GT(red_chroma, 16u);
 }

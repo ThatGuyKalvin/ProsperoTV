@@ -494,7 +494,8 @@ int main(int argc, char **argv)
     g_model = &model;
     model.open();
     auto appearance = ptv::load_settings(data_dir);
-    if (const char *value=std::getenv("TV_LANGUAGE_OVERRIDE")) appearance.interface_language=std::atoi(value);
+    if (const char *value = std::getenv("TV_LANGUAGE_OVERRIDE"))
+        appearance.interface_language = std::atoi(value);
     ptv::set_interface_language(static_cast<unsigned>(appearance.interface_language));
     if (const char *theme = std::getenv("TV_THEME"))
         appearance.theme = std::clamp(std::atoi(theme), 0, 2);
@@ -502,7 +503,8 @@ int main(int argc, char **argv)
     appearance.high_contrast = std::getenv("TV_HIGH_CONTRAST") != nullptr;
     ptv::App app(model, fonts, renderer.glass_texture(), appearance, "host build");
     app.configure_images(
-        [&renderer](const ptv::ImagePixels &pixels) {
+        [&renderer](const ptv::ImagePixels &pixels)
+        {
             return renderer.batch().create_texture(pixels.width, pixels.height, pixels.rgba.data());
         },
         [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
