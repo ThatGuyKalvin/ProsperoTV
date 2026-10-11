@@ -130,3 +130,15 @@ G2: Compare Down and held R2/L2 on the public catalog in the same disposable tit
 on idle .30; require clean shutdown and service health. Preserve the regular app's data.
 
 - 2026-10-11 | G1 baseline | e707301 | .30 PPSA88308 | reproduced: public catalog Down peaks 310 ms, R2 interval 50.62 ms mean | results/integration/public-scroll-before-30 | validate cache fix
+
+The cache now retains 512 entries and evicts least recently used text; its existing
+64 KiB text and 32,768 glyph limits remain. A wrapped HarfBuzz regression fails with
+FIFO eviction and passes through 1,200 new channel names while reusing 200 categories.
+All 6,203 shaping checks and 13 focused UI ASan/UBSan tests pass, including the
+120,000-channel browsing test. Host public-catalog drawing fell from 17-20 ms to 2-3 ms.
+Native .30 at 3840x2160, with logos and live preview enabled, completed Down and held
+R2/L2 on 11,172 public channels. Scrolling frame windows average 17.27-17.77 ms instead
+of 50.62-52.11 ms; worst scrolling window frames are below 58 ms instead of 310 ms.
+Small frame-time spikes remain; this is not a claim of perfect 60 fps or a network fix.
+
+- 2026-10-11 | G2 | e2637a1 | .30 PPSA88308 | pass: Down/R2/L2, clean close, services healthy | results/integration/public-scroll-final-30 | regular .060 build
