@@ -43,9 +43,11 @@ includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party
         objects+=("$object")
     }
     strict="-Wall -Wextra -Wpedantic -Werror"
-    # The interface is built the way the console builds it.
+    # Keep the console's exception-free app code, but enable RTTI throughout this
+    # host build: mixed RTTI gives shared_ptr control blocks incompatible typeinfo
+    # and invalidates UBSan vptr checks. Native builds uniformly disable RTTI.
     for source in "$root"/src/tv/*.cpp; do
-        edge "$source" "$strict -fno-exceptions -fno-rtti"
+        edge "$source" "$strict -fno-exceptions"
     done
     edge "$root/host/host_platform.cpp" "$strict"
     edge "$root/host/host_preview.cpp" "$strict"
