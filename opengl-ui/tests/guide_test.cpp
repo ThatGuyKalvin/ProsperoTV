@@ -361,6 +361,46 @@ TEST_F(GuideTest, DownloadSearchPlaybackAndFailedRefreshWorkTogether)
     offline.close();
 }
 
+TEST_F(GuideTest, CustomGuideOverridesKeepSourceHeadersOnTheirOrigin)
+{
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    host::set_network_response("https://source.invalid/guide.xml", xml);
+    host::set_network_response("https://foreign.invalid/guide.xml", xml);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource source{
+            2,  1,  "Protected source",          "https://source.invalid/list.m3u", {},
+            {}, {}, ptv::RefreshSchedule::manual};
+        source.extra_headers = "X-Provider-Key: fixture-secret";
+        ASSERT_TRUE(library.save_source(&source));
+        ASSERT_TRUE(library.select_source(source.id));
+    }
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    ASSERT_EQ(model.guide().count(), 5u);
+    const auto initial = host::requests();
+    ASSERT_FALSE(initial.empty());
+    EXPECT_EQ(initial.back().url, "https://guide.invalid/guide.xml.gz");
+    EXPECT_TRUE(initial.back().extra_headers.empty());
+
+    ASSERT_TRUE(model.set_guide_url(2, "https://source.invalid/guide.xml"));
+    settle(model);
+    EXPECT_EQ(host::requests().back().extra_headers, "X-Provider-Key: fixture-secret");
+    ASSERT_TRUE(model.set_guide_url(2, "https://foreign.invalid/guide.xml"));
+    settle(model);
+    const auto foreign = host::requests().back();
+    EXPECT_EQ(foreign.url, "https://foreign.invalid/guide.xml");
+    EXPECT_TRUE(foreign.extra_headers.empty());
+    EXPECT_EQ(model.guide().count(), 5u);
+    model.close();
+}
+
 TEST_F(GuideTest, ExplicitMatchesOverrideAutomaticNamesAndAllowSharedGuideIds)
 {
     const std::string first(catalog[0].id), second(catalog[1].id);
