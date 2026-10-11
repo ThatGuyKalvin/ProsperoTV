@@ -1305,7 +1305,7 @@ int main()
             }
             owned_model =
                 std::make_unique<ptv::Model>(tv::storage::config_dir(), tv::storage::cache_dir());
-            owned_model->view.tab = 4; // Return to Settings after reloading the saved state.
+            owned_model->view.tab = 5; // Return to Settings after reloading the saved state.
             owned_model->sleep_timer = sleep_timer;
             owned_model->resume_last(false);
             settings = ptv::load_settings(tv::storage::config_dir());
