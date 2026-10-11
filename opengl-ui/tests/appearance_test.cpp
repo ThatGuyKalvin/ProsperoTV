@@ -58,3 +58,28 @@ TEST(Appearance, LargerFontsMeasureFitAndDrawAtTheSameScale)
     EXPECT_EQ(normal.atlas(), larger.atlas());
     EXPECT_FALSE(ptv::load_menu_font("invalid", larger, true));
 }
+
+TEST(Appearance, ShapedFontCopiesSurviveReloadMoveAndFailedLoad)
+{
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    std::string data;
+    ASSERT_TRUE(hui::save::read_file(
+        std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont", &data, 64u << 20));
+    ptv::gfx::Font original;
+    ASSERT_TRUE(original.load(data));
+    const std::string sample = "\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85 HD 123";
+    const auto width = original.measure(sample, 26);
+    ASSERT_GT(width, 0);
+    auto copied = original;
+    auto moved = std::move(copied);
+    ASSERT_FALSE(original.load("invalid"));
+    EXPECT_FLOAT_EQ(moved.measure(sample, 26), width);
+    ptv::gfx::Font assigned;
+    assigned = moved;
+    ASSERT_FALSE(moved.load("invalid"));
+    EXPECT_FLOAT_EQ(assigned.measure(sample, 26), width);
+    ASSERT_TRUE(assigned.load(data));
+    EXPECT_FLOAT_EQ(assigned.measure(sample, 26), width);
+    ASSERT_TRUE(original.load(data));
+    EXPECT_FLOAT_EQ(original.measure(sample, 26), width);
+}

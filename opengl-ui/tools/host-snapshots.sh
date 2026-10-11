@@ -43,9 +43,11 @@ includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -
         echo "  flags = $flags"
         objects+=("$object")
     }
-    # The interface itself is built the way the console builds it.
+    # Keep the console's exception-free app code.
+    # Match the kit/host RTTI so shared_ptr control blocks have consistent typeinfo.
+    # Native builds uniformly disable RTTI; host sanitizers retain vptr checks.
     for source in "$root"/src/tv/*.cpp; do
-        edge "$source" "-Werror -fno-exceptions -fno-rtti"
+        edge "$source" "-Werror -fno-exceptions"
     done
     for source in "$root"/host/*.cpp "$kit/host/platform_host.cpp"; do
         edge "$source" ""
