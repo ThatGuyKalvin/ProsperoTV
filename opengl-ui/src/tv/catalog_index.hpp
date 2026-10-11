@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <map>
 
 namespace ptv
 {
@@ -38,7 +39,8 @@ struct CatalogIndex
     static constexpr std::uint8_t kSports = 0x10;
     static constexpr std::uint8_t kKids = 0x20;
 
-    void build(const iptv::Catalog &catalog);
+    void build(const iptv::Catalog &catalog,
+               const std::map<std::string, std::string, std::less<>> &names = {});
     void clear();
     std::size_t size() const
     {

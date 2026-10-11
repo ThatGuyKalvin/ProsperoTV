@@ -235,8 +235,16 @@ class Model
     // the catalog's own, and a download replaces the catalog).
     iptv::ChannelView channel(unsigned index) const
     {
-        return catalog_[index];
+        auto value = catalog_[index];
+        if (const auto name = channel_names_.find(value.id); name != channel_names_.end())
+            value.name = name->second;
+        return value;
     }
+    bool rename_channel(std::string_view id, std::string_view name);
+    bool hide_channel(std::string_view id, bool hidden);
+    std::vector<unsigned> hidden_channels() const;
+    bool move_channel(std::string_view id, int direction);
+    bool reset_channel_order();
     // The channels the group, the search and the filters leave, in the order
     // of the alphabet (see sort_key).
     unsigned visible_count() const
@@ -557,6 +565,9 @@ class Model
     RefreshSchedule schedule_ = RefreshSchedule::daily;
     std::uint64_t next_schedule_check_ = 0;
     std::unordered_set<std::string> hidden_categories_;
+    std::unordered_set<std::string> hidden_channels_;
+    std::map<std::string, std::string, std::less<>> channel_names_;
+    std::vector<std::string> channel_order_, favorite_order_;
     std::unordered_set<std::string> folder_channels_;
     std::string provider_category_;
     std::string folder_;

@@ -65,6 +65,13 @@ class Library
     std::pair<std::int64_t, std::string> last_channel() const;
     std::unordered_set<std::string> hidden_categories(std::uint64_t source) const;
     bool hide_category(std::uint64_t source, std::string_view category, bool hidden);
+    std::map<std::string, std::string, std::less<>> channel_names(std::uint64_t source) const;
+    bool rename_channel(std::uint64_t source, std::string_view channel, std::string_view name);
+    std::unordered_set<std::string> hidden_channels(std::uint64_t source) const;
+    bool hide_channel(std::uint64_t source, std::string_view channel, bool hidden);
+    std::vector<std::string> channel_order(std::uint64_t source, bool favorites) const;
+    bool save_channel_order(std::uint64_t source, bool favorites,
+                            const std::vector<std::string> &ids);
     // 1: PIN required, 2: approved for kids. Rules include subcategories.
     std::map<std::string, int> category_rules(std::uint64_t source) const;
     bool set_category_rule(std::uint64_t source, std::string_view category, int rule);

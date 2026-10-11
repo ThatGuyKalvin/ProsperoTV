@@ -157,6 +157,12 @@ bool Library::open(const std::string &path)
         "source INTEGER REFERENCES sources(id) ON DELETE SET NULL,channel TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS hidden_categories (source TEXT NOT NULL,category TEXT NOT NULL,"
         "PRIMARY KEY(source,category));"
+        "CREATE TABLE IF NOT EXISTS channel_names (source TEXT NOT NULL,channel TEXT NOT NULL,"
+        "name TEXT NOT NULL,PRIMARY KEY(source,channel));"
+        "CREATE TABLE IF NOT EXISTS channel_order (source TEXT NOT NULL,favorites INTEGER NOT NULL,"
+        "channel TEXT NOT NULL,position INTEGER NOT NULL,PRIMARY KEY(source,favorites,channel));"
+        "CREATE TABLE IF NOT EXISTS hidden_channels (source TEXT NOT NULL,channel TEXT NOT NULL,"
+        "PRIMARY KEY(source,channel));"
         "CREATE TABLE IF NOT EXISTS category_rules (source TEXT NOT NULL,category TEXT NOT NULL,"
         "rule INTEGER NOT NULL CHECK(rule IN(1,2)),PRIMARY KEY(source,category));"
         "CREATE TABLE IF NOT EXISTS folders (name TEXT PRIMARY KEY);"
@@ -170,6 +176,91 @@ bool Library::open(const std::string &path)
     }
     db_ = db;
     return true;
+}
+
+std::map<std::string, std::string, std::less<>> Library::channel_names(std::uint64_t source) const
+{
+    std::map<std::string, std::string, std::less<>> result;
+    Statement query(db_, "SELECT channel,name FROM channel_names WHERE source=?1");
+    if (query.text(1, std::to_string(source)))
+        while (query.row())
+        {
+            auto id = query.string(0);
+            auto name = query.string(1);
+            if (valid_text(id, 256) && valid_text(name, 256))
+                result.emplace(std::move(id), std::move(name));
+        }
+    return result;
+}
+
+bool Library::rename_channel(std::uint64_t source, std::string_view channel, std::string_view name)
+{
+    if (!valid_text(channel, 256) || (!name.empty() && !valid_text(name, 256)))
+        return false;
+    Statement query(db_, name.empty()
+                             ? "DELETE FROM channel_names WHERE source=?1 AND channel=?2"
+                             : "INSERT INTO channel_names VALUES(?1,?2,?3) ON "
+                               "CONFLICT(source,channel) DO UPDATE SET name=excluded.name");
+    return query.text(1, std::to_string(source)) && query.text(2, channel) &&
+           (name.empty() || query.text(3, name)) && query.done();
+}
+
+std::unordered_set<std::string> Library::hidden_channels(std::uint64_t source) const
+{
+    std::unordered_set<std::string> result;
+    Statement query(db_, "SELECT channel FROM hidden_channels WHERE source=?1");
+    if (query.text(1, std::to_string(source)))
+        while (query.row())
+        {
+            auto id = query.string(0);
+            if (valid_text(id, 256))
+                result.insert(std::move(id));
+        }
+    return result;
+}
+
+bool Library::hide_channel(std::uint64_t source, std::string_view channel, bool hidden)
+{
+    if (!valid_text(channel, 256))
+        return false;
+    Statement query(db_, hidden ? "INSERT OR IGNORE INTO hidden_channels VALUES(?1,?2)"
+                                : "DELETE FROM hidden_channels WHERE source=?1 AND channel=?2");
+    return query.text(1, std::to_string(source)) && query.text(2, channel) && query.done();
+}
+
+std::vector<std::string> Library::channel_order(std::uint64_t source, bool favorites) const
+{
+    std::vector<std::string> result;
+    Statement query(db_, "SELECT channel FROM channel_order WHERE source=?1 AND favorites=?2 ORDER "
+                         "BY position,channel");
+    if (query.text(1, std::to_string(source)) && query.integer(2, favorites))
+        while (query.row())
+            result.push_back(query.string(0));
+    return result;
+}
+
+bool Library::save_channel_order(std::uint64_t source, bool favorites,
+                                 const std::vector<std::string> &ids)
+{
+    if (!db_ || ids.size() > 250000 ||
+        std::any_of(ids.begin(), ids.end(), [](const auto &id) { return !valid_text(id, 256); }) ||
+        sqlite3_exec(db_, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr) != SQLITE_OK)
+        return false;
+    const auto key = std::to_string(source);
+    Statement clear(db_, "DELETE FROM channel_order WHERE source=?1 AND favorites=?2");
+    bool ok = clear.text(1, key) && clear.integer(2, favorites) && clear.done();
+    Statement row(db_, "INSERT INTO channel_order VALUES(?1,?2,?3,?4)");
+    for (std::size_t i = 0; ok && i < ids.size(); ++i)
+    {
+        ok = row.text(1, key) && row.integer(2, favorites) && row.text(3, ids[i]) &&
+             row.integer(4, static_cast<std::int64_t>(i)) && row.done();
+        if (row.stmt)
+            sqlite3_reset(row.stmt);
+    }
+    if (ok && sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr) == SQLITE_OK)
+        return true;
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
 }
 
 std::vector<SavedSource> Library::sources() const

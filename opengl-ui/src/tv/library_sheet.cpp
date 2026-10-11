@@ -29,6 +29,39 @@ void LibrarySheet::sync()
     values_.clear();
     branches_.clear();
     std::vector<ui::ListItem> rows;
+    if (channel_options_)
+    {
+        if (hidden_list_)
+        {
+            for (const auto at : model.hidden_channels())
+            {
+                const auto channel = model.channel(at);
+                values_.emplace_back(channel.id);
+                ui::ListItem row;
+                row.title = label_text(channel.name);
+                row.value = tr("Hidden");
+                rows.push_back(std::move(row));
+            }
+        }
+        else
+        {
+            for (const char *title :
+                 {"Rename channel", "Use provider name", "Hide channel", "Move up", "Move down",
+                  "Reset list order", "Hidden channels"})
+            {
+                ui::ListItem row;
+                row.title = tr(title);
+                rows.push_back(std::move(row));
+            }
+        }
+        list_.set_items(std::move(rows));
+        list_.set_focus(
+            std::max(0, std::min(focus, hidden_list_ ? static_cast<int>(values_.size()) - 1 : 6)),
+            true);
+        seen_revision_ = model.revision();
+        dirty_ = false;
+        return;
+    }
     ui::ListItem all;
     all.title = folders_ ? tr("All favorites") : tr("All provider categories");
     if (!folders_ && !category_path_.empty())
@@ -95,6 +128,9 @@ void LibrarySheet::sync()
 void LibrarySheet::open(bool folders, std::string channel, ui::Feedback &feedback, bool allow_play)
 {
     folders_ = folders;
+    channel_options_ = false;
+    hidden_list_ = false;
+    editing_source_ = shared_.model.selected_source_id();
     allow_play_ = allow_play;
     number_pad_ = false;
     number_.clear();
@@ -128,6 +164,11 @@ void LibrarySheet::named(const char *text, void *context)
 
 void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
 {
+    if (channel_options_)
+    {
+        handle_channel_options(input, feedback);
+        return;
+    }
     if (number_pad_)
     {
         handle_number_pad(input, feedback);
@@ -138,6 +179,14 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
         number_pad_ = true;
         number_.clear();
         number_key_ = 0;
+        feedback.play(audio::Cue::open);
+        return;
+    }
+    if (input.is_pressed(Action::page_prev))
+    {
+        channel_options_ = true;
+        sync();
+        list_.set_focus(channel_.empty() ? 6 : 0, true);
         feedback.play(audio::Cue::open);
         return;
     }
@@ -239,6 +288,78 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
         }
         dismiss();
     }
+}
+
+void LibrarySheet::renamed_channel(const char *text, void *context)
+{
+    auto &self = *static_cast<LibrarySheet *>(context);
+    if (!text || !self.open_)
+        return;
+    auto &model = self.shared_.model;
+    if (model.selected_source_id() != self.editing_source_ ||
+        !model.rename_channel(self.channel_, text))
+        model.announce(Level::error, tr("The change could not be saved"), "", 3);
+    self.dirty_ = true;
+}
+
+void LibrarySheet::handle_channel_options(const InputFrame &input, ui::Feedback &feedback)
+{
+    auto &model = shared_.model;
+    if (input.is_pressed(Action::back) || input.is_pressed(Action::touch))
+    {
+        if (hidden_list_)
+            hidden_list_ = false;
+        else
+            channel_options_ = false;
+        sync();
+        list_.set_focus(0, true);
+        return;
+    }
+    if (dirty_ || seen_revision_ != model.revision())
+        sync();
+    if (list_.handle(input, feedback) != ui::Event::activated)
+        return;
+    const auto at = static_cast<unsigned>(list_.focus());
+    bool saved = false;
+    if (model.selected_source_id() != editing_source_)
+    {
+        dismiss();
+        return;
+    }
+    if (hidden_list_)
+    {
+        if (at >= values_.size())
+            return;
+        saved = model.hide_channel(values_[at], false);
+    }
+    else if (at == 6)
+    {
+        hidden_list_ = true;
+        sync();
+        list_.set_focus(0, true);
+        return;
+    }
+    else if (at == 0)
+    {
+        const auto channel = model.find(channel_);
+        if (channel && model.keyboard_ready())
+            iptv_ime_request_prompt(std::string(channel->name).c_str(), tr("Rename channel"),
+                                    tr("Channel name"), 64, &LibrarySheet::renamed_channel, this);
+        return;
+    }
+    else if (at == 1)
+        saved = model.rename_channel(channel_, "");
+    else if (at == 2)
+        saved = model.hide_channel(channel_, true);
+    else if (at == 3 || at == 4)
+        saved = model.move_channel(channel_, at == 3 ? -1 : 1);
+    else if (at == 5)
+        saved = model.reset_channel_order();
+    if (!saved)
+        model.announce(Level::error, tr("The change could not be saved"), "", 3);
+    else
+        feedback.play(audio::Cue::select);
+    sync();
 }
 
 void LibrarySheet::handle_number_pad(const InputFrame &input, ui::Feedback &feedback)
@@ -344,9 +465,30 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
     const auto &fonts = canvas.fonts;
     draw.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.9f));
     draw_glass(canvas, shared_.theme, {360, 120, 1200, 830}, 28);
-    ui::text(draw, fonts.display, folders_ ? tr("Favorite folders") : tr("Provider categories"),
+    ui::text(draw, fonts.display,
+             channel_options_ ? (hidden_list_ ? tr("Hidden channels") : tr("Channel options"))
+             : folders_       ? tr("Favorite folders")
+                              : tr("Provider categories"),
              400, 190, 42, shared_.theme.text);
     list_.draw(canvas);
+    if (channel_options_)
+    {
+        if (!hidden_list_)
+            if (const auto channel = shared_.model.find(channel_))
+            {
+                const auto name = shown_name(fonts, *channel);
+                const auto &face = face_for(fonts, fonts.regular, name);
+                ui::text(draw, face, face.font->fit(name, 22, 1080), 400, 225, 22,
+                         shared_.theme.text_muted);
+            }
+        ui::text(draw, fonts.regular,
+                 hidden_list_ ? tr("Cross: Show channel   Circle: Back")
+                              : tr("Cross: Choose   Circle: Back"),
+                 400, 915, 21, shared_.theme.text_muted);
+        return;
+    }
+    ui::text(draw, fonts.regular, tr("L1: Channel options"), 400, 225, 21,
+             shared_.theme.text_muted);
     if (allow_play_)
         ui::text(draw, fonts.regular, tr("R1: Channel number"), 1180, 190, 24,
                  shared_.theme.text_muted);

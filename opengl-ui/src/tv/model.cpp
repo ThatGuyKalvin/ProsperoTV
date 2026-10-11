@@ -472,6 +472,12 @@ void Model::load_cache()
 // The catalog and its index are new: everything counted from them follows.
 void Model::adopt_catalog()
 {
+    channel_names_ = library_.channel_names(source_id(active_source_));
+    hidden_channels_ = library_.hidden_channels(source_id(active_source_));
+    channel_order_ = library_.channel_order(source_id(active_source_), false);
+    favorite_order_ = library_.channel_order(source_id(active_source_), true);
+    if (!channel_names_.empty())
+        index_.build(catalog_, channel_names_);
     vod_.playlist_updated();
     hidden_categories_ = library_.hidden_categories(source_id(active_source_));
     category_rules_ = library_.category_rules(source_id(active_source_));
@@ -559,7 +565,7 @@ void Model::recount_groups()
 void Model::rebuild_visible()
 {
     if (index_.size() != catalog_.size())
-        index_.build(catalog_);
+        index_.build(catalog_, channel_names_);
     if (marks_.size() != catalog_.size())
         mark_lists();
     std::uint8_t trait_wanted = 0;
@@ -614,7 +620,7 @@ void Model::rebuild_visible()
             continue;
         if (by_word)
         {
-            const iptv::ChannelView channel = catalog_[index];
+            const iptv::ChannelView channel = this->channel(index);
             if (!matches_filters(channel, country_, category_, language_) ||
                 (!matches_query(channel, query_, quality) &&
                  !guide_.matches_now(channel.id, query_, guide_time)))
@@ -624,6 +630,23 @@ void Model::rebuild_visible()
         if (start < 0)
             start = static_cast<int>(visible_.size());
         visible_.push_back(index);
+    }
+    const auto &saved_order = group_ == Group::favorites ? favorite_order_ : channel_order_;
+    if (!saved_order.empty())
+    {
+        std::vector<std::size_t> ranks(catalog_.size(), saved_order.size());
+        for (std::size_t i = 0; i < saved_order.size(); ++i)
+            if (const auto at = catalog_.Find(saved_order[i]); at != iptv::Catalog::npos)
+                ranks[at] = i;
+        std::stable_sort(visible_.begin(), visible_.end(),
+                         [&](unsigned a, unsigned b) { return ranks[a] < ranks[b]; });
+        letter_starts_.fill(-1);
+        for (std::size_t i = 0; i < visible_.size(); ++i)
+        {
+            auto &start = letter_starts_[index_.letters[visible_[i]]];
+            if (start < 0)
+                start = static_cast<int>(i);
+        }
     }
     visible_count_ = static_cast<unsigned>(visible_.size());
     ++revision_;
@@ -663,6 +686,11 @@ int Model::position_of(std::string_view channel_id) const
     const std::size_t index = catalog_.Find(channel_id);
     if (index == iptv::Catalog::npos || index >= index_.ranks.size())
         return -1;
+    if (!(group_ == Group::favorites ? favorite_order_ : channel_order_).empty())
+    {
+        const auto found = std::find(visible_.begin(), visible_.end(), index);
+        return found == visible_.end() ? -1 : static_cast<int>(found - visible_.begin());
+    }
     // The list is in the order of the alphabet, and so are the ranks: the
     // channel is where its rank falls.
     const std::uint32_t rank = index_.ranks[index];
@@ -684,7 +712,7 @@ std::optional<iptv::ChannelView> Model::find(std::string_view channel_id) const
                    ? std::nullopt
                    : std::optional<iptv::ChannelView>(vod_.catalog()[media]);
     }
-    return catalog_[index];
+    return channel(static_cast<unsigned>(index));
 }
 
 // ---- groups, search and filters ----------------------------------------------
@@ -833,9 +861,10 @@ std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) c
         return {};
     const auto index = catalog_.Find(channel_id);
     if (index >= catalog_.size() || pin_prompt() ||
+        hidden_channels_.contains(std::string(channel_id)) ||
         catalog_[index].media_kind != iptv::MediaKind::live || !content_allowed(catalog_[index]))
         return {};
-    const auto channel = catalog_[index];
+    const auto channel = this->channel(static_cast<unsigned>(index));
     PlayRequest request;
     request.channel_id = channel.id;
     request.channel_name = channel.name;
@@ -885,10 +914,11 @@ std::optional<unsigned> Model::previous_channel(std::string_view current) const
 bool Model::play(unsigned catalog_index)
 {
     if (catalog_index >= channel_count() || pin_prompt() ||
+        hidden_channels_.contains(std::string(catalog_[catalog_index].id)) ||
         catalog_[catalog_index].media_kind != iptv::MediaKind::live ||
         !content_allowed(catalog_[catalog_index]))
         return false;
-    const iptv::ChannelView channel = catalog_[catalog_index];
+    const iptv::ChannelView channel = this->channel(catalog_index);
     sleep_timer.wake();
     play_request_ = {};
     play_request_.channel_id = channel.id;
@@ -1327,8 +1357,7 @@ void Model::run_refresh()
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
         const iptv::http::RequestControl control{
-            [](void *context)
-            {
+            [](void *context) {
                 return static_cast<const Model *>(context)->stop_requested_.load(
                     std::memory_order_acquire);
             },
