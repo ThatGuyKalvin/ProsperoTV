@@ -350,8 +350,7 @@ std::optional<std::uint32_t> PlaybackOsd::take_subtitle_selection()
 void PlaybackOsd::set_live_state(const iptv_player_live_state_t &state)
 {
     std::lock_guard lock(mutex_);
-    const auto behind = [](const iptv_player_live_state_t &value)
-    {
+    const auto behind = [](const iptv_player_live_state_t &value) {
         return value.last_us > value.position_us ? (value.last_us - value.position_us) / 1000000
                                                  : 0;
     };
@@ -397,6 +396,8 @@ void PlaybackOsd::set_media_state(const iptv_player_media_state_t &state)
         media_.position_us / 1000000 != state.position_us / 1000000 ||
         media_.duration_us != state.duration_us || media_.chapter_count != state.chapter_count)
         dirty_ = true;
+    if (state.presented && !media_.presented)
+        banner_until_ = platform::monotonic_us() + 5000000;
     media_ = state;
     media_.chapter_count = std::min(media_.chapter_count, unsigned(IPTV_PLAYER_MAX_CHAPTERS));
     chapter_focus_ = std::min(chapter_focus_, media_.chapter_count ? media_.chapter_count - 1 : 0);
@@ -649,6 +650,7 @@ int PlaybackOsd::input(int action, std::uint64_t now)
         else
             return 0;
         banner_until_ = now + 5000000;
+        dirty_ = true;
         return 1;
     }
     if (!list_ && (action == IPTV_INPUT_PLAY_PAUSE || action == IPTV_INPUT_GO_LIVE ||
@@ -977,13 +979,20 @@ void PlaybackOsd::paint()
             const auto time = [](std::uint64_t us)
             {
                 const auto seconds = us / 1000000;
-                return std::to_string(seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") +
-                       std::to_string(seconds % 60);
+                const auto minutes = seconds / 60;
+                return (seconds >= 3600
+                            ? std::to_string(seconds / 3600) + ":" + (minutes % 60 < 10 ? "0" : "")
+                            : "") +
+                       std::to_string(seconds >= 3600 ? minutes % 60 : minutes) + ":" +
+                       (seconds % 60 < 10 ? "0" : "") + std::to_string(seconds % 60);
             };
             char speed[24];
             const auto percent = media_.speed_percent ? media_.speed_percent : 100;
-            std::snprintf(speed, sizeof(speed), "  %u.%02ux", percent / 100, percent % 100);
-            line((media_.paused ? tr("Paused  ") : "") + time(media_.position_us) + " / " +
+            std::snprintf(speed, sizeof(speed), "  %gx", percent / 100.0);
+            line((buffering_      ? std::string(tr("Buffering...")) + "  "
+                  : media_.paused ? std::string(tr("Paused  "))
+                                  : "") +
+                     time(media_.position_us) + " / " +
                      (media_.duration_us ? time(media_.duration_us) : tr("Unknown duration")) +
                      speed,
                  30, 101, 28, 1700);
@@ -1088,9 +1097,15 @@ void PlaybackOsd::paint_subtitles()
 bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigned sh, unsigned vw,
                        unsigned vh, unsigned depth, std::uint64_t now,
                        const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles,
-                       unsigned hdr)
+                       unsigned hdr, bool buffering)
 {
     std::lock_guard lock(mutex_);
+    if (buffering_ != buffering)
+    {
+        buffering_ = buffering;
+        dirty_ = true;
+        banner_until_ = now + 5000000;
+    }
     if (!last_activity_ || !paused_)
         last_activity_ = now;
     if (sleeping(now))
@@ -1127,10 +1142,12 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         started_ = true;
         banner_until_ = now + 5000000;
     }
-    const bool overlay =
-        list_ || audio_menu_ || history_.paused || media_.paused || now < banner_until_;
+    const bool overlay = list_ || audio_menu_ || history_.paused || media_.paused || buffering_ ||
+                         now < banner_until_;
     const bool captions = !list_ && !audio_menu_ && !subtitles.empty();
-    if (!overlay && !captions)
+    const bool speed_badge = !live_ && media_.available && media_.speed_percent &&
+                             media_.speed_percent != 100 && !overlay;
+    if (!overlay && !captions && !speed_badge)
     {
         subtitle_cues_.clear();
         return false;
@@ -1152,6 +1169,19 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         scale_y = std::max(1.0f, std::min(1.0f, 1 / aspect) * zoom);
     }
     bool drawn = false;
+    if (speed_badge)
+    {
+        if (speed_panel_percent_ != media_.speed_percent)
+        {
+            char speed[24];
+            std::snprintf(speed, sizeof(speed), "%gx", media_.speed_percent / 100.0);
+            speed_panel_.reset(1720, 50, 140, 64);
+            speed_panel_.text(regular_, speed, 22, 44, 32, 110);
+            speed_panel_percent_ = media_.speed_percent;
+        }
+        drawn =
+            speed_panel_.composite(surface, bytes, pitch, sh, vw, vh, depth, hdr, scale_x, scale_y);
+    }
     if (captions)
     {
         if (subtitle_cues_ != subtitles)

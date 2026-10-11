@@ -70,7 +70,7 @@ class PlaybackOsd
     bool draw(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
               unsigned visible_width, unsigned visible_height, unsigned depth, std::uint64_t now,
               const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles = {},
-              unsigned hdr = false);
+              unsigned hdr = false, bool buffering = false);
 
   private:
     void update_guide();
@@ -81,6 +81,7 @@ class PlaybackOsd
     Model &model_;
     Settings settings_;
     bool paused_ = false;
+    bool buffering_ = false;
     std::uint64_t last_activity_ = 0;
     bool sleeping(std::uint64_t now) const;
     std::string current_id_, title_, now_, next_;
@@ -120,6 +121,8 @@ class PlaybackOsd
     hui::gfx::Font regular_, east_asian_, korean_;
     hui::ui::Fonts fonts_;
     VideoPanel panel_;
+    VideoPanel speed_panel_;
+    unsigned speed_panel_percent_ = 0;
     VideoPanel subtitle_panel_;
     iptv::SubtitleCue styled_subtitles_;
 };

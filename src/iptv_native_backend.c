@@ -3424,6 +3424,12 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
     state->state = IPTV_NATIVE_STATE_STOPPING;
     state->telemetry.state = state->state;
     iptv_native_backend_request_stop(backend);
+    if (!state->config.picture)
+    {
+        result = iptv_native_agc_show_buffering();
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
     result = state->config.picture ? 0 : iptv_native_agc_present_shutdown();
     if (first_result == 0 && result != 0)
         first_result = result;

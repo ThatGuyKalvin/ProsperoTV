@@ -193,6 +193,20 @@ static iptv_native_agc_presenter_t presenter = {
 };
 static uint64_t agc_state;
 static uint8_t agc_initialized;
+static _Atomic int hold_frame;
+static struct
+{
+    const void *source;
+    size_t bytes;
+    uint32_t pitch, height, width, visible_height, depth;
+    iptv_native_video_overlay_t overlay;
+} last_picture;
+static int buffering_overlay;
+
+void iptv_native_agc_hold_frame(int hold)
+{
+    atomic_store(&hold_frame, hold != 0);
+}
 static uint64_t render_sequence;
 static _Atomic int present_cancelled;
 static _Atomic int overlay_enabled = 1;
@@ -1039,6 +1053,7 @@ static int32_t teardown_presenter(int drain)
     }
 
     memset(&presenter, 0, sizeof(presenter));
+    memset(&last_picture, 0, sizeof(last_picture));
     presenter.shader_start = -1;
     presenter.framebuffer_start = -1;
     presenter.overlay_start = -1;
@@ -1238,7 +1253,7 @@ int32_t iptv_native_agc_loading_start(void)
     int64_t direct_limit;
     int32_t result;
 
-    if (loading.thread)
+    if (loading.thread || (atomic_load(&hold_frame) && presenter.ready))
         return 0;
     load_loading_font();
     direct_limit = sceKernelGetDirectMemorySize();
@@ -1414,7 +1429,17 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
         if (presenter.ready &&
             (presenter.output_width != output.width || presenter.output_height != output.height ||
              presenter.main10 != (bit_depth == 10u)))
-            return -7;
+        {
+            if (!atomic_load(&hold_frame))
+                return -7;
+            /* A changed output format can only replace the held frame once
+             * the new decoder has produced a picture. */
+            result = teardown_presenter(1);
+            if (result != 0)
+                return result;
+            frame_number = presenter.frame_number;
+            buffer_index = frame_number & 1u;
+        }
     }
     if (!presenter.ready)
     {
@@ -1438,11 +1463,29 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
     if (result)
         return result;
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
+    if (overlay && !buffering_overlay)
+    {
+        if (atomic_load(&hold_frame) && !last_picture.source)
+        {
+            atomic_store(&hold_frame, 0);
+            fprintf(stderr, "[TV] resumed held picture pts=%llu\n",
+                    (unsigned long long)overlay->pts_us);
+        }
+        last_picture.source = source;
+        last_picture.bytes = source_bytes;
+        last_picture.pitch = pitch;
+        last_picture.height = surface_height;
+        last_picture.width = visible_width;
+        last_picture.visible_height = visible_height;
+        last_picture.depth = bit_depth;
+        last_picture.overlay = *overlay;
+    }
     if (overlay)
     {
-        const int osd_visible = draw_osd && draw_osd(osd_context, NULL, 0, pitch, surface_height,
-                                                     visible_width, visible_height, bit_depth,
-                                                     overlay->pts_us, presenter.source_transfer);
+        const int osd_visible =
+            draw_osd &&
+            draw_osd(osd_context, NULL, 0, pitch, surface_height, visible_width, visible_height,
+                     bit_depth, overlay->pts_us, presenter.source_transfer, buffering_overlay);
         if (overlay->field || overlay->cpu_written || osd_visible ||
             iptv_native_agc_overlay_enabled() || (!draw_osd && overlay->show_controls))
         {
@@ -1469,7 +1512,7 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
             if (osd_visible && draw_osd)
                 (void)draw_osd(osd_context, presenter.overlay_surface, source_bytes, pitch,
                                surface_height, visible_width, visible_height, bit_depth,
-                               overlay->pts_us, presenter.source_transfer);
+                               overlay->pts_us, presenter.source_transfer, buffering_overlay);
             flush_gpu_data(source, yuv_bytes);
         }
     }
@@ -1528,12 +1571,39 @@ int32_t iptv_native_agc_present_drain(void)
     return result;
 }
 
+int32_t iptv_native_agc_show_buffering(void)
+{
+    if (!atomic_load(&hold_frame) || !presenter.ready || !last_picture.source)
+        return 0;
+    if (!draw_osd)
+    {
+        last_picture.source = NULL;
+        return 0;
+    }
+    int32_t result = iptv_native_agc_present_drain();
+    if (result != 0)
+        return result;
+    const int cancelled = atomic_exchange(&present_cancelled, 0);
+    buffering_overlay = 1;
+    result = present_nv12(last_picture.source, last_picture.bytes, last_picture.pitch,
+                          last_picture.height, last_picture.width, last_picture.visible_height,
+                          &last_picture.overlay, 0, last_picture.depth);
+    buffering_overlay = 0;
+    atomic_store(&present_cancelled, cancelled);
+    /* The decoder owns this surface and is about to release it. Only the
+     * completed RGB scanout survives the reopen, never a decoder pointer. */
+    last_picture.source = NULL;
+    fprintf(stderr, "[TV] held picture with buffering HUD result=0x%08x\n", (unsigned)result);
+    return result;
+}
+
 int32_t iptv_native_agc_present_shutdown(void)
 {
     int32_t result;
 
     iptv_native_agc_loading_stop();
-    result = teardown_presenter(1);
+    result = atomic_load(&hold_frame) && presenter.ready ? iptv_native_agc_present_drain()
+                                                         : teardown_presenter(1);
     atomic_store_explicit(&present_cancelled, 0, memory_order_relaxed);
     return result;
 }
@@ -1541,6 +1611,59 @@ int32_t iptv_native_agc_present_shutdown(void)
 #ifdef IPTV_NATIVE_OVERLAY_TEST
 #include <assert.h>
 static int test_output_result, test_output_calls;
+static int test_video_closes;
+int sceVideoOutUnregisterBuffers(int32_t handle, int32_t set_index)
+{
+    (void)handle;
+    (void)set_index;
+    return 0;
+}
+int sceVideoOutClose(int32_t handle)
+{
+    (void)handle;
+    ++test_video_closes;
+    return 0;
+}
+int sceVideoOutIsFlipPending(int32_t handle)
+{
+    (void)handle;
+    return 0;
+}
+int sceVideoOutWaitVblank(int32_t handle)
+{
+    (void)handle;
+    return 0;
+}
+int sceVideoOutGetFlipStatus(int32_t handle, void *status)
+{
+    (void)handle;
+    ((int64_t *)status)[3] = INT64_MAX;
+    return 0;
+}
+int sceVideoOutGetOutputStatus(int32_t handle, video_output_status_t *status)
+{
+    (void)handle;
+    (void)status;
+    return 0;
+}
+int32_t sceKernelMunmap(void *address, size_t length)
+{
+    (void)address;
+    (void)length;
+    return 0;
+}
+int32_t sceKernelReleaseDirectMemory(int64_t start, size_t length)
+{
+    (void)start;
+    (void)length;
+    return 0;
+}
+int scePthreadJoin(void *thread, void **result)
+{
+    (void)thread;
+    (void)result;
+    return 0;
+}
 void sceVideoOutSetBufferAttribute2(video_attribute_t *attribute, uint64_t format, uint32_t tiling,
                                     uint32_t width, uint32_t height, uint64_t option, uint32_t dcc,
                                     uint64_t clear)
@@ -1566,6 +1689,19 @@ int sceVideoOutSubmitChangeBufferAttribute2(int32_t handle, int32_t index,
 }
 int main(void)
 {
+    presenter.ready = 1;
+    presenter.video = 7;
+    presenter.frame_number = 2;
+    presenter.pending_marker = 123;
+    iptv_native_agc_hold_frame(1);
+    iptv_native_agc_present_set_cancelled(1);
+    assert(iptv_native_agc_present_shutdown() == 0);
+    assert(presenter.ready && presenter.video == 7 && presenter.frame_number == 2);
+    assert(!presenter.pending_marker && !test_video_closes && !atomic_load(&present_cancelled));
+    assert(iptv_native_agc_present_shutdown() == 0 && !test_video_closes);
+    iptv_native_agc_hold_frame(0);
+    assert(iptv_native_agc_present_shutdown() == 0);
+    assert(!presenter.ready && presenter.video == -1 && test_video_closes == 1);
     float w, h;
     picture_size(640, 480, 1920, 1080, IPTV_PICTURE_FIT, &w, &h);
     assert(w == 1440 && h == 1080);

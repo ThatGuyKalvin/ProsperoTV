@@ -166,6 +166,54 @@ TEST(VideoPanel, BakedUnicodeFontDrawsClippedAntialiasedText)
     EXPECT_EQ(panel.pixels, before);
 }
 
+TEST(PlaybackHud, TimelineAdvancesAndSpeedRemainsVisibleAfterControlsHide)
+{
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ptv::Model model("/tmp/prosperotv-hud-test");
+    ptv::PlayRequest request;
+    request.live = false;
+    request.record_channel_result = false;
+    ptv::PlaybackOsd osd(model, request);
+    ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
+    iptv_player_media_state_t media{};
+    media.available = media.seekable = 1;
+    media.duration_us = 7200000000ULL;
+    media.position_us = 1800000000ULL;
+    media.speed_percent = 100;
+    osd.set_media_state(media);
+    std::vector<std::uint8_t> frame(1920 * 1080 * 3 / 2, 99);
+    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 1));
+    EXPECT_EQ(frame[820 * 1920 + 300], 210);
+    EXPECT_EQ(frame[820 * 1920 + 1000], 66);
+    media.position_us = 5400000000ULL;
+    osd.set_media_state(media);
+    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 2));
+    EXPECT_EQ(frame[820 * 1920 + 1000], 210);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 1920, 1080, 1920, 1080, 8, 6000001));
+    media.speed_percent = 200;
+    osd.set_media_state(media);
+    std::fill(frame.begin(), frame.end(), 99);
+    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 6000002));
+    EXPECT_EQ(frame[50 * 1920 + 1720], 28);
+    EXPECT_EQ(frame[820 * 1920 + 1000], 99);
+    media.speed_percent = 100;
+    osd.set_media_state(media);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 1920, 1080, 1920, 1080, 8, 6000003));
+    EXPECT_EQ(osd.input(IPTV_INPUT_TRIANGLE, 6000004), 1);
+    EXPECT_TRUE(osd.draw(nullptr, 0, 1920, 1080, 1920, 1080, 8, 6000005));
+    std::fill(frame.begin(), frame.end(), 99);
+    ASSERT_TRUE(
+        osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 6000006, {}, 0, true));
+    const auto buffering = frame;
+    std::fill(frame.begin(), frame.end(), 99);
+    ASSERT_TRUE(
+        osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 12000000, {}, 0, true));
+    EXPECT_EQ(frame, buffering);
+    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 12000001));
+    EXPECT_NE(frame, buffering);
+    EXPECT_EQ(frame[0], 99);
+}
+
 TEST(PlaybackScreensaver, BlanksPausedSdrAndHdrAndConsumesOnlyTheWakeInput)
 {
     ptv::Model model("/tmp/prosperotv-unused-saver-test");

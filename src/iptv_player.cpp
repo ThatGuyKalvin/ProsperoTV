@@ -857,6 +857,9 @@ void AdapterClose(void *context)
     auto *adapter = static_cast<NativeAdapter *>(context);
     if (!adapter || !adapter->initialized)
         return;
+    if (gMediaSession && gMediaSeekRequest.load() >= 0 &&
+        iptv_native_backend_presented_frames(&adapter->backend))
+        iptv_native_agc_hold_frame(1);
     (void)iptv_native_backend_close(&adapter->backend);
     adapter->opened = false;
     adapter->initialized = false;
@@ -3149,6 +3152,14 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
                      const char *authorization = nullptr, const char *credential_origin = nullptr,
                      const char *extra_headers = nullptr)
 {
+    struct ReleaseDisplay
+    {
+        ~ReleaseDisplay()
+        {
+            iptv_native_agc_hold_frame(0);
+            (void)iptv_native_agc_present_shutdown();
+        }
+    } release_display;
     const auto began = MonotonicUsec();
     for (;;)
     {

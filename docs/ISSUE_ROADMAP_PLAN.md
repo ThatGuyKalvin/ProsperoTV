@@ -1,5 +1,19 @@
 # Provider reports and remaining interface work
 
+## VOD seek feedback
+
+- G1: retain the completed video output across same-video seek/speed decoder
+  reopens; release it on every exit. Test output retention/cleanup, timeline
+  progress, buffering feedback and persistent non-default speed display.
+- G2: on idle .30, use a disposable title and synthetic ranged MP4 to seek
+  forward/back, change speed and pause/resume. Require retained-frame and
+  resumed-frame diagnostics, successful playback and clean teardown.
+
+The held picture shows a translated Buffering message until new frames arrive.
+Triangle reveals elapsed/total time and progress; a non-default speed remains
+visible after the full controls hide. [PS5 VLC](https://github.com/ZiZc3/VLC)
+was reviewed for its seek and rate controls; no VLC code was copied.
+
 Baseline: `550a20b` (11 October 2026). Reported provider responses have not
 been supplied, so fixture compatibility checks must not be described as
 reproductions of those accounts.

@@ -35,7 +35,7 @@ extern "C"
      * output subsequently tone maps the composed surface to SDR. */
     typedef int (*iptv_native_osd_t)(void *context, void *surface, size_t bytes, uint32_t pitch,
                                      uint32_t surface_height, uint32_t width, uint32_t height,
-                                     uint32_t depth, uint64_t pts_us, int hdr);
+                                     uint32_t depth, uint64_t pts_us, int hdr, int buffering);
     enum
     {
         IPTV_PICTURE_FIT,
@@ -70,6 +70,9 @@ extern "C"
     int32_t iptv_native_agc_present_drain(void);
     void iptv_native_agc_present_set_cancelled(int cancelled);
     int32_t iptv_native_agc_present_shutdown(void);
+    /* Keep the completed scanout during a same-video decoder reopen. Clear on exit. */
+    void iptv_native_agc_hold_frame(int hold);
+    int32_t iptv_native_agc_show_buffering(void);
     int iptv_native_agc_hdr_active(void);
     /* Disposable-title scripts only: exercise SDR fallback and sample completed output. */
     void iptv_native_agc_set_color_test(int force_sdr, int sample_output);
