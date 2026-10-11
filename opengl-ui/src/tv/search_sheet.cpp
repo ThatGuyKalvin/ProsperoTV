@@ -83,7 +83,7 @@ SearchSheet::SearchSheet(Shared &shared) : shared_(shared)
     field_.style.remember = false;
     field_.style.max_rows = 0;
     field_.style.exits.down = true;
-    field_.set_placeholder(tr("A name, a country, a category"));
+    field_.set_placeholder(tr("Channels, movies, shows, programmes"));
     field_.set_bounds({area.x, y, area.w, kFieldHeight});
     y += kFieldHeight + 46.0f;
 
@@ -163,7 +163,9 @@ void SearchSheet::sync()
 
 void SearchSheet::open(ui::Feedback &feedback)
 {
+    shared_.model.begin_search();
     sync();
+    sync_results();
     zone_ = Zone::field;
     count_.snap(static_cast<float>(shared_.model.visible_count()));
     sheet_.open(feedback);
@@ -171,6 +173,7 @@ void SearchSheet::open(ui::Feedback &feedback)
 
 void SearchSheet::dismiss()
 {
+    shared_.model.end_search();
     country_.dismiss();
     category_.dismiss();
     language_.dismiss();
@@ -228,6 +231,57 @@ void SearchSheet::handle(const InputFrame &input, ui::Feedback &feedback)
     if (model.revision() != seen_revision_)
         sync();
 
+    sync_results();
+    if (input.is_pressed(Action::page_prev))
+    {
+        country_.dismiss();
+        category_.dismiss();
+        language_.dismiss();
+        go(Zone::results, feedback);
+        return;
+    }
+    if (input.is_pressed(Action::page_next))
+    {
+        go(Zone::field, feedback);
+        return;
+    }
+    if (zone_ == Zone::results)
+    {
+        if (input.is_pressed(Action::back) || input.is_pressed(Action::north))
+            sheet_.close(feedback);
+        else if (input.nav == Direction::right)
+            go(Zone::field, feedback);
+        else if (input.nav == Direction::up)
+            result_focus_ = std::max(0, result_focus_ - 1);
+        else if (input.nav == Direction::down)
+            result_focus_ = std::min(std::max(0, int(results_.size()) - 1), result_focus_ + 1);
+        else if (input.is_pressed(Action::jump_prev))
+            result_focus_ = std::max(0, result_focus_ - 7);
+        else if (input.is_pressed(Action::jump_next))
+            result_focus_ = std::min(std::max(0, int(results_.size()) - 1), result_focus_ + 7);
+        else if (input.is_pressed(Action::confirm) && !results_.empty())
+        {
+            const auto result = results_[result_focus_];
+            bool accepted = false;
+            if (result.kind == Model::SearchResult::Kind::channel)
+                accepted = model.play_channel(result.id);
+            else if (result.kind == Model::SearchResult::Kind::programme)
+            {
+                navigation_ = result;
+                accepted = true;
+            }
+            else if ((accepted = model.activate_search_vod(result)) &&
+                     result.kind == Model::SearchResult::Kind::show)
+                navigation_ = result;
+            if (accepted)
+                sheet_.close(feedback);
+            else
+                feedback.play(audio::Cue::error);
+        }
+        result_top_ = std::clamp(result_top_, std::max(0, result_focus_ - 6), result_focus_);
+        return;
+    }
+
     // ---- an open dropdown takes everything ----
     for (const Zone zone : {Zone::country, Zone::category, Zone::language})
     {
@@ -270,6 +324,8 @@ void SearchSheet::handle(const InputFrame &input, ui::Feedback &feedback)
     const Direction nav = input.nav;
     switch (zone_)
     {
+    case Zone::results:
+        break;
     case Zone::field:
     {
         const ui::Event event = field_.handle(input, feedback);
@@ -354,6 +410,12 @@ void SearchSheet::update(float dt)
         zone_ = Zone::field;
 
     const bool open = sheet_.is_open();
+    if (open && !model.searching() && !model.refreshing())
+        shared_.model.begin_search();
+    if (!open && model.searching())
+        shared_.model.end_search();
+    if (open)
+        sync_results();
     field_.set_active(open && zone_ == Zone::field);
     country_.set_active(open && zone_ == Zone::country);
     category_.set_active(open && zone_ == Zone::category);
@@ -464,6 +526,9 @@ void SearchSheet::draw_content(ui::Canvas &canvas, float) const
     {
         switch (zone_)
         {
+        case Zone::results:
+            hints[count++] = {ui::Button::cross, tr("Open")};
+            break;
         case Zone::field:
             hints[count++] = {ui::Button::cross, tr("Type")};
             break;
@@ -500,6 +565,79 @@ void SearchSheet::draw_content(ui::Canvas &canvas, float) const
 void SearchSheet::draw(ui::Canvas &canvas) const
 {
     sheet_.draw(canvas);
+    if (sheet_.is_open())
+        draw_results(canvas);
+}
+
+std::optional<Model::SearchResult> SearchSheet::take_navigation()
+{
+    auto result = std::move(navigation_);
+    navigation_.reset();
+    return result;
+}
+void SearchSheet::sync_results()
+{
+    const auto &model = shared_.model;
+    if (results_revision_ == model.revision() && catalog_revision_ == model.search_revision() &&
+        results_query_ == model.query())
+        return;
+    std::optional<Model::SearchResult> focused;
+    if (!results_.empty() && results_query_ == model.query())
+        focused = results_[result_focus_];
+    results_ = model.search_results(model.query(), &truncated_);
+    results_query_ = model.query();
+    results_revision_ = model.revision();
+    catalog_revision_ = model.search_revision();
+    result_focus_ = 0;
+    if (focused)
+        for (unsigned i = 0; i < results_.size(); ++i)
+            if (results_[i].id == focused->id && results_[i].kind == focused->kind &&
+                results_[i].programme_start == focused->programme_start)
+                result_focus_ = i;
+    result_top_ = std::clamp(result_top_, std::max(0, result_focus_ - 6), result_focus_);
+}
+void SearchSheet::draw_results(ui::Canvas &canvas) const
+{
+    const auto &theme = shared_.theme;
+    draw_glass(canvas, theme, {kMargin, 120, 960, 850}, 24);
+    ui::text(canvas.list, canvas.fonts.semibold, tr("Search results"), kMargin + 24, 170, 32,
+             theme.text);
+    ui::text(canvas.list, canvas.fonts.regular,
+             tr("Active source / channel filters apply to live channels"), kMargin + 24, 205, 20,
+             theme.text_muted);
+    const char *kinds[] = {"Live", "Movie", "TV show", "Programme"};
+    for (int i = result_top_; i < int(results_.size()) && i < result_top_ + 7; ++i)
+    {
+        const auto &result = results_[i];
+        const float y = 230 + (i - result_top_) * 84;
+        const bool focused = zone_ == Zone::results && i == result_focus_;
+        canvas.list.bordered_rect({kMargin + 12, y, 936, 78}, 12,
+                                  kWhite.with_alpha(focused ? .15f : .03f), focused ? 2 : 0,
+                                  theme.text);
+        ui::text(canvas.list, canvas.fonts.semibold, tr(kinds[unsigned(result.kind)]), kMargin + 26,
+                 y + 32, 18, tone::accent);
+        const auto &title = face_for(canvas.fonts, canvas.fonts.semibold, result.title);
+        const auto &detail = face_for(canvas.fonts, canvas.fonts.regular, result.detail);
+        ui::text(canvas.list, title, title.font->fit(readable(title, result.title), 26, 748),
+                 kMargin + 174, y + 32, 26, theme.text);
+        ui::text(canvas.list, detail, detail.font->fit(readable(detail, result.detail), 19, 748),
+                 kMargin + 174, y + 61, 19, theme.text_muted);
+    }
+    if (results_.empty())
+        ui::paragraph(canvas.list, canvas.fonts.regular,
+                      results_query_.empty()
+                          ? tr("Enter a title or channel name to search everything.")
+                          : tr("No matches in the available lists."),
+                      kMargin + 24, 300, 27, 900, 38, theme.text, 3);
+    ui::paragraph(canvas.list, canvas.fonts.regular, shared_.model.search_status(), kMargin + 24,
+                  850, 18, 900, 26, theme.text_muted, 3);
+    ui::text(canvas.list, canvas.fonts.regular,
+             truncated_ ? tr("First 250 matches per kind. Narrow the search.")
+                        : group_digits(results_.size()) + tr(" results"),
+             kMargin + 24, 951, 19, theme.text_muted);
+    ui::text(canvas.list, canvas.fonts.regular,
+             tr("L1 Results / R1 Search and filters / Cross Open"), kMargin + 24, 1018, 21,
+             theme.text);
 }
 
 } // namespace ptv

@@ -601,6 +601,19 @@ TEST_F(AppTest, TheSearchDrawerNarrowsTheListBehindIt)
     EXPECT_EQ(app_->tab(), 0);
 }
 
+TEST_F(AppTest, UnifiedSearchResultsOpenTheSelectedLiveChannel)
+{
+    press(Action::north);
+    host::set_keyboard_text("channel 03");
+    press(Action::confirm);
+    press(Action::page_prev);
+    press(Action::confirm);
+    EXPECT_FALSE(app_->searching());
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_name, "Channel 03 (576p)");
+}
+
 TEST_F(AppTest, SquareInTheDrawerResetsAndCircleClosesIt)
 {
     press(Action::north);

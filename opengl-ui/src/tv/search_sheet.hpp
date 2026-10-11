@@ -33,11 +33,13 @@ class SearchSheet
     void handle(const InputFrame &input, ui::Feedback &feedback);
     void update(float dt);
     void draw(ui::Canvas &canvas) const;
+    std::optional<Model::SearchResult> take_navigation();
 
   private:
     enum class Zone
     {
         field,
+        results,
         country,
         category,
         language,
@@ -51,12 +53,20 @@ class SearchSheet
     void step(int direction, ui::Feedback &feedback);
     // The dropdowns and the field as the model has them.
     void sync();
+    void sync_results();
+    void draw_results(ui::Canvas &canvas) const;
     void reset(ui::Feedback &feedback);
     Rect area() const;
     ui::Select &select_of(Zone zone);
     void draw_content(ui::Canvas &canvas, float opacity) const;
     void draw_unlisted(ui::Canvas &canvas, const Rect &row, const char *label) const;
 
+    std::vector<Model::SearchResult> results_;
+    std::optional<Model::SearchResult> navigation_;
+    std::string results_query_;
+    unsigned results_revision_ = ~0u, catalog_revision_ = ~0u;
+    int result_focus_ = 0, result_top_ = 0;
+    bool truncated_ = false;
     Shared &shared_;
     ui::Sheet sheet_;
     ui::SearchField field_;

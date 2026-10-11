@@ -225,6 +225,40 @@ class Model
     {
         return vod_;
     }
+    struct SearchResult
+    {
+        enum class Kind
+        {
+            channel,
+            movie,
+            show,
+            programme
+        };
+        Kind kind = Kind::channel;
+        std::string id, title, detail;
+        std::int64_t programme_start = 0;
+        std::uint64_t source_id = 0;
+    };
+    void begin_search();
+    void end_search();
+    bool searching() const
+    {
+        return searching_;
+    }
+    std::vector<SearchResult> search_results(std::string_view query,
+                                             bool *truncated = nullptr) const;
+    std::string search_status() const;
+    unsigned search_revision() const
+    {
+        return search_movies_.revision() + search_shows_.revision();
+    }
+    bool activate_search_vod(const SearchResult &result);
+    bool channel_visible(unsigned index) const;
+    bool search_loading() const
+    {
+        return search_busy() || search_pending();
+    }
+    bool search_vod_allowed(const iptv::ChannelView &item) const;
     bool play_vod(unsigned index);
     bool save_vod_progress(std::string_view id, std::uint64_t position_us,
                            std::uint64_t duration_us);
@@ -291,11 +325,12 @@ class Model
     // European ones: the faces for them are large, and loaded only when asked for.
     bool uses_east_asian() const
     {
-        return index_.east_asian || vod_.east_asian();
+        return index_.east_asian || vod_.east_asian() || search_movies_.east_asian() ||
+               search_shows_.east_asian();
     }
     bool uses_korean() const
     {
-        return index_.korean || vod_.korean();
+        return index_.korean || vod_.korean() || search_movies_.korean() || search_shows_.korean();
     }
     // Changes whenever the visible list may have changed.
     unsigned revision() const
@@ -616,6 +651,17 @@ class Model
     bool resume_attempted_ = false;
     Guide guide_, pending_guide_;
     VodLibrary vod_;
+    VodLibrary search_movies_, search_shows_;
+    bool searching_ = false;
+    bool search_busy() const
+    {
+        return search_movies_.busy() || search_shows_.busy();
+    }
+    bool search_pending() const
+    {
+        return searching_ && (search_movies_.requested() || search_shows_.requested());
+    }
+    bool queue_vod(const iptv::ChannelView &item, const std::string &series);
     void *guide_thread_ = nullptr;
     std::atomic<bool> guide_done_{false}, guide_stop_{false};
     std::vector<std::string> guide_urls_;
