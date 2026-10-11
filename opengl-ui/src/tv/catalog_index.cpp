@@ -130,7 +130,8 @@ void CatalogIndex::clear()
     *this = {};
 }
 
-void CatalogIndex::build(const iptv::Catalog &catalog)
+void CatalogIndex::build(const iptv::Catalog &catalog,
+                         const std::map<std::string, std::string, std::less<>> &names)
 {
     clear();
     const std::uint32_t count = static_cast<std::uint32_t>(catalog.size());
@@ -149,7 +150,9 @@ void CatalogIndex::build(const iptv::Catalog &catalog)
     std::map<std::string_view, unsigned> provider_tally;
     for (std::uint32_t index = 0; index < count; ++index)
     {
-        const iptv::ChannelView channel = catalog[index];
+        iptv::ChannelView channel = catalog[index];
+        if (const auto name = names.find(channel.id); name != names.end())
+            channel.name = name->second;
         const std::string key = sort_key(channel);
         key_at[index] = static_cast<std::uint32_t>(keys.size());
         keys += key;

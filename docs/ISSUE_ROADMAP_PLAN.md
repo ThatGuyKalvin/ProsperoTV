@@ -33,3 +33,5 @@ pass.
 After G1-G6 are complete and verified, continue with remaining backlog items,
 starting with the easiest. Recheck console availability before every native
 case; another running title always takes priority.
+
+- 2026-10-11 | G5 | channel organization | host | partial-pass: 167 sanitized UI tests, 5692 renderer frames; names/hiding/order persist | native idle-console check pending

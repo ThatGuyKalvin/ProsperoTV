@@ -477,8 +477,8 @@ void Model::mark_visibility()
                 if (!group.empty() && group != channel.group_title)
                     ++categories[std::string(group)];
         }
-        bool hidden =
-            !allowed || (hide_failed_ && channel.playback_status == iptv::PlaybackStatus::failed);
+        bool hidden = !allowed || hidden_channels_.contains(std::string(channel.id)) ||
+                      (hide_failed_ && channel.playback_status == iptv::PlaybackStatus::failed);
         if (!hidden_categories_.empty())
         {
             hidden = hidden || category_hidden(channel.group_title);
@@ -490,6 +490,90 @@ void Model::mark_visibility()
     }
     for (auto &[category, count] : categories)
         protected_categories_.push_back({std::move(category), count});
+}
+
+bool Model::move_channel(std::string_view id, int direction)
+{
+    if (direction != -1 && direction != 1)
+        return false;
+    const int from = position_of(id);
+    const int to = from + direction;
+    if (from < 0 || to < 0 || to >= static_cast<int>(visible_count_))
+        return false;
+    const bool favorites = group_ == Group::favorites;
+    auto order = favorites ? favorite_order_ : channel_order_;
+    std::erase_if(order,
+                  [&](const auto &saved)
+                  {
+                      const auto at = catalog_.Find(saved);
+                      return at == iptv::Catalog::npos ||
+                             catalog_[at].media_kind != iptv::MediaKind::live;
+                  });
+    std::unordered_set<std::string> known(order.begin(), order.end());
+    for (const auto at : index_.order)
+        if (catalog_[at].media_kind == iptv::MediaKind::live &&
+            (!favorites || is_favorite(catalog_[at])) &&
+            known.insert(std::string(catalog_[at].id)).second)
+            order.emplace_back(catalog_[at].id);
+    const auto neighbor = catalog_[visible_[static_cast<unsigned>(to)]].id;
+    const auto first = std::find(order.begin(), order.end(), id);
+    const auto second = std::find(order.begin(), order.end(), neighbor);
+    if (first == order.end() || second == order.end())
+        return false;
+    std::iter_swap(first, second);
+    if (!library_.save_channel_order(source_id(active_source_), favorites, order))
+        return false;
+    (favorites ? favorite_order_ : channel_order_) = std::move(order);
+    rebuild_visible();
+    return true;
+}
+
+bool Model::reset_channel_order()
+{
+    const bool favorites = group_ == Group::favorites;
+    if (!library_.save_channel_order(source_id(active_source_), favorites, {}))
+        return false;
+    (favorites ? favorite_order_ : channel_order_).clear();
+    rebuild_visible();
+    return true;
+}
+
+bool Model::rename_channel(std::string_view id, std::string_view name)
+{
+    const auto at = catalog_.Find(id);
+    if (at == iptv::Catalog::npos || !content_allowed(catalog_[at]) ||
+        catalog_[at].media_kind != iptv::MediaKind::live ||
+        !library_.rename_channel(source_id(active_source_), id, name))
+        return false;
+    channel_names_ = library_.channel_names(source_id(active_source_));
+    index_.build(catalog_, channel_names_);
+    rebuild_visible();
+    return true;
+}
+
+bool Model::hide_channel(std::string_view id, bool hidden)
+{
+    const auto at = catalog_.Find(id);
+    if (at == iptv::Catalog::npos || !content_allowed(catalog_[at]) ||
+        catalog_[at].media_kind != iptv::MediaKind::live ||
+        !library_.hide_channel(source_id(active_source_), id, hidden))
+        return false;
+    hidden_channels_ = library_.hidden_channels(source_id(active_source_));
+    mark_visibility();
+    recount_groups();
+    rebuild_visible();
+    return true;
+}
+
+std::vector<unsigned> Model::hidden_channels() const
+{
+    std::vector<unsigned> result;
+    for (const auto at : index_.order)
+        if (catalog_[at].media_kind == iptv::MediaKind::live &&
+            hidden_channels_.contains(std::string(catalog_[at].id)) &&
+            content_allowed(catalog_[at]))
+            result.push_back(at);
+    return result;
 }
 
 void Model::set_provider_category(std::string_view category)

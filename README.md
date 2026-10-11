@@ -207,6 +207,7 @@ at 3840×2160. Codec and renderer details are documented in
 | Square in Sources | Cycle daily, weekly and manual refresh |
 | Touchpad in Live TV / Favorites | Provider categories / favorite folders |
 | R1 inside categories / folders | Channel number pad: enter a number, then Watch |
+| L1 inside categories / folders | Rename, hide/restore, or move channels in the list |
 | R3 in the channel browser | Open the programme guide |
 | L3 in Live TV / Favorites | Open Multiview; Square chooses a channel, Triangle switches two/four tiles, R3 mutes, Cross opens full screen |
 | Options | Refresh the selected catalog source |
@@ -516,3 +517,15 @@ Numbers such as `7.2` and leading zeros are preserved. Channels without a number
 keep their alphabetical position. The number pad searches only the current
 visible list; when numbers repeat, narrow the list before choosing one. Existing
 cached lists acquire provider numbers on their next refresh.
+
+In Live TV or Favorites, focus a channel and open Touchpad, then L1 for channel
+options. Names are saved locally without changing provider IDs, guide matching,
+or parental rules. An empty name or **Use provider name** restores the original.
+**Hidden channels** lets you restore individual channels, including when the
+current list is empty. A hidden provider category must also be shown for its
+channels to appear.
+
+**Move up/down** swaps a channel with its visible neighbor. Live lists share one
+saved order; Favorites and its folders share a separate order. Both survive
+refreshes and restarts; new channels are appended alphabetically. **Reset list
+order** restores alphabetical order for the current kind of list.

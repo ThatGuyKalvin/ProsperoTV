@@ -531,5 +531,17 @@
 {"Cross: Enter   Square: Delete   Circle: Back", {"Cruz: Introducir   Cuadrado: Borrar   Círculo: Atrás", "Croix : Saisir   Carré : Effacer   Cercle : Retour", "Kreuz: Eingabe   Quadrat: Löschen   Kreis: Zurück", "Croce: Inserisci   Quadrato: Elimina   Cerchio: Indietro", "Cruz: Inserir   Quadrado: Apagar   Círculo: Voltar", "Kruis: Invoeren   Vierkant: Wissen   Cirkel: Terug"}},
 
 {"Clear", {"Limpiar", "Vider", "Leeren", "Svuota", "Limpar", "Wissen"}},
+{"Rename channel", {"Renombrar canal", "Renommer la chaîne", "Kanal umbenennen", "Rinomina canale", "Renomear canal", "Kanaal hernoemen"}},
+{"Use provider name", {"Usar nombre del proveedor", "Utiliser le nom du fournisseur", "Anbieternamen verwenden", "Usa nome del fornitore", "Usar nome do fornecedor", "Naam van aanbieder gebruiken"}},
+{"Hide channel", {"Ocultar canal", "Masquer la chaîne", "Kanal ausblenden", "Nascondi canale", "Ocultar canal", "Kanaal verbergen"}},
+{"Hidden channels", {"Canales ocultos", "Chaînes masquées", "Ausgeblendete Kanäle", "Canali nascosti", "Canais ocultos", "Verborgen kanalen"}},
+{"Channel options", {"Opciones del canal", "Options de la chaîne", "Kanaloptionen", "Opzioni canale", "Opções do canal", "Kanaalopties"}},
+{"Channel name", {"Nombre del canal", "Nom de la chaîne", "Kanalname", "Nome canale", "Nome do canal", "Kanaalnaam"}},
+{"L1: Channel options", {"L1: Opciones del canal", "L1 : Options de la chaîne", "L1: Kanaloptionen", "L1: Opzioni canale", "L1: Opções do canal", "L1: Kanaalopties"}},
+{"Move up", {"Mover arriba", "Monter", "Nach oben", "Sposta su", "Mover para cima", "Omhoog"}},
+{"Move down", {"Mover abajo", "Descendre", "Nach unten", "Sposta giù", "Mover para baixo", "Omlaag"}},
+{"Reset list order", {"Restablecer orden", "Réinitialiser l'ordre", "Reihenfolge zurücksetzen", "Ripristina ordine", "Repor ordem da lista", "Lijstvolgorde herstellen"}},
+{"Cross: Show channel   Circle: Back", {"Cruz: Mostrar canal   Círculo: Atrás", "Croix : Afficher la chaîne   Cercle : Retour", "Kreuz: Kanal anzeigen   Kreis: Zurück", "Croce: Mostra canale   Cerchio: Indietro", "Cruz: Mostrar canal   Círculo: Voltar", "Kruis: Kanaal tonen   Cirkel: Terug"}},
+{"Cross: Choose   Circle: Back", {"Cruz: Elegir   Círculo: Atrás", "Croix : Choisir   Cercle : Retour", "Kreuz: Wählen   Kreis: Zurück", "Croce: Scegli   Cerchio: Indietro", "Cruz: Escolher   Círculo: Voltar", "Kruis: Kiezen   Cirkel: Terug"}},
 
 {"Delete", {"Borrar", "Effacer", "Löschen", "Elimina", "Apagar", "Verwijder"}},

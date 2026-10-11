@@ -26,6 +26,11 @@ class LibrarySheet
     void sync();
     void handle_number_pad(const InputFrame &input, ui::Feedback &feedback);
     void draw_number_pad(ui::Canvas &canvas) const;
+    void handle_channel_options(const InputFrame &input, ui::Feedback &feedback);
+    static void renamed_channel(const char *text, void *context);
+    bool channel_options_ = false;
+    bool hidden_list_ = false;
+    std::int64_t editing_source_ = 0;
     bool number_pad_ = false;
     bool allow_play_ = true;
     int number_key_ = 0;
