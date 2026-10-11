@@ -109,6 +109,10 @@ TEST_F(RemoteBrowseTest, RechecksHiddenAndParentalRulesBeforeReturningGuideOrTun
     EXPECT_EQ(model.remote_browse(request("guide", token, model.channel(0).id), output), 404);
     ASSERT_TRUE(model.hide_channel(model.channel(0).id, false));
     model.parental_action(ptv::Model::ParentalAction::set_pin);
+    auto blocked_snapshot = model.remote_browse_view();
+    EXPECT_EQ(blocked_snapshot.handle(R"({"operation":"list"})", output), 403);
+    EXPECT_TRUE(blocked_snapshot.order.empty());
+    EXPECT_TRUE(blocked_snapshot.marks.empty());
     model.poll();
     host::set_keyboard_text("836295");
     model.poll();
@@ -136,12 +140,17 @@ TEST_F(RemoteBrowseTest, PlaybackViewBorrowsClosedModelWithoutTuningUntilRevalid
     ASSERT_TRUE(model.open());
     settle(model);
     ASSERT_TRUE(model.hide_category("Private", true));
+    ASSERT_TRUE(model.rename_channel(model.channel(80).id, "Phone football"));
     model.close(); // Catalog/guide remain owned, workers have stopped.
-    auto view = model.remote_browse_view();
+    ptv::RemoteBrowseView view;
+    {
+        auto original = model.remote_browse_view();
+        view = std::move(original);
+    } // The moved-from view is gone; all snapshot-owned data must remain valid.
     view.current_channel = std::string(model.channel(1).id);
     std::string output;
     ASSERT_EQ(view.handle(R"({"operation":"list","query":"Football"})", output), 200);
-    EXPECT_NE(output.find("Channel 80"), std::string::npos);
+    EXPECT_NE(output.find("Phone football"), std::string::npos);
     const auto token = source(output);
     EXPECT_EQ(view.handle(request("play", token, model.channel(0).id), output), 404);
     EXPECT_TRUE(view.selected.empty());
@@ -156,9 +165,43 @@ TEST_F(RemoteBrowseTest, PlaybackViewBorrowsClosedModelWithoutTuningUntilRevalid
     ASSERT_TRUE(model.take_play_request(&play));
     EXPECT_EQ(play.channel_id, model.channel(80).id);
     ASSERT_TRUE(model.hide_channel(model.channel(80).id, true));
+    EXPECT_EQ(view.handle(request("guide", token, model.channel(80).id), output), 200);
     EXPECT_EQ(model.remote_browse(view.selection_request(), output), 404);
     EXPECT_FALSE(model.take_play_request(&play)); // Policy is checked again after teardown.
     view.source = "stale";
     EXPECT_EQ(model.remote_browse(view.selection_request(), output), 409);
+}
+TEST_F(RemoteBrowseTest, LargeCatalogueRequestCost)
+{
+    std::ofstream list(dir + "/list.m3u");
+    list << "#EXTM3U\n";
+    for (unsigned i = 0; i < 250000; ++i)
+        list << "#EXTINF:-1 group-title=\"General\",Channel " << i << "\nhttps://stream.invalid/"
+             << i << ".ts\n";
+    list.close();
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    for (unsigned i = 0; i < 12000 && model.refreshing(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(model.channel_count(), 250000u);
+    std::string output;
+    auto borrowed = model.remote_browse_view(false);
+    EXPECT_TRUE(borrowed.order.empty());
+    EXPECT_TRUE(borrowed.marks.empty());
+    EXPECT_TRUE(borrowed.names.empty());
+    EXPECT_EQ(borrowed.menu_order.size(), 250000u);
+    EXPECT_EQ(borrowed.menu_marks.size(), 250000u);
+    auto started = std::chrono::steady_clock::now();
+    for (unsigned i = 0; i < 10; ++i)
+        ASSERT_EQ(model.remote_browse(R"({"operation":"list"})", output), 200);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - started)
+                             .count();
+    std::printf("250k catalogue first-page mean: %lld us\n", static_cast<long long>(elapsed / 10));
+    EXPECT_LT(output.size(), 128u * 1024u);
+    model.close();
 }
 } // namespace

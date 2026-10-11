@@ -210,7 +210,8 @@ The authenticated `/api/browse` POST endpoint applies the existing pairing cooki
 header requirements. It limits request size and page output, validates source identity on guide,
 paging and tuning requests, and rechecks parental/hidden/failed-channel policy before returning
 channel data or playing. During playback a read-only view borrows the stopped Model's catalogue
-and guide and copies allowed-channel bits, order and renamed labels. The synchronous polling
+and guide and copies visibility marks, order and renamed labels once. Menu requests borrow
+those existing arrays synchronously, so a small page does not copy or recheck the entire source. The synchronous polling
 handler records a selection without mutating the Model. Idle player polling honors the normal
 stop-for-switch result; the handler detaches immediately after playback, before its view can
 expire. The Model then rechecks source and content policy before queuing the channel. Tapping
@@ -218,3 +219,9 @@ the current channel does not restart it. A phone switch saves VOD progress witho
 to the next episode. Source editing still requires the menu. Host tests cover stopped-Model
 browsing/search/guide, deferred tuning, blocked selection and final policy/source revalidation.
 Native acceptance remains pending; roadmap stays unchecked.
+
+A host ASan/UBSan benchmark with 250,000 generated live channels and ten first-page requests
+measured 199,472 microseconds per request before borrowing menu visibility data and 177 after.
+The regression checks that menu views hold no owned catalogue-sized arrays/maps; timing is
+reported, not used as a flaky pass/fail limit. PIN-prompt snapshots reject browsing, and moved
+playback snapshots retain renamed labels and visibility independently of later menu changes.
