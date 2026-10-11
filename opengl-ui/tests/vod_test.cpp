@@ -132,6 +132,38 @@ TEST_F(VodTest, UnifiedSearchLoadsBothKindsWithoutChangingBrowseAndRoutesSafely)
     model.close();
 }
 
+TEST_F(VodTest, OpenSearchFollowsInitialAndReplacementPlaylistDownloads)
+{
+    const std::string url = "https://provider.invalid/list.m3u";
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource source{2, 1, "Playlist", url, {}, {}, {}, ptv::RefreshSchedule::manual};
+        ASSERT_TRUE(library.save_source(&source));
+        ASSERT_TRUE(library.select_source(2));
+    }
+    reply(url, "#EXTM3U\n#EXTINF:120,First film\nhttps://stream.invalid/movie/first.mp4\n");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.begin_search(); // The playlist has not reached the UI thread yet.
+    ASSERT_TRUE(settle(model));
+    auto results = model.search_results("film");
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].title, "First film");
+    reply(url, "#EXTM3U\n#EXTINF:120,Replacement film\nhttps://stream.invalid/movie/second.mp4\n");
+    model.refresh();
+    model.begin_search(); // Reopen the sheet while the replacement is downloading.
+    ASSERT_TRUE(settle(model));
+    results = model.search_results("film");
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].title, "Replacement film");
+    ASSERT_TRUE(model.activate_search_vod(results[0]));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.urls[0], "https://stream.invalid/movie/second.mp4");
+    model.close();
+}
+
 TEST_F(VodTest, ParentalPolicyAppliesToProviderFlagsAndEpisodesOfTheSelectedShow)
 {
     response(
