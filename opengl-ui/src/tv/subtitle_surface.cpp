@@ -5,16 +5,19 @@
 #include "iptv_color.h"
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 
 namespace ptv
 {
 bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std::size_t bytes,
                                 unsigned pitch, unsigned sh, unsigned vw, unsigned vh,
-                                unsigned depth, unsigned hdr)
+                                unsigned depth, unsigned hdr, float scale_x, float scale_y)
 {
-    if (!surface || (depth != 8 && depth != 10) || (hdr && depth != 10) || !vw || !vh ||
-        vw > pitch || vh > sh || pitch > 8192 || sh > 8192 || (pitch & 1u) || !cue.canvas_width ||
-        !cue.canvas_height || cue.canvas_width > 3840 || cue.canvas_height > 2160)
+    if (!std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x < 1 || scale_y < 1 ||
+        scale_x > 8192 || scale_y > 8192 || !surface || (depth != 8 && depth != 10) ||
+        (hdr && depth != 10) || !vw || !vh || vw > pitch || vh > sh || pitch > 8192 || sh > 8192 ||
+        (pitch & 1u) || !cue.canvas_width || !cue.canvas_height || cue.canvas_width > 3840 ||
+        cue.canvas_height > 2160)
         return false;
     const unsigned component = depth == 10 ? 2 : 1, scale = depth == 10 ? 4 : 1;
     const std::size_t y_bytes = static_cast<std::size_t>(pitch) * sh;
@@ -39,6 +42,22 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
             std::memcpy(out + at * 2, &word, 2);
         }
     };
+    // Subtitle panels contain long runs of the same background and ink.
+    std::uint32_t cached_color = 0;
+    bool cached = false;
+    std::uint16_t cached_yuv[3]{};
+    const auto hdr_color = [&](std::uint32_t color)
+    {
+        color &= 0xffffff;
+        if (!cached || cached_color != color)
+        {
+            iptv_color_ui_yuv((color >> 16) & 255, (color >> 8) & 255, color & 255, cached_yuv,
+                              hdr == 2);
+            cached_color = color;
+            cached = true;
+        }
+        return cached_yuv;
+    };
     bool drawn = false;
     for (const auto &bitmap : cue.bitmaps)
     {
@@ -48,8 +67,14 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
             continue;
         const auto sample = [&](unsigned x, unsigned y) -> std::uint32_t
         {
-            const int sx = static_cast<int>(x * cue.canvas_width / vw) - bitmap.x;
-            const int sy = static_cast<int>(y * cue.canvas_height / vh) - bitmap.y;
+            const int sx =
+                (scale_x == 1 ? int(x * cue.canvas_width / vw)
+                              : int((.5 + (double(x) / vw - .5) * scale_x) * cue.canvas_width)) -
+                bitmap.x;
+            const int sy =
+                (scale_y == 1 ? int(y * cue.canvas_height / vh)
+                              : int((.5 + (double(y) / vh - .5) * scale_y) * cue.canvas_height)) -
+                bitmap.y;
             return sx >= 0 && sy >= 0 && static_cast<unsigned>(sx) < bitmap.width &&
                            static_cast<unsigned>(sy) < bitmap.height
                        ? bitmap.argb[static_cast<std::size_t>(sy) * bitmap.width + sx]
@@ -57,15 +82,27 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
         };
         const auto map_x = [&](int x)
         {
-            const int numerator = x * static_cast<int>(vw), divisor = cue.canvas_width;
-            return std::clamp((numerator >= 0 ? numerator + divisor - 1 : numerator) / divisor, 0,
-                              static_cast<int>(vw));
+            if (scale_x == 1)
+            {
+                const int numerator = x * int(vw), divisor = cue.canvas_width;
+                return std::clamp((numerator >= 0 ? numerator + divisor - 1 : numerator) / divisor,
+                                  0, int(vw));
+            }
+            return std::clamp(
+                int(std::ceil((.5 + (double(x) / cue.canvas_width - .5) / scale_x) * vw)), 0,
+                int(vw));
         };
         const auto map_y = [&](int y)
         {
-            const int numerator = y * static_cast<int>(vh), divisor = cue.canvas_height;
-            return std::clamp((numerator >= 0 ? numerator + divisor - 1 : numerator) / divisor, 0,
-                              static_cast<int>(vh));
+            if (scale_y == 1)
+            {
+                const int numerator = y * int(vh), divisor = cue.canvas_height;
+                return std::clamp((numerator >= 0 ? numerator + divisor - 1 : numerator) / divisor,
+                                  0, int(vh));
+            }
+            return std::clamp(
+                int(std::ceil((.5 + (double(y) / cue.canvas_height - .5) / scale_y) * vh)), 0,
+                int(vh));
         };
         const int left = map_x(bitmap.x), top = map_y(bitmap.y);
         const int right = map_x(bitmap.x + static_cast<int>(bitmap.width));
@@ -82,9 +119,7 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
                     static_cast<unsigned>(16 + ((47 * r + 157 * g + 16 * b + 128) >> 8)) * scale;
                 if (hdr)
                 {
-                    std::uint16_t yuv[3];
-                    iptv_color_ui_yuv(r, g, b, yuv, hdr == 2);
-                    luma = yuv[0];
+                    luma = hdr_color(color)[0];
                 }
                 const auto at = static_cast<std::size_t>(y) * pitch + x;
                 put(at, (get(at) * (255 - a) + luma * a + 127) / 255);
@@ -106,8 +141,7 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
                         alpha += a;
                         if (hdr)
                         {
-                            std::uint16_t yuv[3];
-                            iptv_color_ui_yuv(r, g, b, yuv, hdr == 2);
+                            const auto *yuv = hdr_color(color);
                             u += a * yuv[1];
                             v += a * yuv[2];
                         }

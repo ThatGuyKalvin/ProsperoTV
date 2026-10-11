@@ -195,3 +195,45 @@ TEST(PlaybackScreensaver, BlanksPausedSdrAndHdrAndConsumesOnlyTheWakeInput)
     osd.set_paused(false);
     EXPECT_FALSE(osd.draw(nullptr, 0, 8, 4, 8, 4, 8, 600000001));
 }
+
+TEST(VideoPanel, ZoomKeepsPanelsInsideTheVisibleCenter)
+{
+    ptv::VideoPanel panel;
+    panel.reset(0, 0, 192, 108);
+    std::vector<std::uint8_t> frame(1920 * 1080 * 3 / 2, 99);
+    ASSERT_TRUE(
+        panel.composite(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 0, 1.5f, 1.5f));
+    EXPECT_EQ(frame[0], 99);
+    EXPECT_EQ(frame[180 * 1920 + 320], 28);
+    EXPECT_EQ(frame[179 * 1920 + 320], 99);
+    EXPECT_FALSE(panel.composite(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 0, .5f, 1));
+}
+
+TEST(PlaybackSubtitles, SizeAndColorAffectDecodedSurfaceAndSurviveSettingsCopy)
+{
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ptv::Model model("/tmp/prosperotv-subtitle-style-test");
+    ptv::PlayRequest request;
+    ptv::Settings settings;
+    settings.subtitle_size = 2;
+    settings.subtitle_color = 1;
+    settings.picture_mode = 6;
+    ptv::PlaybackOsd osd(model, request, settings);
+    ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
+    auto cue = std::make_shared<iptv::SubtitleCue>();
+    cue->text = "Yellow captions";
+    std::vector<std::shared_ptr<const iptv::SubtitleCue>> cues{cue};
+    std::vector<std::uint8_t> frame(640 * 360 * 3 / 2, 128);
+    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 640, 360, 640, 360, 8, 1, cues));
+    EXPECT_GT(std::count_if(frame.begin() + 640 * 360, frame.end(), [](auto v) { return v < 100; }),
+              10);
+    ptv::Settings restored;
+    ASSERT_TRUE(osd.copy_picture_settings(restored));
+    EXPECT_EQ(restored.subtitle_size, 2);
+    EXPECT_EQ(restored.subtitle_color, 1);
+    EXPECT_EQ(restored.picture_mode, 6);
+    std::vector<std::uint16_t> hdr(frame.size(), 512);
+    ASSERT_TRUE(osd.draw(hdr.data(), hdr.size() * 2, 640, 360, 640, 360, 10, 2, cues, 1));
+    EXPECT_GT(std::count_if(hdr.begin() + 640 * 360, hdr.end(), [](auto v) { return v < 450; }),
+              10);
+}

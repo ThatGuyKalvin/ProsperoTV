@@ -41,7 +41,10 @@ extern "C"
         IPTV_PICTURE_FIT,
         IPTV_PICTURE_STRETCH,
         IPTV_PICTURE_4_3,
-        IPTV_PICTURE_16_9
+        IPTV_PICTURE_16_9,
+        IPTV_PICTURE_FILL,
+        IPTV_PICTURE_ZOOM_125,
+        IPTV_PICTURE_ZOOM_150
     };
     void iptv_native_agc_set_picture_mode(unsigned mode);
     void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context);

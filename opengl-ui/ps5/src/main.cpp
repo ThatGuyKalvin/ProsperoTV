@@ -1347,15 +1347,21 @@ int main()
             &favorite);
         // A scripted run plays each channel for a set time; the player stops it.
         tv::diag::flush();
-        iptv_native_agc_set_picture_mode(IPTV_PICTURE_FIT);
+        iptv_native_agc_set_picture_mode(settings.picture_mode);
         ptv::PlaybackOsd controls(model, request, settings);
         const bool osd_ready = controls.load_fonts(tv::storage::app_file("assets/fonts"));
+        struct PlaybackControlsContext
+        {
+            ptv::PlaybackOsd *osd;
+            ptv::Settings *settings;
+        } input_context{&controls, &settings};
         if (osd_ready)
         {
             iptv_player_set_controls(
                 [](void *context, int action) -> int
                 {
-                    auto &osd = *static_cast<ptv::PlaybackOsd *>(context);
+                    auto &input = *static_cast<PlaybackControlsContext *>(context);
+                    auto &osd = *input.osd;
                     iptv_player_audio_state_t audio{};
                     iptv_player_audio_state(&audio);
                     osd.set_audio_state(audio);
@@ -1367,6 +1373,8 @@ int main()
                     iptv_player_media_state_t media{};
                     iptv_player_media_state(&media);
                     osd.set_media_state(media);
+                    if (media.available)
+                        osd.set_paused(media.paused != 0);
                     if (TV_DEV_SCRIPTS != 0)
                     {
                         static std::uint64_t last_sample = 0;
@@ -1402,6 +1410,8 @@ int main()
                         iptv_native_agc_set_picture_mode(*selected);
                     if (const auto delay = osd.take_audio_delay())
                         iptv_player_set_audio_delay(*delay);
+                    if (osd.copy_picture_settings(*input.settings))
+                        ptv::save_settings(tv::storage::config_dir(), *input.settings);
                     if (const auto selected = osd.take_audio_selection())
                         (void)iptv_player_select_audio(*selected);
                     if (const auto selected = osd.take_subtitle_selection())
@@ -1410,7 +1420,7 @@ int main()
                         say("[TV] playback control action=%d handled=%d", action, handled);
                     return handled;
                 },
-                &controls);
+                &input_context);
             iptv_native_agc_set_osd(
                 [](void *context, void *surface, std::size_t bytes, std::uint32_t pitch,
                    std::uint32_t sh, std::uint32_t width, std::uint32_t height, std::uint32_t depth,
@@ -1451,6 +1461,8 @@ int main()
         const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
         iptv_player_set_controls(nullptr, nullptr);
         iptv_native_agc_set_osd(nullptr, nullptr);
+        if (controls.copy_picture_settings(settings))
+            ptv::save_settings(tv::storage::config_dir(), settings);
         (void)model.check_sleep_timer();
         iptv_remote_set_playback_favorite(nullptr, nullptr);
         const long long seconds = (sys::monotonic_us() - started) / 1000000;

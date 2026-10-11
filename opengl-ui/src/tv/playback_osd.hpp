@@ -23,17 +23,19 @@ struct VideoPanel
               float size, float max_width, std::uint8_t ink = 235);
     bool composite(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
                    unsigned visible_width, unsigned visible_height, unsigned depth,
-                   unsigned hdr = false) const;
+                   unsigned hdr = false, float scale_x = 1, float scale_y = 1) const;
 };
 bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std::size_t bytes,
                                 unsigned pitch, unsigned surface_height, unsigned visible_width,
-                                unsigned visible_height, unsigned depth, unsigned hdr = false);
+                                unsigned visible_height, unsigned depth, unsigned hdr = false,
+                                float scale_x = 1, float scale_y = 1);
 
 class PlaybackOsd
 {
   public:
     PlaybackOsd(Model &model, const PlayRequest &request, const Settings &settings = {});
     void set_paused(bool paused);
+    bool copy_picture_settings(Settings &settings);
     bool load_fonts(const std::string &directory);
     // The control thread alone calls input and reads selected_channel. Drawing
     // can happen on the presentation worker, protected by the same mutex.
@@ -98,5 +100,6 @@ class PlaybackOsd
     hui::ui::Fonts fonts_;
     VideoPanel panel_;
     VideoPanel subtitle_panel_;
+    iptv::SubtitleCue styled_subtitles_;
 };
 } // namespace ptv

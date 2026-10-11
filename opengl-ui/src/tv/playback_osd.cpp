@@ -72,19 +72,31 @@ void VideoPanel::text(const hui::gfx::Font &font, std::string_view value, float 
 }
 
 bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, unsigned sh,
-                           unsigned vw, unsigned vh, unsigned depth, unsigned hdr) const
+                           unsigned vw, unsigned vh, unsigned depth, unsigned hdr, float scale_x,
+                           float scale_y) const
 {
-    if (!surface || (depth != 8 && depth != 10) || (hdr && depth != 10) || !vw || !vh ||
-        vw > pitch || vh > sh || pitch > 8192 || sh > 8192 || (pitch & 1u) || !width || !height ||
-        x > 1920 || y > 1080 || width > 1920 - x || height > 1080 - y ||
-        pixels.size() != static_cast<std::size_t>(width) * height)
+    if (!std::isfinite(scale_x) || !std::isfinite(scale_y) || scale_x < 1 || scale_y < 1 ||
+        scale_x > 8192 || scale_y > 8192 || !surface || (depth != 8 && depth != 10) ||
+        (hdr && depth != 10) || !vw || !vh || vw > pitch || vh > sh || pitch > 8192 || sh > 8192 ||
+        (pitch & 1u) || !width || !height || x > 1920 || y > 1080 || width > 1920 - x ||
+        height > 1080 - y || pixels.size() != static_cast<std::size_t>(width) * height)
         return false;
     const unsigned component = depth == 10 ? 2 : 1;
     const std::size_t y_size = static_cast<std::size_t>(pitch) * sh;
     if ((y_size + static_cast<std::size_t>(pitch) * ((sh + 1) / 2)) * component > bytes)
         return false;
-    const unsigned left = x * vw / 1920, top = y * vh / 1080;
-    const unsigned right = (x + width) * vw / 1920, bottom = (y + height) * vh / 1080;
+    const auto map_x = [&](unsigned value)
+    {
+        return scale_x == 1 ? value * vw / 1920
+                            : unsigned(std::lround((.5 + (value / 1920.0 - .5) / scale_x) * vw));
+    };
+    const auto map_y = [&](unsigned value)
+    {
+        return scale_y == 1 ? value * vh / 1080
+                            : unsigned(std::lround((.5 + (value / 1080.0 - .5) / scale_y) * vh));
+    };
+    const unsigned left = map_x(x), top = map_y(y);
+    const unsigned right = map_x(x + width), bottom = map_y(y + height);
     if (left == right || top == bottom)
         return false;
     auto *out = static_cast<std::uint8_t *>(surface);
@@ -118,6 +130,7 @@ PlaybackOsd::PlaybackOsd(Model &model, const PlayRequest &request, const Setting
       title_(request.channel_name), live_(request.record_channel_result),
       on_demand_(request.on_demand)
 {
+    picture_focus_ = picture_mode_ = std::clamp(settings_.picture_mode, 0, 6);
     if (live_)
     {
         for (unsigned i = 0; i < model.visible_count(); ++i)
@@ -385,12 +398,24 @@ int PlaybackOsd::input(int action, std::uint64_t now)
         {
             if (action == IPTV_INPUT_CIRCLE)
                 audio_menu_ = false;
+            else if (picture_focus_ >= 7 &&
+                     (action == IPTV_INPUT_CROSS || action == IPTV_INPUT_LEFT ||
+                      action == IPTV_INPUT_RIGHT))
+            {
+                int &value =
+                    picture_focus_ == 7 ? settings_.subtitle_size : settings_.subtitle_color;
+                value = (value + (action == IPTV_INPUT_LEFT ? 2 : 1)) % 3;
+                subtitle_cues_.clear();
+            }
             else if (action == IPTV_INPUT_CROSS)
+            {
                 picture_selection_ = picture_mode_ = picture_focus_;
+                settings_.picture_mode = picture_mode_;
+            }
             else if (action == IPTV_INPUT_UP || action == IPTV_INPUT_LEFT)
                 picture_focus_ = picture_focus_ ? picture_focus_ - 1 : 0;
             else if (action == IPTV_INPUT_DOWN || action == IPTV_INPUT_RIGHT)
-                picture_focus_ = std::min(3u, picture_focus_ + 1);
+                picture_focus_ = std::min(8u, picture_focus_ + 1);
             dirty_ = true;
             return 1;
         }
@@ -519,6 +544,18 @@ std::optional<unsigned> PlaybackOsd::take_picture_selection()
     return selection;
 }
 
+bool PlaybackOsd::copy_picture_settings(Settings &settings)
+{
+    std::lock_guard lock(mutex_);
+    const bool changed = settings.picture_mode != settings_.picture_mode ||
+                         settings.subtitle_size != settings_.subtitle_size ||
+                         settings.subtitle_color != settings_.subtitle_color;
+    settings.picture_mode = settings_.picture_mode;
+    settings.subtitle_size = settings_.subtitle_size;
+    settings.subtitle_color = settings_.subtitle_color;
+    return changed;
+}
+
 void PlaybackOsd::paint()
 {
     if (audio_menu_ && tab_ == 3)
@@ -549,16 +586,24 @@ void PlaybackOsd::paint()
         panel_.reset(80, 100, 820, 860);
         line(tr("Picture"), 28, 54, 32, 760);
         line(tr("Choose the shape of the picture"), 28, 88, 22, 760);
-        const char *labels[] = {"Fit original picture", "Stretch to screen", "Correct to 4:3",
-                                "Correct to 16:9"};
-        for (unsigned row = 0; row < 4; ++row)
+        const char *labels[] = {
+            "Fit original picture",     "Stretch to screen", "Correct to 4:3", "Correct to 16:9",
+            "Fill screen (crop edges)", "Zoom 125%",         "Zoom 150%"};
+        const char *sizes[] = {"Small", "Medium", "Large"};
+        const char *colors[] = {"White", "Yellow", "Cyan"};
+        for (unsigned row = 0; row < 9; ++row)
         {
-            const unsigned top = 110 + row * 72;
+            const unsigned top = 110 + row * 64;
             if (row == picture_focus_)
-                for (unsigned y = top; y < top + 66; ++y)
+                for (unsigned y = top; y < top + 58; ++y)
                     std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
-            line(std::string(row == picture_mode_ ? "> " : "") + tr(labels[row]), 28, top + 43, 28,
-                 760);
+            const std::string label =
+                row < 7 ? std::string(row == picture_mode_ ? "> " : "") + tr(labels[row])
+                : row == 7
+                    ? std::string(tr("Subtitle size")) + ": " + tr(sizes[settings_.subtitle_size])
+                    : std::string(tr("Subtitle color")) + ": " +
+                          tr(colors[settings_.subtitle_color]);
+            line(label, 28, top + 40, 28, 760);
         }
         line(live_ ? tr("L1/R1 Audio / Subtitles / Picture")
                    : tr("L1/R1 Audio / Subtitles / Picture / Chapters"),
@@ -751,7 +796,8 @@ void PlaybackOsd::paint_subtitles()
     };
     std::vector<Line> lines;
     float widest = 0;
-    constexpr float size = 36, max_width = 1560;
+    const float sizes[] = {28, 36, 46};
+    const float size = sizes[std::clamp(settings_.subtitle_size, 0, 2)], max_width = 1560;
     for (const auto &cue : subtitle_cues_)
     {
         if (!cue)
@@ -784,14 +830,35 @@ void PlaybackOsd::paint_subtitles()
             break;
     }
     const unsigned width = lines.empty() ? 0 : static_cast<unsigned>(std::ceil(widest)) + 44;
-    const unsigned line_height = settings_.larger_text ? 58 : 46;
-    const unsigned baseline = settings_.larger_text ? 53 : 42;
+    const float scale = settings_.larger_text ? 1.25f : 1;
+    const unsigned line_height = static_cast<unsigned>(size * scale * 1.28f);
+    const unsigned baseline = static_cast<unsigned>(size * scale * 1.17f);
     subtitle_panel_.reset((1920 - width) / 2, 0, width,
                           lines.size() * line_height + (lines.empty() ? 0 : 20));
     for (unsigned i = 0; i < lines.size(); ++i)
         subtitle_panel_.text(*lines[i].font, lines[i].text,
                              (width - lines[i].font->measure(lines[i].text, size)) / 2,
                              baseline + i * line_height, size, max_width);
+    styled_subtitles_.canvas_width = 1920;
+    styled_subtitles_.canvas_height = 1080;
+    styled_subtitles_.bitmaps.clear();
+    if (!width)
+        return;
+    iptv::SubtitleBitmap bitmap;
+    bitmap.x = subtitle_panel_.x;
+    bitmap.width = width;
+    bitmap.height = subtitle_panel_.height;
+    const unsigned colors[] = {0xffffff, 0xffff00, 0x00ffff};
+    const unsigned color = colors[std::clamp(settings_.subtitle_color, 0, 2)];
+    bitmap.argb.reserve(subtitle_panel_.pixels.size());
+    for (const auto value : subtitle_panel_.pixels)
+    {
+        const unsigned alpha = (std::max(28u, unsigned(value)) - 28) * 255 / 207;
+        const auto channel = [&](unsigned shift)
+        { return (14 * (255 - alpha) + ((color >> shift) & 255) * alpha) / 255; };
+        bitmap.argb.push_back(0xff000000u | (channel(16) << 16) | (channel(8) << 8) | channel(0));
+    }
+    styled_subtitles_.bitmaps.push_back(std::move(bitmap));
 }
 
 bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigned sh, unsigned vw,
@@ -836,7 +903,8 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         started_ = true;
         banner_until_ = now + 5000000;
     }
-    const bool overlay = list_ || audio_menu_ || history_.paused || now < banner_until_;
+    const bool overlay =
+        list_ || audio_menu_ || history_.paused || media_.paused || now < banner_until_;
     const bool captions = !list_ && !audio_menu_ && !subtitles.empty();
     if (!overlay && !captions)
     {
@@ -845,6 +913,20 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
     }
     if (!surface)
         return true;
+    // Keep controls and captions inside the visible crop, independent of picture zoom.
+    const float aspect = vh ? float(vw) / vh / (1920.0f / 1080.0f) : 1;
+    float scale_x = 1, scale_y = 1;
+    if (picture_mode_ == 4)
+    {
+        scale_x = std::max(1.0f, aspect);
+        scale_y = std::max(1.0f, 1 / aspect);
+    }
+    else if (picture_mode_ >= 5)
+    {
+        const float zoom = picture_mode_ == 5 ? 1.25f : 1.5f;
+        scale_x = std::max(1.0f, std::min(1.0f, aspect) * zoom);
+        scale_y = std::max(1.0f, std::min(1.0f, 1 / aspect) * zoom);
+    }
     bool drawn = false;
     if (captions)
     {
@@ -856,18 +938,25 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         for (const auto &cue : subtitles)
             if (cue)
                 drawn = composite_subtitle_bitmaps(*cue, surface, bytes, pitch, sh, vw, vh, depth,
-                                                   hdr) ||
+                                                   hdr, scale_x, scale_y) ||
                         drawn;
         if (subtitle_panel_.height)
         {
             subtitle_panel_.y =
                 (overlay ? (history_.available ? 660 : 740) : 1030) - subtitle_panel_.height;
-            drawn =
-                subtitle_panel_.composite(surface, bytes, pitch, sh, vw, vh, depth, hdr) || drawn;
+            if (!styled_subtitles_.bitmaps.empty())
+            {
+                styled_subtitles_.bitmaps[0].y = subtitle_panel_.y;
+                drawn = composite_subtitle_bitmaps(styled_subtitles_, surface, bytes, pitch, sh, vw,
+                                                   vh, depth, hdr, scale_x, scale_y) ||
+                        drawn;
+            }
         }
     }
     if (overlay && dirty_)
         paint();
-    return (overlay && panel_.composite(surface, bytes, pitch, sh, vw, vh, depth, hdr)) || drawn;
+    return (overlay &&
+            panel_.composite(surface, bytes, pitch, sh, vw, vh, depth, hdr, scale_x, scale_y)) ||
+           drawn;
 }
 } // namespace ptv

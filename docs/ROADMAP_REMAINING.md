@@ -859,3 +859,12 @@ consumption and paused SDR/Main10 planes. Native visual and timer checks
 still require an idle console. No spoken-focus switch was added: the pinned
 homebrew SDK exposes no usable text-to-speech API; the system screen reader
 does not establish an app-callable interface for this custom renderer.
+
+## Picture and caption controls (October 11)
+
+The Picture tab now includes Fill (crop), 125% zoom, 150% zoom, and text
+subtitle size/color. Selection reaches the foreground AGC viewport and is
+saved immediately. Cropped views remap controls and captions into their
+visible source region. Captions use the existing SDR/PQ/HLG compositor;
+bitmap subtitles keep the provider's artwork. Native hardware visual
+verification is still pending an idle console.
