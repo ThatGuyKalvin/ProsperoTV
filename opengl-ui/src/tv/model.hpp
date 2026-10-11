@@ -214,6 +214,9 @@ class Model
     const SavedSource *saved_source(std::int64_t id) const;
     void use_saved_source(std::int64_t id);
     void add_source(iptv::SourceKind kind);
+    bool import_usb_playlist(const std::string &path);
+    const std::string &usb_root() const { return usb_root_; }
+    void set_usb_root(std::string root) { usb_root_ = std::move(root); }
     void edit_saved_source(std::int64_t id);
     bool remove_source(std::int64_t id);
     bool set_schedule(std::int64_t id, RefreshSchedule schedule);
@@ -710,6 +713,7 @@ class Model
     iptv::SourceKind active_source_ = iptv::SourceKind::BuiltIn;
     std::array<SourceHealth, kSourceCount> health_{};
     std::string custom_url_;
+    std::string usb_root_ = "/mnt";
     iptv::XtreamCredentials xtream_;
     iptv::XtreamCredentials account_form_;
     PortalCredentials portal_, portal_form_, refresh_portal_;

@@ -4,6 +4,7 @@
 
 #include "tv/i18n.hpp"
 #include "tv/model.hpp"
+#include "tv/usb_playlist.hpp"
 #include "tv/category_path.hpp"
 
 #include "iptv_ime.h"
@@ -1192,7 +1193,7 @@ void Model::apply_custom_url(const char *url)
                tr("An update was still running."));
         return;
     }
-    if (!iptv::http::IsSupportedPlaylistUrl(url))
+    if (!usb_playlist_path(url) && !iptv::http::IsSupportedPlaylistUrl(url))
     {
         notify(Level::error, tr("That address cannot be used"),
                tr("It must start with http:// or https:// and have no spaces."));
@@ -1417,7 +1418,9 @@ void Model::run_refresh()
     pending_account_info_ = {};
     pending_account_stage_.clear();
     pending_account_message_.clear();
-    pending_network_ = platform::network_init();
+    const bool usb = refresh_source_ == iptv::SourceKind::Custom &&
+                     usb_playlist_path(refresh_url_);
+    pending_network_ = usb ? iptv::http::Status::ok : platform::network_init();
 
     const auto stopping = [this]() { return stop_requested_.load(std::memory_order_acquire); };
     if (pending_network_ == iptv::http::Status::ok && !stopping())
@@ -1556,8 +1559,9 @@ void Model::run_refresh()
                            (channels != 0 || to->bytes < kPlaylistProbeBytes);
                 },
                 &receiver};
-            pending_fetch_ = platform::fetch_list(refresh_url_.c_str(), sink,
-                                                  iptv::http::kMaxListBytes, &control);
+            pending_fetch_ = usb ? read_usb_playlist(refresh_url_, sink, &control, usb_root_)
+                                 : platform::fetch_list(refresh_url_.c_str(), sink,
+                                                        iptv::http::kMaxListBytes, &control);
             if (pending_fetch_.status == iptv::http::Status::stopped)
                 pending_fetch_.status = pending_report_.input_too_large
                                             ? iptv::http::Status::response_too_large
@@ -1574,7 +1578,7 @@ void Model::run_refresh()
             pending_index_.build(pending_catalog_);
         }
     }
-    if (pending_network_ == iptv::http::Status::ok)
+    if (!usb && pending_network_ == iptv::http::Status::ok)
         platform::network_shutdown();
     refresh_done_.store(true, std::memory_order_release);
 }

@@ -4,6 +4,7 @@
 
 #include "tv/i18n.hpp"
 #include "tv/sources_screen.hpp"
+#include "tv/usb_playlist.hpp"
 #include "tv/draw.hpp"
 #include "tv/stream_sniff.hpp"
 #include "tv/platform.hpp"
@@ -107,6 +108,20 @@ void SourcesScreen::sync()
     server.subtitle = tr("HTTP address and optional account");
     rows.push_back(std::move(server));
     ids_.push_back(-5);
+    ui::ListItem usb;
+    usb.title = tr("Find playlists on USB");
+    usb.subtitle = tr("Top-level .m3u and .m3u8 files on connected drives");
+    rows.push_back(std::move(usb));
+    ids_.push_back(-6);
+    usb_files_ = usb_playlists(model.usb_root());
+    for (std::size_t i = 0; i < usb_files_.size(); ++i)
+    {
+        ui::ListItem row;
+        row.title = tr("Import ") + usb_files_[i].substr(10);
+        row.subtitle = usb_files_[i];
+        rows.push_back(std::move(row));
+        ids_.push_back(-100 - static_cast<std::int64_t>(i));
+    }
     list_.set_items(std::move(rows));
     list_.set_focus(std::clamp(focus, 0, static_cast<int>(ids_.size()) - 1), true);
     seen_revision_ = model.revision();
@@ -147,7 +162,19 @@ void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
     }
     if (list_.handle(input, feedback) == ui::Event::activated)
     {
-        if (id < 0)
+        if (id == -6)
+        {
+            sync();
+            model.announce(Level::ready, usb_files_.empty() ? tr("No USB playlists found")
+                                                          : tr("Choose a playlist below"),
+                           tr("Use the root of a USB drive, with .m3u or .m3u8 files."), 4);
+        }
+        else if (id <= -100)
+        {
+            const auto index = static_cast<std::size_t>(-100 - id);
+            if (index < usb_files_.size()) model.import_usb_playlist(usb_files_[index]);
+        }
+        else if (id < 0)
             model.add_source(static_cast<iptv::SourceKind>(-id));
         else
             model.use_saved_source(id);
@@ -180,6 +207,16 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     const std::string title = source != nullptr ? source_title(*source) : tr("Add a source");
     ui::text(draw, fonts.display, fonts.display.font->fit(title, 36, width), left, 315, 36,
              theme.text);
+    if (source == nullptr && (id == -6 || id <= -100))
+    {
+        ui::paragraph(draw, fonts.regular,
+                      tr("Import a playlist from the root of /mnt/usb0 through /mnt/usb7. "
+                         "Channels are saved in the app. Updates reread the same USB path; "
+                         "keep that drive connected when refreshing. Missing drives leave the "
+                         "last saved channels available. New USB sources use manual refresh."),
+                      left, 375, 26, width, 38, theme.text_muted, 12);
+        return;
+    }
     if (source == nullptr)
     {
         ui::paragraph(
