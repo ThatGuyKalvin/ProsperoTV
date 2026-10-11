@@ -123,6 +123,8 @@ std::string g_roadmap_playlist, g_roadmap_guide, g_roadmap_logo;
 ptv::Model *g_model = nullptr;
 
 const Step kWalk[] = {
+    look(0.3f, "64-home-empty"),
+    press(Action::page_next, 0.1f),
     // ---- the first launch: nothing saved yet ----
     look(0.5f, "01-first-download"),
     look(1.4f, "02-live-tv"),
@@ -193,6 +195,15 @@ const Step kWalk[] = {
     press(Action::confirm, 0.6f),
     press(Action::back, 0.9f, "15-no-match"),
     press(Action::back, 1.0f, "16-search-cleared"),
+    change([]() {
+        const auto at = g_model->visible(0);
+        g_model->report_watch(g_model->channel(at).id);
+        (void)g_model->play(at);
+        ptv::PlayRequest ignored;
+        (void)g_model->take_play_request(&ignored);
+    }),
+    press(Action::page_prev, 0.7f, "65-home-lists"),
+    press(Action::page_next),
     // ---- Favorites ----
     press(Action::page_next, 0.7f, "53-vod-no-account"),
     press(Action::page_next, 1.1f, "17-favorites"),

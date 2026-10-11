@@ -32,8 +32,8 @@ class Statement
     bool text(int at, std::string_view value)
     {
         return stmt != nullptr &&
-               sqlite3_bind_text(stmt, at, value.data(), static_cast<int>(value.size()),
-                                 SQLITE_TRANSIENT) == SQLITE_OK;
+               sqlite3_bind_text(stmt, at, value.empty() ? "" : value.data(),
+                                 static_cast<int>(value.size()), SQLITE_TRANSIENT) == SQLITE_OK;
     }
     bool integer(int at, std::int64_t value)
     {
@@ -60,6 +60,27 @@ bool valid_text(std::string_view text, std::size_t max)
     return !text.empty() && text.size() <= max &&
            std::none_of(text.begin(), text.end(),
                         [](unsigned char c) { return c < 32 || c == 127; });
+}
+
+bool valid_resume(const iptv::ChannelView &channel, std::string_view series)
+{
+    std::string canonical;
+    const auto optional = [](std::string_view value, std::size_t limit)
+    { return value.empty() || valid_text(value, limit); };
+    if (!valid_text(channel.id, 1024) || !valid_text(channel.name, 2048) ||
+        channel.url.size() > 4096 || !iptv::CanonicalizeStreamUrl(channel.url, &canonical) ||
+        !optional(channel.tvg_logo, 4096) || !optional(channel.group_title, 2048) ||
+        !optional(series, 256) || !optional(channel.http_user_agent, 4096) ||
+        !optional(channel.http_referrer, 4096) || !optional(channel.tvg_id, 2048) ||
+        channel.alternate_urls.size() > 3 || channel.alternate_group_titles.size() > 4)
+        return false;
+    for (auto value : channel.alternate_urls)
+        if (value.size() > 4096 || !iptv::CanonicalizeStreamUrl(value, &canonical))
+            return false;
+    for (auto value : channel.alternate_group_titles)
+        if (!optional(value, 2048))
+            return false;
+    return true;
 }
 
 } // namespace
@@ -192,6 +213,18 @@ bool Library::open(const std::string &path)
         "CREATE TABLE IF NOT EXISTS playback_progress (channel TEXT PRIMARY KEY,"
         "position INTEGER NOT NULL CHECK(position>=0),duration INTEGER NOT NULL "
         "CHECK(duration>=0));"
+        "CREATE TABLE IF NOT EXISTS resume_items (channel TEXT PRIMARY KEY,"
+        "source INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,fingerprint TEXT NOT "
+        "NULL,"
+        "updated INTEGER NOT NULL,name TEXT NOT NULL,url TEXT NOT NULL,logo TEXT NOT NULL,"
+        "category TEXT NOT NULL,adult INTEGER NOT NULL,series TEXT NOT NULL,agent TEXT NOT NULL,"
+        "referrer TEXT NOT NULL,tvg_id TEXT NOT NULL,url1 TEXT NOT NULL,url2 TEXT NOT NULL,"
+        "url3 TEXT NOT NULL,group1 TEXT NOT NULL,group2 TEXT NOT NULL,group3 TEXT NOT NULL,"
+        "group4 TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS resume_source_changed AFTER UPDATE ON sources "
+        "WHEN OLD.kind<>NEW.kind OR OLD.url<>NEW.url OR OLD.username<>NEW.username OR "
+        "OLD.password<>NEW.password OR OLD.mac<>NEW.mac BEGIN "
+        "DELETE FROM resume_items WHERE source=OLD.id; END;"
         "CREATE TABLE IF NOT EXISTS folders (name TEXT PRIMARY KEY);"
         "CREATE TABLE IF NOT EXISTS folder_channels (folder TEXT NOT NULL REFERENCES folders(name)"
         " ON DELETE CASCADE ON UPDATE CASCADE,channel TEXT NOT NULL,PRIMARY KEY(folder,channel));"
@@ -398,6 +431,88 @@ bool Library::save_playback_progress(std::string_view channel, std::uint64_t pos
                          " DO UPDATE SET position=excluded.position,duration=excluded.duration");
     return query.text(1, channel) && query.integer(2, position_us) &&
            query.integer(3, duration_us) && query.done();
+}
+
+bool Library::remember_vod(std::int64_t source, std::uint64_t fingerprint,
+                           const iptv::ChannelView &channel, std::string_view series,
+                           std::int64_t updated)
+{
+    if (source <= 0 || !fingerprint || updated < 0 || !valid_resume(channel, series))
+        return false;
+    if (sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr) != SQLITE_OK)
+        return false;
+    Statement put(db_, "INSERT OR REPLACE INTO resume_items VALUES("
+                       "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)");
+    bool ok = put.text(1, channel.id) && put.integer(2, source) &&
+              put.text(3, std::to_string(fingerprint)) && put.integer(4, updated) &&
+              put.text(5, channel.name) && put.text(6, channel.url) &&
+              put.text(7, channel.tvg_logo) && put.text(8, channel.group_title) &&
+              put.integer(9, channel.adult) && put.text(10, series) &&
+              put.text(11, channel.http_user_agent) && put.text(12, channel.http_referrer) &&
+              put.text(13, channel.tvg_id);
+    for (unsigned i = 0; i < 3; ++i)
+        ok = ok && put.text(14 + i, i < channel.alternate_urls.size() ? channel.alternate_urls[i]
+                                                                      : std::string_view());
+    for (unsigned i = 0; i < 4; ++i)
+        ok = ok && put.text(17 + i, i < channel.alternate_group_titles.size()
+                                        ? channel.alternate_group_titles[i]
+                                        : std::string_view());
+    ok = ok && put.done();
+    // Keep at most fifty snapshots per local profile.
+    ok = ok && sqlite3_exec(
+                   db_,
+                   "DELETE FROM resume_items WHERE channel NOT IN "
+                   "(SELECT channel FROM resume_items ORDER BY updated DESC,rowid DESC LIMIT 50)",
+                   nullptr, nullptr, nullptr) == SQLITE_OK;
+    if (ok && sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr) == SQLITE_OK)
+        return true;
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+}
+std::vector<ResumeItem> Library::unfinished_vod(std::int64_t source,
+                                                std::uint64_t fingerprint) const
+{
+    std::vector<ResumeItem> result;
+    Statement query(db_,
+                    "SELECT r.*,p.position,p.duration FROM resume_items r "
+                    "JOIN playback_progress p ON p.channel=r.channel WHERE r.source=?1 AND "
+                    "r.fingerprint=?2 AND p.position>0 AND (p.duration=0 OR p.position<p.duration) "
+                    "ORDER BY r.updated DESC,r.rowid DESC LIMIT 50");
+    if (!query.integer(1, source) || !query.text(2, std::to_string(fingerprint)))
+        return result;
+    while (query.row())
+    {
+        ResumeItem item;
+        auto &channel = item.channel;
+        channel.id = query.string(0);
+        channel.source_id = fingerprint;
+        channel.name = query.string(4);
+        channel.url = query.string(5);
+        channel.tvg_logo = query.string(6);
+        channel.group_title = query.string(7);
+        channel.adult = sqlite3_column_int(query.stmt, 8) != 0;
+        item.series = query.string(9);
+        channel.http_user_agent = query.string(10);
+        channel.http_referrer = query.string(11);
+        channel.tvg_id = query.string(12);
+        channel.media_kind =
+            item.series.empty() ? iptv::MediaKind::movie : iptv::MediaKind::episode;
+        for (int i = 13; i < 16; ++i)
+            if (auto value = query.string(i); !value.empty())
+                channel.alternate_urls.push_back(std::move(value));
+        for (int i = 16; i < 20; ++i)
+            if (auto value = query.string(i); !value.empty())
+                channel.alternate_group_titles.push_back(std::move(value));
+        const auto position = sqlite3_column_int64(query.stmt, 20);
+        const auto duration = sqlite3_column_int64(query.stmt, 21);
+        if (position <= 0 || duration < 0 || position > INT64_MAX / 4 || duration > INT64_MAX / 4 ||
+            !valid_resume(channel, item.series))
+            continue;
+        item.position_us = static_cast<std::uint64_t>(position);
+        item.duration_us = static_cast<std::uint64_t>(duration);
+        result.push_back(std::move(item));
+    }
+    return result;
 }
 
 bool Library::select_source(std::int64_t id)

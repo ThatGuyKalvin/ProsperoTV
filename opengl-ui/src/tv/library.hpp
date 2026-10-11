@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "iptv_catalog.h"
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -65,6 +66,13 @@ struct ChannelHistory
     std::int64_t watches = 0;
 };
 
+struct ResumeItem
+{
+    iptv::Channel channel;
+    std::string series;
+    std::uint64_t position_us = 0, duration_us = 0;
+};
+
 class Library
 {
   public:
@@ -91,6 +99,10 @@ class Library
     bool remember_channel(std::int64_t source, std::string_view channel);
     std::pair<std::int64_t, std::string> last_channel() const;
     std::pair<std::uint64_t, std::uint64_t> playback_progress(std::string_view channel) const;
+    bool remember_vod(std::int64_t source, std::uint64_t fingerprint,
+                      const iptv::ChannelView &channel, std::string_view series,
+                      std::int64_t updated);
+    std::vector<ResumeItem> unfinished_vod(std::int64_t source, std::uint64_t fingerprint) const;
     bool save_playback_progress(std::string_view channel, std::uint64_t position_us,
                                 std::uint64_t duration_us);
     std::unordered_set<std::string> hidden_categories(std::uint64_t source) const;

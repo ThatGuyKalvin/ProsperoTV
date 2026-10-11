@@ -396,8 +396,19 @@ bool Model::play_vod(unsigned index)
     const auto item = vod_.catalog()[index];
     return queue_vod(item, vod_.kind() == VodKind::episodes ? vod_.series() : std::string());
 }
-bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series)
+bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series, bool inherit_series)
 {
+    auto snapshot = item.Copy();
+    if (inherit_series && !series.empty())
+    {
+        snapshot.group_title = view.vod_series_group;
+        snapshot.adult = snapshot.adult || view.vod_series_adult;
+        if (!view.vod_series_name.empty())
+            snapshot.name = view.vod_series_name + " / " + snapshot.name;
+    }
+    if (!library_.remember_vod(selected_source_id_, source_id(active_source_), snapshot, series,
+                                static_cast<std::int64_t>(platform::unix_time())))
+        notify(Level::warning, tr("Continue watching could not be saved"), "");
     sleep_timer.wake();
     play_request_ = {};
     play_request_.channel_id = item.id;
@@ -419,7 +430,10 @@ bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series)
 bool Model::save_vod_progress(std::string_view id, std::uint64_t position_us,
                               std::uint64_t duration_us)
 {
-    return library_.save_playback_progress(id, position_us, duration_us);
+    const bool saved = library_.save_playback_progress(id, position_us, duration_us);
+    if (saved)
+        ++revision_;
+    return saved;
 }
 
 bool Model::finish_vod(const PlayRequest &request, std::uint64_t position_us,

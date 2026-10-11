@@ -72,7 +72,7 @@ enum FormRow : int
     kRowScreensaver,
 };
 
-constexpr const char *kTabNames[] = {"Live TV", "On demand", "Favorites",
+constexpr const char *kTabNames[] = {"Home", "Live TV", "On demand", "Favorites",
                                      "Sources", "Settings",  "About"};
 constexpr const char *kActionNames[] = {"Up",       "Down",     "Left", "Right", "Cross", "Circle",
                                         "Triangle", "Square",   "L1",   "R1",    "L2",    "R2",
@@ -120,7 +120,7 @@ const char *source_label(iptv::SourceKind source)
 App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
     : shared_(model, fonts, settings), multiview_(shared_), browse_(shared_), sources_(shared_),
-      vod_(shared_), search_(shared_), library_sheet_(shared_), guide_sheet_(shared_),
+      vod_(shared_), home_(shared_), search_(shared_), library_sheet_(shared_), guide_sheet_(shared_),
       update_(shared_), glass_texture_(glass_texture), version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
@@ -150,18 +150,18 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     tabs_.style.theme = theme;
     tabs_.style.kind = ui::TabKind::underline;
     tabs_.style.text_size = 26.0f;
-    tabs_.style.padding = 14.0f;
-    tabs_.style.gap = 22.0f;
+    tabs_.style.padding = 10.0f;
+    tabs_.style.gap = 14.0f;
     tabs_.style.track = false;
     tabs_.style.focus_ring = false;
     tabs_.style.on_page = true;
-    tabs_.set_tabs({{tr("Live TV")},
+    tabs_.set_tabs({{tr("Home")}, {tr("Live TV")},
                     {tr("On demand")},
                     {tr("Favorites")},
                     {tr("Sources")},
                     {tr("Settings")},
                     {tr("About")}});
-    tabs_.set_bounds({420.0f, kHeaderY - 28.0f, 1150.0f, 56.0f});
+    tabs_.set_bounds({450.0f, kHeaderY - 28.0f, 1300.0f, 56.0f});
     tabs_.set_focused(false);
     tabs_.set_active(std::clamp(model.view.tab, 0, kTabCount - 1), true);
 
@@ -419,6 +419,9 @@ void App::tab_changed()
     page_age_ = 0.0f;
     switch (tabs_.active())
     {
+    case kHome:
+        home_.update();
+        break;
     case kLive:
         browse_.show(false);
         break;
@@ -623,6 +626,12 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             break;
         }
         break;
+    case kHome:
+        if (input.is_pressed(Action::north))
+            search_.open(feedback);
+        else
+            home_.handle(input, feedback);
+        break;
     case kSources:
         sources_.handle(input, feedback);
         break;
@@ -696,7 +705,7 @@ void App::play_intro()
 bool App::accepts_remote_search() const
 {
     return !shared_.model.pin_prompt() && !storage_busy_ && !storage_dialog_.is_open() &&
-           browsing() && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
+           (browsing() || tabs_.active() == kHome) && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
            !guide_sheet_.is_open();
 }
 
@@ -708,6 +717,8 @@ bool App::remote_search(const char *query)
     sleeping_ = false;
     iptv_ime_cancel();
     shared_.model.set_query(query);
+    if (tabs_.active() == kHome)
+        show_tab(kLive, true);
     search_.dismiss();
     intro_ = -1.0f;
     return true;
@@ -952,8 +963,11 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     multiview_.update(dt);
     if (tabs_.active() == kVod)
         vod_.update();
+    if (tabs_.active() == kHome)
+        home_.update();
     shared_.images.update(browsing()               ? browse_.image_urls()
                           : tabs_.active() == kVod ? vod_.image_urls()
+                          : tabs_.active() == kHome ? home_.image_urls()
                                                    : std::vector<std::string>{});
     sources_.update(dt);
     search_.update(dt);
@@ -1004,23 +1018,23 @@ void App::draw_status(ui::Canvas &canvas) const
     const bool busy = model.refreshing();
     const bool reduced = shared_.settings.reduced_motion;
     const float width = fonts.semibold.measure(text, 19.0f) + 54.0f;
-    const Rect chip{kWidth - kMargin - width, kHeaderY - 20.0f, width, 40.0f};
+    const Rect chip{kWidth - kMargin - width, (kHeaderY + 60.0f) - 20.0f, width, 40.0f};
     list.rounded_rect(chip, 20.0f, kWhite.with_alpha(0.09f));
     list.bordered_rect(chip, 20.0f, kClear, 1.5f, kWhite.with_alpha(0.16f));
     if (busy)
     {
         // An arc turns where the dot would be.
-        list.ring(chip.x + 21.0f, kHeaderY, 9.0f, 3.0f, kWhite.with_alpha(0.14f));
-        list.arc(chip.x + 21.0f, kHeaderY, 9.0f, 3.0f, reduced ? 0.0f : shared_.clock * 4.6f, 2.2f,
+        list.ring(chip.x + 21.0f, (kHeaderY + 60.0f), 9.0f, 3.0f, kWhite.with_alpha(0.14f));
+        list.arc(chip.x + 21.0f, (kHeaderY + 60.0f), 9.0f, 3.0f, reduced ? 0.0f : shared_.clock * 4.6f, 2.2f,
                  tone::wait);
     }
     else
     {
-        list.glow({chip.x + 16.0f, kHeaderY - 5.0f, 10.0f, 10.0f}, 5.0f, 8.0f,
+        list.glow({chip.x + 16.0f, (kHeaderY + 60.0f) - 5.0f, 10.0f, 10.0f}, 5.0f, 8.0f,
                   dot.with_alpha(0.5f));
-        list.circle(chip.x + 21.0f, kHeaderY, 5.0f, dot);
+        list.circle(chip.x + 21.0f, (kHeaderY + 60.0f), 5.0f, dot);
     }
-    ui::text(list, fonts.semibold, text, chip.x + 36.0f, baseline_for(kHeaderY, 19.0f), 19.0f,
+    ui::text(list, fonts.semibold, text, chip.x + 36.0f, baseline_for((kHeaderY + 60.0f), 19.0f), 19.0f,
              theme.text);
 }
 
@@ -1281,6 +1295,11 @@ void App::draw_hints(ui::Canvas &canvas) const
     int count = 0;
     switch (tabs_.active())
     {
+    case kHome:
+        hints[count++] = {ui::Button::cross, tr("Watch")};
+        hints[count++] = {ui::Button::triangle, tr("Search")};
+        hints[count++] = {ui::Button::dpad, tr("Choose")};
+        break;
     case kLive:
     case kFavorites:
         count = browse_.hints(hints, 5);
@@ -1366,6 +1385,9 @@ void App::draw(Frame &frame, bool themed) const
         draw_header(canvas);
         switch (tabs_.active())
         {
+        case kHome:
+            home_.draw(canvas);
+            break;
         case kLive:
         case kFavorites:
             browse_.draw(canvas);
