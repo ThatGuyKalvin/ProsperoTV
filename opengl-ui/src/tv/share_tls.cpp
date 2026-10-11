@@ -7,6 +7,7 @@
 #include <openssl/ec.h>
 #include <openssl/rand.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -282,6 +283,9 @@ bool ShareTls::run()
     }
     Socket listener, connection;
     sockaddr_in peer{};
+#ifdef __PROSPERO__
+    peer.sin_len = sizeof(peer);
+#endif
     peer.sin_family = AF_INET;
     peer.sin_port = htons(static_cast<std::uint16_t>(port_));
     if (receiving_)
