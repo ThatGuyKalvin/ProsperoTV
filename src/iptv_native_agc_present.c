@@ -194,6 +194,7 @@ static iptv_native_agc_presenter_t presenter = {
 static uint64_t agc_state;
 static uint8_t agc_initialized;
 static _Atomic int hold_frame;
+extern void tv_diag_line(const char *line) __attribute__((weak));
 static struct
 {
     const void *source;
@@ -1468,8 +1469,8 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
         if (atomic_load(&hold_frame) && !last_picture.source)
         {
             atomic_store(&hold_frame, 0);
-            fprintf(stderr, "[TV] resumed held picture pts=%llu\n",
-                    (unsigned long long)overlay->pts_us);
+            if (tv_diag_line)
+                tv_diag_line("[player] resumed held picture; buffering HUD cleared");
         }
         last_picture.source = source;
         last_picture.bytes = source_bytes;
@@ -1593,7 +1594,13 @@ int32_t iptv_native_agc_show_buffering(void)
     /* The decoder owns this surface and is about to release it. Only the
      * completed RGB scanout survives the reopen, never a decoder pointer. */
     last_picture.source = NULL;
-    fprintf(stderr, "[TV] held picture with buffering HUD result=0x%08x\n", (unsigned)result);
+    if (tv_diag_line)
+    {
+        char line[96];
+        snprintf(line, sizeof(line), "[player] held picture with buffering HUD result=0x%08x",
+                 (unsigned)result);
+        tv_diag_line(line);
+    }
     return result;
 }
 
