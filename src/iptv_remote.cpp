@@ -75,6 +75,8 @@ bool (*save_volume)(unsigned, void *) = nullptr;
 void *volume_context = nullptr;
 int (*sources_handler)(const char *, size_t, char *, size_t, void *) = nullptr;
 void *sources_context = nullptr;
+int (*browse_handler)(const char *, size_t, char *, size_t, void *) = nullptr;
+void *browse_context = nullptr;
 char search_text[IPTV_IME_MAX_TEXT_BYTES];
 bool search_enabled = false, search_pending = false;
 uint64_t next_pair_attempt = 0;
@@ -385,6 +387,22 @@ void Request(Client &client)
         }
         return;
     }
+    if (first == "POST /api/browse HTTP/1.1")
+    {
+        if (!browse_handler)
+            Reply(client, 409, "Press Back to return to the TV menu before browsing channels.");
+        else if (!has_length || body.empty() || body.size() > 2048)
+            Reply(client, 400, "A bounded browse request is required.");
+        else
+        {
+            std::string output(128u * 1024u, '\0');
+            const int code = browse_handler(body.data(), body.size(), output.data(), output.size(), browse_context);
+            output.back() = '\0';
+            output.resize(std::strlen(output.c_str()));
+            Reply(client, code, output, code == 200 ? "application/json" : "text/plain; charset=utf-8");
+        }
+        return;
+    }
     if (first == "POST /api/disconnect HTTP/1.1")
     {
         auto tokens = paired_tokens;
@@ -598,6 +616,7 @@ void iptv_remote_stop(void)
     remote_url[0] = 0;
     iptv_remote_set_playback_favorite(nullptr, nullptr);
     iptv_remote_set_sources_handler(nullptr, nullptr);
+    iptv_remote_set_browse_handler(nullptr, nullptr);
     std::memset(pin, 0, sizeof(pin));
     std::snprintf(hint, sizeof(hint), "Phone remote unavailable (port 8888)");
 }
@@ -606,6 +625,11 @@ void iptv_remote_set_sources_handler(int (*handle)(const char *, size_t, char *,
 {
     sources_handler = handle;
     sources_context = context;
+}
+void iptv_remote_set_browse_handler(int (*handle)(const char *, size_t, char *, size_t, void *), void *context)
+{
+    browse_handler = handle;
+    browse_context = context;
 }
 void iptv_remote_poll(void)
 {

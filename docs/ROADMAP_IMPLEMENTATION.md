@@ -198,3 +198,17 @@ its previous selection. Also verify saved-cache playback offline, Circle/source
 change during a missing-list request, and fallback to the saved stream when that
 request fails. Host tests cover these model transitions and the ten-second bound;
 they do not establish console playback or controller behavior.
+### Phone channel and guide pages (menu milestone; playback continuation pending)
+
+A paired phone can open Channels and guide, search channel names/categories and programmes
+on now, page through up to 40 live channels, see now/next, read up to 48 upcoming programmes
+per guide page, and tap a channel to play it on TV. Responses contain channel IDs/display text
+and programme times, never stream URLs or provider credentials. DOM text nodes display provider
+content. Existing TV keyboard-search and remote controls remain available.
+
+The authenticated `/api/browse` POST endpoint applies the existing pairing cookie and custom
+header requirements. It limits request size and page output, validates source identity on guide,
+paging and tuning requests, and rechecks parental/hidden/failed-channel policy before returning
+channel data or playing. The initial handler belongs to the menu and detaches before playback
+or storage work; the phone explicitly asks the user to return with Back. Playback browsing is
+not yet complete at this milestone. Native acceptance remains pending; roadmap stays unchecked.

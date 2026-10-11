@@ -541,6 +541,21 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     return status;
                 },
                 &model);
+            iptv_remote_set_browse_handler(
+                resolving_portal || app.storage_busy() ? nullptr
+                    : +[](const char *input, size_t bytes, char *out, size_t capacity, void *context) -> int
+                {
+                    std::string response;
+                    const int status = static_cast<ptv::Model *>(context)->remote_browse(
+                        std::string_view(input, bytes), response);
+                    if (response.size() >= capacity)
+                    {
+                        std::snprintf(out, capacity, "Browse response exceeds the limit.");
+                        return 413;
+                    }
+                    std::memcpy(out, response.c_str(), response.size() + 1);
+                    return status;
+                }, &model);
             // No remote mutations can race a settings snapshot or restore.
             if (!app.storage_busy())
                 iptv_remote_poll();
@@ -617,6 +632,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 storage.request = std::move(storage_request);
                 say("[TV] storage operation=%d started", static_cast<int>(storage.request.action));
                 iptv_remote_set_sources_handler(nullptr, nullptr);
+                iptv_remote_set_browse_handler(nullptr, nullptr);
                 iptv_remote_enable_search(false);
                 if (model.close_for_storage())
                     storage.thread = ptv::platform::thread_start(StorageJob::run, &storage,
@@ -788,6 +804,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         }
         iptv_remote_enable_search(false);
         iptv_remote_set_sources_handler(nullptr, nullptr);
+                iptv_remote_set_browse_handler(nullptr, nullptr);
         if (chosen)
             hand_over_to_channel(app, renderer, display, frame, request->channel_id,
                                  settings->reduced_motion);
