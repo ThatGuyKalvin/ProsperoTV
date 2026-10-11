@@ -63,7 +63,7 @@
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current version | `01.000.050` |
+| Current version | `01.000.060` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/data/prosperotv`; the title's own `/download0` when filesystem access is not available |
