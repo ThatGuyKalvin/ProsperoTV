@@ -681,3 +681,37 @@ TEST_F(VodTest, ControllerFiltersByProviderGenreAndYearSortsAndOpensDetails)
     EXPECT_EQ(request.channel_name, "Beta");
     model.close();
 }
+
+TEST_F(VodTest, MalformedMovieDetailsKeepPreviousMetadataAndDoNotComplete)
+{
+    std::string info;
+    ASSERT_TRUE(iptv::BuildXtreamApiUrl(account, "get_vod_info", &info));
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    const std::string id(model.vod().catalog()[0].id);
+    std::string deep;
+    for (int i = 0; i < 2000; ++i)
+        deep += "{\"info\":";
+    deep += "{\"plot\":\"Too deep\"}";
+    deep += std::string(2000, '}');
+    const std::string oversized = "{\"info\":{\"cast\":[\"" + std::string(257, 'x') +
+                                  "\",\"Other actor\"],\"plot\":\"Invalid\"}}";
+    for (const auto &payload : {deep, oversized,
+                               std::string(R"({"info":{"cast":["bad\q"],"plot":"Invalid"}})")})
+    {
+        reply(info + "&vod_id=10", payload);
+        model.vod().request_details(0);
+        ASSERT_TRUE(settle(model));
+        EXPECT_FALSE(model.vod().details(id).complete);
+        EXPECT_TRUE(model.vod().details(id).plot.empty());
+        EXPECT_TRUE(model.vod().details(id).cast.empty());
+    }
+    reply(info + "&vod_id=10", R"({"info":{"cast":[{},["ignored"],"Good actor"],"plot":"Good"}})");
+    model.vod().request_details(0);
+    ASSERT_TRUE(settle(model));
+    EXPECT_TRUE(model.vod().details(id).complete);
+    EXPECT_EQ(model.vod().details(id).cast, "Good actor");
+    model.close();
+}
