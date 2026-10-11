@@ -731,6 +731,7 @@ class Model
         return searching_ && (search_movies_.requested() || search_shows_.requested());
     }
     bool home_vod_allowed(const ResumeItem &item) const;
+    bool queue_home_vod(ResumeItem item);
     bool queue_vod(const iptv::ChannelView &item, const std::string &series,
                    bool inherit_series = true);
     void *guide_thread_ = nullptr;
