@@ -142,6 +142,22 @@ TEST(Sharing, CompletedTransferCanImmediatelyReuseTheSameListeningPort)
         sender.cancel();
     }
 }
+TEST(Sharing, LocalDestinationsDoNotAssumeAnEightBitHostSubnet)
+{
+    for (const char *address : {"127.0.0.0", "127.0.0.255"})
+    {
+        ptv::ShareTls receiver, sender;
+        ASSERT_TRUE(receiver.receive(0));
+        ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::listening));
+        const auto ready = receiver.status();
+        ASSERT_TRUE(sender.transmit(address, ready.port, ready.fingerprint, "local-library"));
+        ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::approval));
+        receiver.approve();
+        ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::ready));
+        ASSERT_TRUE(wait_for(sender, ptv::SharePhase::ready));
+        EXPECT_EQ(receiver.take_payload(), "local-library");
+    }
+}
 TEST(Sharing, WrongPinSendsNoPayloadAndCancelEndsPendingReceiver)
 {
     ptv::ShareTls receiver, sender;
