@@ -72,8 +72,8 @@ enum FormRow : int
     kRowScreensaver,
 };
 
-constexpr const char *kTabNames[] = {"Home", "Live TV", "On demand", "Favorites",
-                                     "Sources", "Settings",  "About"};
+constexpr const char *kTabNames[] = {"Home",    "Live TV",  "On demand", "Favorites",
+                                     "Sources", "Settings", "About"};
 constexpr const char *kActionNames[] = {"Up",       "Down",     "Left", "Right", "Cross", "Circle",
                                         "Triangle", "Square",   "L1",   "R1",    "L2",    "R2",
                                         "Options",  "Touchpad", "L3",   "R3"};
@@ -120,8 +120,9 @@ const char *source_label(iptv::SourceKind source)
 App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
     : shared_(model, fonts, settings), multiview_(shared_), browse_(shared_), sources_(shared_),
-      vod_(shared_), home_(shared_), search_(shared_), library_sheet_(shared_), guide_sheet_(shared_),
-      update_(shared_), glass_texture_(glass_texture), version_(std::move(version))
+      vod_(shared_), home_(shared_), search_(shared_), library_sheet_(shared_),
+      guide_sheet_(shared_), update_(shared_), glass_texture_(glass_texture),
+      version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
 
@@ -155,7 +156,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     tabs_.style.track = false;
     tabs_.style.focus_ring = false;
     tabs_.style.on_page = true;
-    tabs_.set_tabs({{tr("Home")}, {tr("Live TV")},
+    tabs_.set_tabs({{tr("Home")},
+                    {tr("Live TV")},
                     {tr("On demand")},
                     {tr("Favorites")},
                     {tr("Sources")},
@@ -705,8 +707,8 @@ void App::play_intro()
 bool App::accepts_remote_search() const
 {
     return !shared_.model.pin_prompt() && !storage_busy_ && !storage_dialog_.is_open() &&
-           (browsing() || tabs_.active() == kHome) && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
-           !guide_sheet_.is_open();
+           (browsing() || tabs_.active() == kHome) && !update_.is_open() && !failure_.is_open() &&
+           !library_sheet_.is_open() && !guide_sheet_.is_open();
 }
 
 bool App::remote_search(const char *query)
@@ -965,10 +967,10 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         vod_.update();
     if (tabs_.active() == kHome)
         home_.update();
-    shared_.images.update(browsing()               ? browse_.image_urls()
-                          : tabs_.active() == kVod ? vod_.image_urls()
+    shared_.images.update(browsing()                ? browse_.image_urls()
+                          : tabs_.active() == kVod  ? vod_.image_urls()
                           : tabs_.active() == kHome ? home_.image_urls()
-                                                   : std::vector<std::string>{});
+                                                    : std::vector<std::string>{});
     sources_.update(dt);
     search_.update(dt);
     library_sheet_.update(dt);
@@ -1025,8 +1027,8 @@ void App::draw_status(ui::Canvas &canvas) const
     {
         // An arc turns where the dot would be.
         list.ring(chip.x + 21.0f, (kHeaderY + 60.0f), 9.0f, 3.0f, kWhite.with_alpha(0.14f));
-        list.arc(chip.x + 21.0f, (kHeaderY + 60.0f), 9.0f, 3.0f, reduced ? 0.0f : shared_.clock * 4.6f, 2.2f,
-                 tone::wait);
+        list.arc(chip.x + 21.0f, (kHeaderY + 60.0f), 9.0f, 3.0f,
+                 reduced ? 0.0f : shared_.clock * 4.6f, 2.2f, tone::wait);
     }
     else
     {
@@ -1034,8 +1036,8 @@ void App::draw_status(ui::Canvas &canvas) const
                   dot.with_alpha(0.5f));
         list.circle(chip.x + 21.0f, (kHeaderY + 60.0f), 5.0f, dot);
     }
-    ui::text(list, fonts.semibold, text, chip.x + 36.0f, baseline_for((kHeaderY + 60.0f), 19.0f), 19.0f,
-             theme.text);
+    ui::text(list, fonts.semibold, text, chip.x + 36.0f, baseline_for((kHeaderY + 60.0f), 19.0f),
+             19.0f, theme.text);
 }
 
 void App::draw_header(ui::Canvas &canvas) const
@@ -1131,8 +1133,7 @@ void App::draw_about(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, words, x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
         y += 36.0f;
     };
-    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f)
-    {
+    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
     const auto rule = [&]()

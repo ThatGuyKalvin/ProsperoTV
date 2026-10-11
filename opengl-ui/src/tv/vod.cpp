@@ -45,7 +45,8 @@ bool fetch(const std::string &url, std::string *reply, const iptv::http::Request
     reply->assign(buffer.get(), result.bytes);
     return true;
 }
-bool detail_field(const std::string &key, JsonReader *value, VodDetails &details, unsigned depth = 0)
+bool detail_field(const std::string &key, JsonReader *value, VodDetails &details,
+                  unsigned depth = 0)
 {
     if (depth > 8)
         return false;
@@ -310,8 +311,7 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
                                               });
                          }
                          return ReadObject(value,
-                                           [&](const std::string &season, JsonReader *episodes)
-                                           {
+                                           [&](const std::string &season, JsonReader *episodes) {
                                                return ReadArray(
                                                    episodes, [&](JsonReader *episode)
                                                    { return parser.item(episode, season); });

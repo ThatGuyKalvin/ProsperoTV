@@ -128,16 +128,22 @@ TEST_F(VodTest, HomeResumesOfflineWithoutLoadingVodAndRechecksHiddenAndParentalR
     ASSERT_TRUE(model.hide_category("US / Movies", false));
     model.parental_action(ptv::Model::ParentalAction::set_pin);
     model.poll();
-    host::set_keyboard_text("123456"); model.poll();
-    host::set_keyboard_text("123456"); model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
     model.parental_action(ptv::Model::ParentalAction::unlock);
-    model.poll(); host::set_keyboard_text("123456"); model.poll();
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
     ASSERT_TRUE(model.set_category_rule("US / Movies", 1));
     model.parental_action(ptv::Model::ParentalAction::lock);
     EXPECT_TRUE(model.home_items()[0].empty());
     EXPECT_FALSE(model.play_home(id, true));
     model.parental_action(ptv::Model::ParentalAction::unlock);
-    model.poll(); host::set_keyboard_text("123456"); model.poll();
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
     EXPECT_FALSE(model.home_items()[0].empty());
     EXPECT_FALSE(model.finish_vod(request, 100000000, 100000000, true));
     EXPECT_TRUE(model.home_items()[0].empty());
@@ -173,8 +179,11 @@ TEST_F(VodTest, HomeEpisodesRetainTheirShowsParentalPolicyAcrossRestart)
     ASSERT_TRUE(model.take_play_request(&resumed));
     EXPECT_EQ(resumed.series_id, "20");
     model.parental_action(ptv::Model::ParentalAction::set_pin);
-    model.poll(); host::set_keyboard_text("123456"); model.poll();
-    host::set_keyboard_text("123456"); model.poll();
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
     EXPECT_TRUE(model.home_items()[0].empty());
     EXPECT_FALSE(model.play_home(id, true));
     model.close();
@@ -828,8 +837,8 @@ TEST_F(VodTest, MalformedMovieDetailsKeepPreviousMetadataAndDoNotComplete)
     deep += std::string(2000, '}');
     const std::string oversized = "{\"info\":{\"cast\":[\"" + std::string(257, 'x') +
                                   "\",\"Other actor\"],\"plot\":\"Invalid\"}}";
-    for (const auto &payload : {deep, oversized,
-                               std::string(R"({"info":{"cast":["bad\q"],"plot":"Invalid"}})")})
+    for (const auto &payload :
+         {deep, oversized, std::string(R"({"info":{"cast":["bad\q"],"plot":"Invalid"}})")})
     {
         reply(info + "&vod_id=10", payload);
         model.vod().request_details(0);

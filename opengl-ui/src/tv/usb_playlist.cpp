@@ -43,7 +43,9 @@ std::vector<std::string> usb_playlists(const std::string &mount_root)
                 break;
             const std::string logical =
                 "/mnt/" + drive.substr(drive.find_last_of('/') + 1) + "/" + entry->d_name;
-            struct stat st{};
+            struct stat st
+            {
+            };
             if (usb_playlist_path(logical) &&
                 lstat((drive + "/" + entry->d_name).c_str(), &st) == 0 && S_ISREG(st.st_mode) &&
                 st.st_size > 0 &&
@@ -77,7 +79,9 @@ iptv::http::FetchResult read_usb_playlist(const std::string &path, iptv::http::L
         return result;
     }
     const int file = openat(directory, path.c_str() + 10, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
-    struct stat st{}, mount{};
+    struct stat st
+    {
+    }, mount{};
     if (file < 0 || fstat(file, &st) != 0 || fstat(directory, &mount) != 0 ||
         !S_ISREG(st.st_mode) || st.st_dev != mount.st_dev || st.st_size <= 0 ||
         static_cast<std::uint64_t>(st.st_size) > iptv::http::kMaxListBytes)
@@ -119,7 +123,9 @@ iptv::http::FetchResult read_usb_playlist(const std::string &path, iptv::http::L
             break;
         }
     }
-    struct stat after{}, current{};
+    struct stat after
+    {
+    }, current{};
     if (result.status == Status::ok &&
         (result.bytes != static_cast<std::size_t>(st.st_size) || fstat(file, &after) != 0 ||
          after.st_size != st.st_size || after.st_mtime != st.st_mtime ||
