@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/model.hpp"
+#include "tv/i18n.hpp"
 #include "tv/usb_playlist.hpp"
 #include "tv/platform.hpp"
 #include "tv/backup.hpp"
@@ -17,7 +18,8 @@ bool Model::schedule_programme(unsigned index, const Programme &p, bool record)
     if (!parental_.valid() || parental_.kids_only() ||
         (parental_.enabled() && !parental_.unlocked()))
     {
-        announce(Level::warning, "Unlock parental controls before scheduling programmes", "", 5);
+        announce(Level::warning, tr("Unlock parental controls before scheduling programmes"), "",
+                 5);
         return false;
     }
     const auto now = static_cast<std::int64_t>(platform::unix_time());
@@ -42,20 +44,20 @@ bool Model::schedule_programme(unsigned index, const Programme &p, bool record)
         const auto drives = usb_drives();
         if (drives.empty())
         {
-            announce(Level::error, "Connect a writable USB drive",
-                     "Recording uses /mnt/usb0 through /mnt/usb7", 5);
+            announce(Level::error, tr("Connect a writable USB drive"),
+                     tr("Recording uses /mnt/usb0 through /mnt/usb7"), 5);
             return false;
         }
         job.drive = drives.front();
     }
     if (!programme_jobs_.save(job))
     {
-        announce(Level::error, "Schedule could not be saved",
-                 "Recordings cannot overlap. Keep at most 128 programme jobs.", 5);
+        announce(Level::error, tr("Schedule could not be saved"),
+                 tr("Recordings cannot overlap. Keep at most 128 programme jobs."), 5);
         return false;
     }
-    announce(Level::ready, record ? "Recording scheduled" : "Reminder set",
-             "Keep ProsperoTV running; the console cannot wake for a programme.", 5);
+    announce(Level::ready, tr(record ? "Recording scheduled" : "Reminder set"),
+             tr("Keep ProsperoTV running; the console cannot wake for a programme."), 5);
     next_job_check_ = 0;
     poll_programme_jobs();
     return true;
@@ -66,11 +68,11 @@ void Model::cancel_programme_job(std::int64_t id)
     {
         recorder_.cancel();
         programme_jobs_.finish(id, 4, "Stopping recording");
-        announce(Level::ready, "Stopping recording", "", 3);
+        announce(Level::ready, tr("Stopping recording"), "", 3);
         return;
     }
     if (programme_jobs_.remove(id))
-        announce(Level::ready, "Programme job removed", "", 3);
+        announce(Level::ready, tr("Programme job removed"), "", 3);
 }
 void Model::toggle_recording(std::string_view channel)
 {
@@ -117,7 +119,7 @@ void Model::poll_programme_jobs()
         const bool ok = recorder_.succeeded();
         programme_jobs_.finish(recording_job_, ok ? 2 : 3, message);
         recording_job_ = 0;
-        notice(ok, ok ? "Recording saved" : "Recording failed", message);
+        notice(ok, tr(ok ? "Recording saved" : "Recording failed"), tr(message.c_str()));
     }
     for (const auto &job : programme_jobs_.list())
     {
@@ -144,13 +146,13 @@ void Model::poll_programme_jobs()
         if (!job.recording)
         {
             if (programme_jobs_.finish(job.id, 2, "Reminder shown"))
-                notice(true, "Programme starting", job.title);
+                notice(true, tr("Programme starting"), job.title);
             continue;
         }
         if (recorder_.active())
         {
             programme_jobs_.finish(job.id, 3, "Another recording is running");
-            notice(false, "Recording conflict", job.title);
+            notice(false, tr("Recording conflict"), job.title);
             continue;
         }
         iptv::Catalog cache;
@@ -192,7 +194,7 @@ void Model::poll_programme_jobs()
         if (std::find(drives.begin(), drives.end(), job.drive) == drives.end())
         {
             programme_jobs_.finish(job.id, 3, "The selected USB drive is unavailable");
-            notice(false, "Recording failed", "Connect the selected USB drive");
+            notice(false, tr("Recording failed"), tr("Connect the selected USB drive"));
             continue;
         }
         const auto channel = (*channels)[index];
@@ -221,12 +223,12 @@ void Model::poll_programme_jobs()
         if (recorder_.start(std::move(input), job.drive, job.end, now, job.id))
         {
             recording_job_ = job.id;
-            notice(true, "Recording started", job.title);
+            notice(true, tr("Recording started"), job.title);
         }
         else
         {
             programme_jobs_.finish(job.id, 3, "Recording could not start");
-            notice(false, "Recording failed", job.title);
+            notice(false, tr("Recording failed"), job.title);
         }
     }
 }

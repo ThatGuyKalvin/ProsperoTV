@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/guide.hpp"
+#include "tv/i18n.hpp"
 #include "tv/guide_sheet.hpp"
 #include "tv/sources_screen.hpp"
 #include "tv/model.hpp"
@@ -86,6 +87,36 @@ class GuideTest : public ::testing::Test
     std::string dir;
     std::int64_t now = 0;
 };
+
+TEST_F(GuideTest, ReminderNoticeTranslatesLabelsButPreservesProviderTitleAndStoredStatus)
+{
+    struct ResetLanguage
+    {
+        ~ResetLanguage()
+        {
+            ptv::set_console_language(1);
+        }
+    } reset;
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    ptv::set_console_language(2);
+    ASSERT_STRNE(ptv::tr("Programme starting"), "Programme starting");
+    // The provider title deliberately matches a known interface translation key.
+    ASSERT_TRUE(model.schedule_programme(0, {now - 5, now + 120, "Settings", {}, {}}, false));
+    EXPECT_EQ(model.programme_notice(), std::string(ptv::tr("Programme starting")) + ": Settings");
+    const auto jobs = model.programme_jobs();
+    ASSERT_EQ(jobs.size(), 1u);
+    EXPECT_EQ(jobs[0].title, "Settings");
+    EXPECT_EQ(jobs[0].result, "Reminder shown");
+    EXPECT_STRNE(ptv::tr(jobs[0].result.c_str()), "Reminder shown");
+    model.close();
+}
 
 TEST_F(GuideTest, UnifiedSearchFindsFutureAndPastTitlesAndHonoursHiddenChannels)
 {

@@ -267,13 +267,13 @@ void GuideSheet::draw(ui::Canvas &canvas) const
            "Triangle: Search   Circle: Back"),
         kMargin, 990, 21, theme.text_muted);
     ui::text(list, fonts.regular,
-             "Options: Record / Remind / Scheduled programmes / Update / Match XMLTV", kMargin,
+             tr("Options: Record / Remind / Scheduled programmes / Update / Match XMLTV"), kMargin,
              1030, 21, theme.text_muted);
     if (actions_ || jobs_)
     {
         list.rounded_rect({420, 230, 1140, 650}, 16, tone::night);
-        ui::text(list, fonts.semibold, jobs_ ? "Scheduled programmes" : "Programme actions", 460,
-                 290, 32, theme.text);
+        ui::text(list, fonts.semibold, tr(jobs_ ? "Scheduled programmes" : "Programme actions"),
+                 460, 290, 32, theme.text);
         const auto jobs = model.programme_jobs();
         const char *actions[] = {"Record to USB / cancel recording", "Set / cancel reminder",
                                  "Scheduled programmes", "Update guide", "Match XMLTV channel"};
@@ -289,9 +289,9 @@ void GuideSheet::draw(ui::Canvas &canvas) const
             {
                 const auto &job = jobs[i];
                 const char *state[] = {"Pending", "Recording", "Done", "Failed", "Cancelled"};
-                label = std::string(job.recording ? "Record  " : "Remind  ") +
+                label = std::string(tr(job.recording ? "Record  " : "Remind  ")) +
                         programme_time(job.start, true) + "  " + job.title + "  [" +
-                        state[std::clamp(job.state, 0, 4)] + "]";
+                        tr(state[std::clamp(job.state, 0, 4)]) + "]";
             }
             else
                 label = tr(actions[i]);
@@ -300,14 +300,14 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         }
         if (jobs_ && action_row_ < jobs.size())
             ui::text(list, fonts.regular,
-                     fonts.regular.font->fit(jobs[action_row_].result, 21, 1040), 460, 760, 21,
-                     theme.text_muted);
+                     fonts.regular.font->fit(tr(jobs[action_row_].result.c_str()), 21, 1040), 460,
+                     760, 21, theme.text_muted);
         ui::text(list, fonts.regular,
-                 jobs_ ? "Cross: Remove / stop selected job   Circle: Back"
-                       : "Cross: Select   Circle: Back",
+                 tr(jobs_ ? "Cross: Remove / stop selected job   Circle: Back"
+                          : "Cross: Select   Circle: Back"),
                  460, 806, 22, theme.text_muted);
-        ui::text(list, fonts.regular, "Keep ProsperoTV running for recordings and reminders.", 460,
-                 850, 22, theme.text_muted);
+        ui::text(list, fonts.regular, tr("Keep ProsperoTV running for recordings and reminders."),
+                 460, 850, 22, theme.text_muted);
     }
 }
 } // namespace ptv

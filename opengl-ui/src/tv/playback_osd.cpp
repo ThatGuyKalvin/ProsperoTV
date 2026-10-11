@@ -590,9 +590,9 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         const bool stopping = model_.recording();
         model_.toggle_recording(current_id_);
-        now_ = stopping             ? "Stopping recording..."
-               : model_.recording() ? "Recording to USB. Touchpad stops."
-                                    : "Recording requested; check USB and programme schedules.";
+        now_ = stopping             ? tr("Stopping recording...")
+               : model_.recording() ? tr("Recording to USB. Touchpad stops.")
+                                    : tr("Recording requested; check USB and programme schedules.");
         banner_until_ = now + 5000000;
         dirty_ = true;
         return 1;
