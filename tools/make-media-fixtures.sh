@@ -202,4 +202,9 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=25
     -keyint_min 25 -sc_threshold 0 -c:a aac -b:a 64k "$output/chapters.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/chapters.mp4" -map 0:v -map 0:a \
     -map_chapters 0 -c copy "$output/chapters.mkv"
+ffmpeg -hide_banner -loglevel error -y -i "$output/chapters.mp4" -map 0:v -map 0:a \
+    -c copy "$output/seek.ts"
+mkdir -p "$output/hls-seek"
+ffmpeg -hide_banner -loglevel error -y -i "$output/chapters.mp4" -map 0:v -map 0:a \
+    -c copy -hls_time 1 -hls_list_size 0 "$output/hls-seek/master.m3u8"
 printf '%s\n' "$stamp" > "$output/.complete"

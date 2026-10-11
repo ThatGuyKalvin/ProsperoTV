@@ -165,6 +165,9 @@ bool Library::open(const std::string &path)
         "PRIMARY KEY(source,channel));"
         "CREATE TABLE IF NOT EXISTS category_rules (source TEXT NOT NULL,category TEXT NOT NULL,"
         "rule INTEGER NOT NULL CHECK(rule IN(1,2)),PRIMARY KEY(source,category));"
+        "CREATE TABLE IF NOT EXISTS playback_progress (channel TEXT PRIMARY KEY,"
+        "position INTEGER NOT NULL CHECK(position>=0),duration INTEGER NOT NULL "
+        "CHECK(duration>=0));"
         "CREATE TABLE IF NOT EXISTS folders (name TEXT PRIMARY KEY);"
         "CREATE TABLE IF NOT EXISTS folder_channels (folder TEXT NOT NULL REFERENCES folders(name)"
         " ON DELETE CASCADE ON UPDATE CASCADE,channel TEXT NOT NULL,PRIMARY KEY(folder,channel));"
@@ -316,6 +319,36 @@ std::int64_t Library::selected_source() const
 {
     Statement query(db_, "SELECT source FROM selection WHERE singleton=1");
     return query.row() ? sqlite3_column_int64(query.stmt, 0) : 0;
+}
+
+std::pair<std::uint64_t, std::uint64_t> Library::playback_progress(std::string_view channel) const
+{
+    Statement query(db_, "SELECT position,duration FROM playback_progress WHERE channel=?1");
+    if (!valid_text(channel, 1024) || !query.text(1, channel) || !query.row())
+        return {};
+    const auto position = sqlite3_column_int64(query.stmt, 0);
+    const auto duration = sqlite3_column_int64(query.stmt, 1);
+    if (position < 0 || duration < 0 || position > INT64_MAX / 4 || duration > INT64_MAX / 4 ||
+        (duration && position >= duration))
+        return {};
+    return {static_cast<std::uint64_t>(position), static_cast<std::uint64_t>(duration)};
+}
+
+bool Library::save_playback_progress(std::string_view channel, std::uint64_t position_us,
+                                     std::uint64_t duration_us)
+{
+    if (!valid_text(channel, 1024) || position_us > INT64_MAX / 4 || duration_us > INT64_MAX / 4 ||
+        (duration_us && position_us >= duration_us))
+        return false;
+    if (!position_us)
+    {
+        Statement query(db_, "DELETE FROM playback_progress WHERE channel=?1");
+        return query.text(1, channel) && query.done();
+    }
+    Statement query(db_, "INSERT INTO playback_progress VALUES(?1,?2,?3) ON CONFLICT(channel)"
+                         " DO UPDATE SET position=excluded.position,duration=excluded.duration");
+    return query.text(1, channel) && query.integer(2, position_us) &&
+           query.integer(3, duration_us) && query.done();
 }
 
 bool Library::select_source(std::int64_t id)

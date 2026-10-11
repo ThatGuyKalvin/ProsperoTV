@@ -63,6 +63,9 @@ class Library
     bool select_source(std::int64_t id);
     bool remember_channel(std::int64_t source, std::string_view channel);
     std::pair<std::int64_t, std::string> last_channel() const;
+    std::pair<std::uint64_t, std::uint64_t> playback_progress(std::string_view channel) const;
+    bool save_playback_progress(std::string_view channel, std::uint64_t position_us,
+                                std::uint64_t duration_us);
     std::unordered_set<std::string> hidden_categories(std::uint64_t source) const;
     bool hide_category(std::uint64_t source, std::string_view category, bool hidden);
     std::map<std::string, std::string, std::less<>> channel_names(std::uint64_t source) const;
