@@ -118,6 +118,8 @@ struct ViewState
     int focused_source = 0;
     int vod_kind = -1, vod_focus = 0;
     bool vod_all = false;
+    std::string vod_genre, vod_year;
+    int vod_sort = 0;
     std::string vod_category, vod_series, vod_series_name, vod_series_cover, vod_query;
     std::string vod_series_group;
     bool vod_series_adult = false;

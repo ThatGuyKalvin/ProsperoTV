@@ -545,3 +545,5 @@ retain the provider's artwork. These choices are saved for the next video.
 In multiview, Touchpad keeps the selected live channel playing in a corner while you browse lists or the programme guide. L3 in the live list closes picture in picture.
 
 Live TV also offers Recently added (first seen by this app) and Most watched (successful viewing sessions), with history saved separately for each profile and source.
+
+On Demand: Square opens provider title details; R3 filters loaded metadata by genre/year or changes sorting. Movie details are fetched when opened and retained in the local cache.
