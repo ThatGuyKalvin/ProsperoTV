@@ -397,6 +397,32 @@ TEST_F(AppTest, HomeStartsFirstRoutesFavoritesAndKeepsLiveAndVodAdjacent)
     EXPECT_EQ(app_->tab(), 2);
 }
 
+TEST(InterfaceLanguage, BulkCategoryGeometryMatchesIndividualTabs)
+{
+    hui::ui::TabBar tabs;
+    std::vector<hui::ui::TabItem> labels;
+    for (unsigned i = 0; i < 1000; ++i)
+        labels.push_back({(i & 1 ? std::string("????? ") : std::string("Sports ")) +
+                          std::to_string(i)});
+    tabs.set_tabs(std::move(labels));
+    tabs.set_bounds({96, 440, 1000, 56});
+    tabs.set_active(777, true);
+    const auto &fonts = font_set().fonts;
+    const auto all = tabs.tab_rects(fonts);
+    ASSERT_EQ(all.size(), 1000u);
+    for (unsigned i : {0u, 501u, 777u, 999u})
+    {
+        const auto single = tabs.tab_rect(fonts, static_cast<int>(i));
+        EXPECT_FLOAT_EQ(all[i].x, single.x);
+        EXPECT_FLOAT_EQ(all[i].w, single.w);
+        EXPECT_GT(all[i].w, 0);
+    }
+    EXPECT_LT(all.front().x + all.front().w, 96);
+    EXPECT_GT(all.back().x, 1096);
+    EXPECT_GE(all[777].x, 96);
+    EXPECT_LE(all[777].x + all[777].w, 1096);
+}
+
 TEST_F(AppTest, RtlCatalogGlyphsNavigationAndPlayerSeekAreConsistent)
 {
     struct Reset { ~Reset(){ptv::set_console_language(1);} } reset;

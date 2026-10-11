@@ -1,4 +1,4 @@
-﻿# Arabic and Hebrew rendering
+# Arabic and Hebrew rendering
 
 Settings → Interface language selects the system language or one of the nine
 app languages. Restart applies the saved choice. Arabic uses documented console
@@ -20,7 +20,9 @@ operation at 16 KiB / 4096 codepoints. Per-face caches hold at most 64 entries,
 local to each shaping operation. Joined Arabic ignores heading letter spacing.
 
 `tools/setup-text-dependencies.sh` pins host dependencies and font checksums.
-The native build uses the existing pinned PacBrew HarfBuzz/FriBidi archives.
+The native build compiles the same HarfBuzz source with upstream HB_NO_SETLOCALE,
+using the pinned SDK and the existing PacBrew FriBidi archive. This avoids
+POSIX locale-object imports unavailable in the console runtime.
 `tools/fetch-kit.sh` applies the persistent patch to its own pinned checkout;
 a custom KIT must already contain that patch. Font/dependency outputs remain
 inside the selected worktree. Font and library licenses accompany the bundles.

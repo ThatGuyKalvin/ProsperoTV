@@ -16,19 +16,20 @@ PS5_OPENGL_PREFIX ?=
 OPENGL_SDK := .deps/ps5-opengl/current
 FFMPEG := .deps/ffmpeg-audio/root
 EXPAT := .deps/expat/ps5
+TEXT := .deps/text-native
 
 APP_DEFINITIONS := GL_GLEXT_PROTOTYPES=1 IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST) IPTV_PROBE=0
 APP_DEFINITIONS += IPTV_REMOTE_CAPTURE=$(IPTV_REMOTE_CAPTURE)
-APP_INCLUDE_PATHS := src src/kit include vendor/qrcodegen $(OPENGL_SDK)/include $(FFMPEG)/include $(EXPAT)/include
+APP_INCLUDE_PATHS := src src/kit include vendor/qrcodegen $(OPENGL_SDK)/include $(FFMPEG)/include $(EXPAT)/include $(TEXT)/include/harfbuzz
 # The OpenGL link group brings the C++ runtime (libc++, libc++abi, libunwind).
-APP_STATIC_ARCHIVES := $(EXPAT)/lib/libexpat.a $(FFMPEG)/lib/libavfilter.a $(FFMPEG)/lib/libavformat.a $(FFMPEG)/lib/libavcodec.a $(FFMPEG)/lib/libswresample.a \
+APP_STATIC_ARCHIVES := $(TEXT)/lib/libharfbuzz.a $(EXPAT)/lib/libexpat.a $(FFMPEG)/lib/libavfilter.a $(FFMPEG)/lib/libavformat.a $(FFMPEG)/lib/libavcodec.a $(FFMPEG)/lib/libswresample.a \
 	$(FFMPEG)/lib/libavutil.a .deps/ps5-opengl/libps5opengl-group.a
 APP_IMPORT_STUBS := $(OPENGL_SDK)/lib/libSceAgc.so $(OPENGL_SDK)/lib/libSceAgcDriver.so
 APP_RUNTIME_MODULES ?=
 # libcurl with OpenSSL: every request the app makes, and the update kit.
 PACBREW_PACKAGES ?= libcurl libpng libjpeg
 PACBREW_INCLUDE_PATHS := include include/harfbuzz include/fribidi
-PACBREW_STATIC_ARCHIVES := lib/libsqlite3.a lib/libharfbuzz.a lib/libfribidi.a
+PACBREW_STATIC_ARCHIVES := lib/libsqlite3.a lib/libfribidi.a
 BUILD_JOBS ?= $(shell nproc 2>/dev/null || echo 2)
 USE_CCACHE ?= 1
 export BUILD_JOBS USE_CCACHE PS5_OPENGL_PREFIX
@@ -37,7 +38,7 @@ export PACBREW_PACKAGES PACBREW_INCLUDE_PATHS PACBREW_STATIC_ARCHIVES
 
 RUNTIME := runtime/libc.prx
 
-.PHONY: all app deps opengl audio libc clean
+.PHONY: all app deps opengl audio text libc clean
 
 all: app
 
@@ -60,9 +61,12 @@ audio:
 	@mkdir -p assets/licenses
 	@cp $(EXPAT)/EXPAT-LICENSE.txt assets/licenses/Expat-MIT.txt
 
-deps: opengl audio
+text:
+	@bash tools/setup-native-text.sh
 
-app: $(RUNTIME) opengl audio
+deps: opengl audio text
+
+app: $(RUNTIME) opengl audio text
 	@printf '%s\n' '==> [app] Compiling, linking, signing, and assembling the app folder'
 	@bash tools/build.sh Folder
 
