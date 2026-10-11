@@ -4,6 +4,7 @@
 #include "tv/playback_osd.hpp"
 #include "core/save_file.hpp"
 #include "iptv_color.h"
+#include "iptv_input.h"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdlib>
@@ -163,4 +164,34 @@ TEST(VideoPanel, BakedUnicodeFontDrawsClippedAntialiasedText)
     const auto before = panel.pixels;
     panel.text(font, "Beyond the panel", 600, 200, 32, 300);
     EXPECT_EQ(panel.pixels, before);
+}
+
+TEST(PlaybackScreensaver, BlanksPausedSdrAndHdrAndConsumesOnlyTheWakeInput)
+{
+    ptv::Model model("/tmp/prosperotv-unused-saver-test");
+    ptv::PlayRequest request;
+    ptv::Settings settings;
+    settings.screensaver_minutes = 1;
+    ptv::PlaybackOsd osd(model, request, settings);
+    osd.set_paused(true);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 8, 4, 8, 4, 8, 1));
+    EXPECT_TRUE(osd.draw(nullptr, 0, 8, 4, 8, 4, 8, 60000001));
+    std::vector<std::uint8_t> pixels(52, 99);
+    EXPECT_TRUE(osd.draw(pixels.data(), 48, 8, 4, 8, 4, 8, 60000001));
+    EXPECT_EQ(pixels[0], 16);
+    EXPECT_EQ(pixels[31], 16);
+    EXPECT_EQ(pixels[32], 128);
+    EXPECT_EQ(pixels[47], 128);
+    EXPECT_EQ(pixels[48], 99);
+    std::vector<std::uint16_t> hdr(52, 99);
+    EXPECT_TRUE(osd.draw(hdr.data(), 96, 8, 4, 8, 4, 10, 60000001, {}, 1));
+    EXPECT_EQ(hdr[0], 64);
+    EXPECT_EQ(hdr[32], 512);
+    EXPECT_EQ(hdr[48], 99);
+    EXPECT_FALSE(osd.draw(hdr.data(), 95, 8, 4, 8, 4, 10, 60000001, {}, 1));
+    EXPECT_EQ(osd.input(IPTV_INPUT_PLAY_PAUSE, 60000002), 1);
+    EXPECT_EQ(osd.input(IPTV_INPUT_PLAY_PAUSE, 60000003), 0);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 8, 4, 8, 4, 8, 60000004));
+    osd.set_paused(false);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 8, 4, 8, 4, 8, 600000001));
 }

@@ -69,7 +69,8 @@ bool load_font(hui::gfx::Renderer &renderer, const std::string &path, hui::gfx::
                hui::ui::FontRef *ref)
 {
     std::string data;
-    if (!hui::save::read_file(path, &data, 64u << 20) || !font->load(data))
+    if (!hui::save::read_file(path, &data, 64u << 20) ||
+        !ptv::load_menu_font(std::move(data), *font, std::getenv("TV_LARGER_TEXT") != nullptr))
     {
         std::fprintf(stderr, "cannot load font %s\n", path.c_str());
         return false;
@@ -479,8 +480,12 @@ int main(int argc, char **argv)
     ptv::Model model(data_dir);
     g_model = &model;
     model.open();
-    ptv::App app(model, fonts, renderer.glass_texture(), ptv::load_settings(data_dir),
-                 "host build");
+    auto appearance = ptv::load_settings(data_dir);
+    if (const char *theme = std::getenv("TV_THEME"))
+        appearance.theme = std::clamp(std::atoi(theme), 0, 2);
+    appearance.larger_text = std::getenv("TV_LARGER_TEXT") != nullptr;
+    appearance.high_contrast = std::getenv("TV_HIGH_CONTRAST") != nullptr;
+    ptv::App app(model, fonts, renderer.glass_texture(), appearance, "host build");
     app.configure_images(
         [&renderer](const ptv::ImagePixels &pixels)
         {

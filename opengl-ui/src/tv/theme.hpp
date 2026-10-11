@@ -5,6 +5,7 @@
 #pragma once
 
 #include "tv/kit.hpp"
+#include "tv/settings.hpp"
 
 namespace ptv
 {
@@ -24,6 +25,11 @@ inline const Color good = Color::rgb(0x6fe3ae);
 inline const Color bad = Color::rgb(0xff7a7a);
 inline const Color wait = Color::rgb(0xf6c35f);
 } // namespace tone
+
+// Adapt the app-owned frame without changing channel images or video textures.
+void apply_appearance(Frame &frame, const Settings &settings);
+// Change font metrics before loading; measurement, fitting and drawing then agree.
+bool load_menu_font(std::string data, gfx::Font &font, bool larger);
 
 // A red sky after sunset, as the kit's frosted-glass recipe.
 ui::Theme dusk();

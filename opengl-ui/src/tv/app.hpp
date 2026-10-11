@@ -56,6 +56,10 @@ class App
         shared_.preview.clear();
         multiview_.stop();
     }
+    bool screensaver_active() const
+    {
+        return sleeping_;
+    }
     bool accepts_remote_search() const;
     bool remote_search(const char *query);
     void set_volume(int volume);
@@ -111,7 +115,7 @@ class App
         intro_ = seconds;
     }
     // Records the frame. It changes nothing: it may run more than once.
-    void draw(Frame &frame) const;
+    void draw(Frame &frame, bool themed = true) const;
 
     // The screen a channel opens on. The menu gives way to it as t goes from
     // 0 to 1; its last picture, the bar still empty, is what the player keeps
@@ -205,6 +209,8 @@ class App
     void open_storage(StorageAction action, ui::Feedback &feedback);
     void storage_question(ui::Feedback &feedback);
 
+    float idle_seconds_ = 0;
+    bool sleeping_ = false;
     Shared shared_;
     Multiview multiview_;
     BrowseScreen browse_;

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "tv/model.hpp"
+#include "tv/settings.hpp"
 #include "ui/fonts.hpp"
 #include "iptv_player.h"
 #include <mutex>
@@ -31,7 +32,8 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
 class PlaybackOsd
 {
   public:
-    PlaybackOsd(Model &model, const PlayRequest &request);
+    PlaybackOsd(Model &model, const PlayRequest &request, const Settings &settings = {});
+    void set_paused(bool paused);
     bool load_fonts(const std::string &directory);
     // The control thread alone calls input and reads selected_channel. Drawing
     // can happen on the presentation worker, protected by the same mutex.
@@ -58,6 +60,10 @@ class PlaybackOsd
     int select(unsigned index);
     void line(std::string_view value, float x, float y, float size, float width);
     Model &model_;
+    Settings settings_;
+    bool paused_ = false;
+    std::uint64_t last_activity_ = 0;
+    bool sleeping(std::uint64_t now) const;
     std::string current_id_, title_, now_, next_;
     bool live_ = false, list_ = false, dirty_ = true, started_ = false;
     bool audio_menu_ = false;
