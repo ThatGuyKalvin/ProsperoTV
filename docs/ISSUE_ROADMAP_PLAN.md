@@ -142,3 +142,14 @@ of 50.62-52.11 ms; worst scrolling window frames are below 58 ms instead of 310 
 Small frame-time spikes remain; this is not a claim of perfect 60 fps or a network fix.
 
 - 2026-10-11 | G2 | e2637a1 | .30 PPSA88308 | pass: Down/R2/L2, clean close, services healthy | results/integration/public-scroll-final-30 | regular .060 build
+
+## G1/G2: On-demand availability counts
+
+G1: Show the selected source's movie and show counts, disable confirmed-empty
+libraries, and distinguish unknown/loading results from zero. Reuse the search
+loaders and permit empty caches only for VOD. Host checks cover mixed playlists,
+source switching, hidden categories, refresh recovery and empty cache persistence.
+G2: Verify both zero-count buttons remain on the overview after Cross in the
+isolated PPSA88308 title on idle .30; require clean shutdown and healthy services.
+
+- 2026-10-11 | G1/G2 | 3278945 | .30 PPSA88308 | pass: 35 UI sanitizer + 16 store tests; gray zero counts and blocked Cross verified; clean close | results/integration/vod-counts-30
