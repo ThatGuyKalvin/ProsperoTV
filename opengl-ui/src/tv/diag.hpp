@@ -10,13 +10,16 @@
 // goes into one (addresses pass through redact_address() first).
 
 #pragma once
+#include <string>
+#include <string_view>
 
 namespace ptv::diag
 {
 
 // Where a line goes. Called from any thread; the text has no newline.
 using Sink = void (*)(const char *line);
-void set_sink(Sink sink);
+void set_sink(Sink sink, std::string_view destination = {});
+std::string destination();
 
 // The viewer's switch, and a build's own (a debug build, a scripted run).
 void set_enabled(bool enabled);
