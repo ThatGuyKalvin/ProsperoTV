@@ -229,6 +229,7 @@ class Model
     bool set_schedule(std::int64_t id, RefreshSchedule schedule);
     // Called on the menu thread by the authenticated phone remote.
     int remote_sources(std::string_view input, std::string &output);
+    int remote_browse(std::string_view input, std::string &output);
     VodLibrary &vod()
     {
         return vod_;

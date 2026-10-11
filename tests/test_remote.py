@@ -195,6 +195,17 @@ class RemoteTest(unittest.TestCase):
         self.start(playback=True)
         self.request('/api/sources', code=409)
         self.request('/api/sources', '{"id":0}', code=409)
+    def test_channel_browse_requires_pairing_header_and_menu(self):
+        self.request('/api/browse', '{"operation":"list"}', code=401)
+        self.pair()
+        self.request('/api/browse', '{"operation":"list"}', code=403, header=False)
+        self.assertEqual(self.request('/api/browse', '{"operation":"list"}'), '{"channels":[]}')
+        self.assertEqual(self.headers['Content-Type'], 'application/json')
+        self.request('/api/browse', '', code=400)
+        self.request('/api/browse', 'x' * 2049, code=400)
+        self.stop()
+        self.start(playback=True)
+        self.request('/api/browse', '{"operation":"list"}', code=409)
     def test_playback_favorite_and_volume(self):
         self.stop()
         self.start(playback=True)
