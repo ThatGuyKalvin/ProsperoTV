@@ -67,6 +67,7 @@ const SavedSource *Model::saved_source(std::int64_t id) const
 
 void Model::select_source_record(const SavedSource &source)
 {
+    clear_home_playback();
     end_search();
     const bool changed = selected_source_id_ != source.id;
     selected_source_id_ = source.id;
@@ -462,6 +463,8 @@ bool Model::play_vod(unsigned index)
 }
 bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series, bool inherit_series)
 {
+    if (inherit_series)
+        clear_home_playback();
     auto snapshot = item.Copy();
     if (inherit_series && !series.empty())
     {
@@ -471,7 +474,7 @@ bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series, 
             snapshot.name = view.vod_series_name + " / " + snapshot.name;
     }
     if (!library_.remember_vod(selected_source_id_, source_id(active_source_), snapshot, series,
-                                static_cast<std::int64_t>(platform::unix_time())))
+                               static_cast<std::int64_t>(platform::unix_time())))
         notify(Level::warning, tr("Continue watching could not be saved"), "");
     sleep_timer.wake();
     play_request_ = {};
@@ -508,8 +511,10 @@ bool Model::finish_vod(const PlayRequest &request, std::uint64_t position_us,
         return false;
     if (!save_vod_progress(request.channel_id, completed ? 0 : position_us, duration_us))
         notify(Level::error, tr("Playback position could not be saved"), "");
-    if (!completed || sleep_timer.sleeping() || vod_.kind() != VodKind::episodes ||
-        request.series_id != vod_.series())
+    if (completed && !sleep_timer.sleeping() && home_source_ != 0)
+        return next_home_episode(request);
+    if (!completed || sleep_timer.sleeping() || request.source_id != source_id(active_source_) ||
+        vod_.kind() != VodKind::episodes || request.series_id != vod_.series())
         return false;
     const auto &catalog = vod_.catalog();
     const auto current = catalog.Find(request.channel_id);
@@ -815,9 +820,10 @@ bool Model::import_usb_playlist(const std::string &file)
     SavedSource source;
     source.kind = 1;
     source.name = file.substr(file.find_last_of('/') + 1);
-    if (source.name.size() > 128) source.name.resize(128);
+    if (source.name.size() > 128)
+        source.name.resize(128);
     source.url = file;
     source.schedule = RefreshSchedule::manual;
     return commit_source(std::move(source));
 }
-}
+} // namespace ptv

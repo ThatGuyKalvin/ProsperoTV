@@ -68,12 +68,18 @@ bool valid_resume(const iptv::ChannelView &channel, std::string_view series)
     std::string canonical;
     const auto optional = [](std::string_view value, std::size_t limit)
     { return value.empty() || valid_text(value, limit); };
+    // Playlist shows use category + newline + title as their internal series key.
+    const auto separator = series.find('\n');
+    const bool series_ok = separator == std::string_view::npos
+                               ? optional(series, 256)
+                               : optional(series.substr(0, separator), 2048) &&
+                                     valid_text(series.substr(separator + 1), 2048);
     if (!valid_text(channel.id, 1024) || !valid_text(channel.name, 2048) ||
         channel.url.size() > 4096 || !iptv::CanonicalizeStreamUrl(channel.url, &canonical) ||
-        !optional(channel.tvg_logo, 4096) || !optional(channel.group_title, 2048) ||
-        !optional(series, 256) || !optional(channel.http_user_agent, 4096) ||
-        !optional(channel.http_referrer, 4096) || !optional(channel.tvg_id, 2048) ||
-        channel.alternate_urls.size() > 3 || channel.alternate_group_titles.size() > 4)
+        !optional(channel.tvg_logo, 4096) || !optional(channel.group_title, 2048) || !series_ok ||
+        !optional(channel.http_user_agent, 4096) || !optional(channel.http_referrer, 4096) ||
+        !optional(channel.tvg_id, 2048) || channel.alternate_urls.size() > 3 ||
+        channel.alternate_group_titles.size() > 4)
         return false;
     for (auto value : channel.alternate_urls)
         if (value.size() > 4096 || !iptv::CanonicalizeStreamUrl(value, &canonical))

@@ -570,6 +570,7 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             show_tab(tabs_.active() == kLive ? kFavorites : kLive, true);
             return;
         }
+        model.cancel_home_play();
         if (tabs_.step(turn, input, feedback) == ui::Event::changed)
             tab_changed();
         return;
@@ -581,6 +582,11 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     }
     if (input.is_pressed(Action::back))
     {
+        if (model.cancel_home_play())
+        {
+            feedback.play(audio::Cue::back);
+            return;
+        }
         // Back undoes the nearest thing: a search, then a place in the
         // screen, then the tab.
         if (browsing() && model.filtering())

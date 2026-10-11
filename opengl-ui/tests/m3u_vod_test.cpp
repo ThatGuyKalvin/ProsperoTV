@@ -38,7 +38,9 @@ TEST(M3uVod, ImportsMixedPlusPlaylistAndKeepsMoviesAndEpisodesOutOfLiveAfterRest
            "#EXTINF:-1 group-title=\"Drama\",Show "
            "S01E01\nhttps://provider.invalid/series/u/p/3.mp4\n"
            "#EXTINF:-1 group-title=\"Drama\",Show "
-           "S01E02\nhttps://provider.invalid/series/u/p/4.mp4\n";
+           "S01E02\n#EXTVLCOPT:http-user-agent=EpisodeAgent\n"
+           "#EXTVLCOPT:http-referrer=https://episode.invalid/\n"
+           "https://provider.invalid/series/u/p/4.mp4\n";
     host::set_network(true, dir + "/mixed.m3u");
     host::set_network_piece(1);
     {
@@ -48,6 +50,7 @@ TEST(M3uVod, ImportsMixedPlusPlaylistAndKeepsMoviesAndEpisodesOutOfLiveAfterRest
         ASSERT_TRUE(library.save_source(&source));
         ASSERT_TRUE(library.select_source(2));
     }
+    std::string resume_id;
     for (int launch = 0; launch < 2; ++launch)
     {
         ptv::Model model(dir);
@@ -61,6 +64,22 @@ TEST(M3uVod, ImportsMixedPlusPlaylistAndKeepsMoviesAndEpisodesOutOfLiveAfterRest
         ASSERT_EQ(model.visible_count(), 1u);
         ASSERT_EQ(model.provider_categories().size(), 1u);
         EXPECT_EQ(model.provider_categories()[0].value, "Live");
+        if (launch == 1)
+        {
+            ASSERT_EQ(model.home_items()[0].size(), 1u);
+            ASSERT_TRUE(model.play_home(resume_id, true));
+            ptv::PlayRequest request;
+            ASSERT_TRUE(model.take_play_request(&request));
+            EXPECT_EQ(request.start_position_us, 12000000u);
+            model.close();
+            ASSERT_TRUE(model.finish_vod(request, 100000000, 100000000, true));
+            ASSERT_TRUE(model.take_play_request(&request));
+            EXPECT_EQ(request.urls[0], "https://provider.invalid/series/u/p/4.mp4");
+            EXPECT_EQ(request.user_agent, "EpisodeAgent");
+            EXPECT_EQ(request.referrer, "https://episode.invalid/");
+            EXPECT_TRUE(model.vod().catalog().empty());
+            ASSERT_TRUE(model.open());
+        }
         auto &vod = model.vod();
         ASSERT_TRUE(vod.available());
         vod.select(ptv::VodKind::movies);
@@ -86,6 +105,14 @@ TEST(M3uVod, ImportsMixedPlusPlaylistAndKeepsMoviesAndEpisodesOutOfLiveAfterRest
         ASSERT_TRUE(model.take_play_request(&request));
         EXPECT_EQ(request.channel_name, "Show S01E02");
         EXPECT_EQ(request.urls[0], "https://provider.invalid/series/u/p/4.mp4");
+        if (launch == 0)
+        {
+            ASSERT_TRUE(model.play_vod(0));
+            ASSERT_TRUE(model.take_play_request(&request));
+            resume_id = request.channel_id;
+            EXPECT_FALSE(model.finish_vod(request, 12000000, 100000000, false));
+            ASSERT_EQ(model.home_items()[0].size(), 1u);
+        }
         model.close();
         // The second launch must get both live and VOD from the persisted source.
         host::set_network(false, "");

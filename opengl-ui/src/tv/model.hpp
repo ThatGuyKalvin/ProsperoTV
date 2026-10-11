@@ -215,8 +215,14 @@ class Model
     void use_saved_source(std::int64_t id);
     void add_source(iptv::SourceKind kind);
     bool import_usb_playlist(const std::string &path);
-    const std::string &usb_root() const { return usb_root_; }
-    void set_usb_root(std::string root) { usb_root_ = std::move(root); }
+    const std::string &usb_root() const
+    {
+        return usb_root_;
+    }
+    void set_usb_root(std::string root)
+    {
+        usb_root_ = std::move(root);
+    }
     void edit_saved_source(std::int64_t id);
     void edit_source_http(std::int64_t id);
     bool remove_source(std::int64_t id);
@@ -273,6 +279,7 @@ class Model
     };
     std::array<std::vector<HomeItem>, 3> home_items() const;
     bool play_home(std::string_view id, bool on_demand);
+    bool cancel_home_play();
     bool play_vod(unsigned index);
     bool save_vod_progress(std::string_view id, std::uint64_t position_us,
                            std::uint64_t duration_us);
@@ -339,12 +346,13 @@ class Model
     // European ones: the faces for them are large, and loaded only when asked for.
     bool uses_east_asian() const
     {
-        return home_east_asian_ || index_.east_asian || vod_.east_asian() || search_movies_.east_asian() ||
-               search_shows_.east_asian();
+        return home_east_asian_ || home_series_.east_asian() || index_.east_asian ||
+               vod_.east_asian() || search_movies_.east_asian() || search_shows_.east_asian();
     }
     bool uses_korean() const
     {
-        return home_korean_ || index_.korean || vod_.korean() || search_movies_.korean() || search_shows_.korean();
+        return home_korean_ || home_series_.korean() || index_.korean || vod_.korean() ||
+               search_movies_.korean() || search_shows_.korean();
     }
     // Changes whenever the visible list may have changed.
     unsigned revision() const
@@ -682,6 +690,15 @@ class Model
     Guide guide_, pending_guide_;
     mutable bool home_east_asian_ = false, home_korean_ = false;
     VodLibrary vod_;
+    VodLibrary home_series_;
+    ResumeItem home_playback_;
+    std::int64_t home_source_ = 0;
+    std::uint64_t home_fingerprint_ = 0;
+    bool home_waiting_ = false;
+    std::uint64_t home_deadline_ = 0;
+    void clear_home_playback();
+    void poll_home_playback();
+    bool next_home_episode(const PlayRequest &request);
     VodLibrary search_movies_, search_shows_;
     bool searching_ = false;
     bool search_busy() const
@@ -693,7 +710,8 @@ class Model
         return searching_ && (search_movies_.requested() || search_shows_.requested());
     }
     bool home_vod_allowed(const ResumeItem &item) const;
-    bool queue_vod(const iptv::ChannelView &item, const std::string &series, bool inherit_series = true);
+    bool queue_vod(const iptv::ChannelView &item, const std::string &series,
+                   bool inherit_series = true);
     void *guide_thread_ = nullptr;
     std::atomic<bool> guide_done_{false}, guide_stop_{false};
     std::vector<std::string> guide_urls_;
