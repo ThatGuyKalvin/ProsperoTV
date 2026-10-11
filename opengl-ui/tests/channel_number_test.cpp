@@ -143,6 +143,11 @@ TEST(ChannelOrganization, NamesHiddenChannelsAndIndependentOrdersSurviveRestart)
     EXPECT_EQ(model.position_of(b), 0);
     model.set_group(ptv::Group::all);
     EXPECT_EQ(model.position_of(b), 2);
+    model.set_group(ptv::Group::recently_added);
+    EXPECT_FALSE(model.move_channel(c, -1));
+    EXPECT_FALSE(model.reset_channel_order());
+    model.set_group(ptv::Group::all);
+    EXPECT_EQ(model.position_of(c), 1);
     ASSERT_TRUE(model.rename_channel(a, "Zebra"));
     EXPECT_EQ(model.find(a)->name, "Zebra");
     model.set_query("Zebra");

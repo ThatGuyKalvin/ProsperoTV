@@ -51,6 +51,11 @@ void LibrarySheet::sync()
             {
                 ui::ListItem row;
                 row.title = tr(title);
+                const auto action = rows.size();
+                const bool ranked =
+                    model.group() == Group::recently_added || model.group() == Group::most_watched;
+                row.disabled =
+                    (channel_.empty() && action < 5) || (ranked && action >= 3 && action <= 5);
                 rows.push_back(std::move(row));
             }
         }
@@ -474,7 +479,8 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
     if (channel_options_)
     {
         if (!hidden_list_)
-            if (const auto channel = shared_.model.find(channel_))
+            if (const auto channel = shared_.model.find(channel_);
+                channel && shared_.model.content_allowed(*channel))
             {
                 const auto name = shown_name(fonts, *channel);
                 const auto &face = face_for(fonts, fonts.regular, name);

@@ -526,6 +526,8 @@ void Model::mark_visibility()
 
 bool Model::move_channel(std::string_view id, int direction)
 {
+    if (group_ == Group::recently_added || group_ == Group::most_watched)
+        return false;
     if (direction != -1 && direction != 1)
         return false;
     const int from = position_of(id);
@@ -562,6 +564,8 @@ bool Model::move_channel(std::string_view id, int direction)
 
 bool Model::reset_channel_order()
 {
+    if (group_ == Group::recently_added || group_ == Group::most_watched)
+        return false;
     const bool favorites = group_ == Group::favorites;
     if (!library_.save_channel_order(source_id(active_source_), favorites, {}))
         return false;
