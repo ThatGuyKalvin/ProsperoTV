@@ -115,7 +115,8 @@ bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, uns
 
 PlaybackOsd::PlaybackOsd(Model &model, const PlayRequest &request, const Settings &settings)
     : model_(model), settings_(settings), current_id_(request.channel_id),
-      title_(request.channel_name), live_(request.record_channel_result)
+      title_(request.channel_name), live_(request.record_channel_result),
+      on_demand_(request.on_demand)
 {
     if (live_)
     {
@@ -271,6 +272,39 @@ bool PlaybackOsd::sleeping(std::uint64_t now) const
                static_cast<std::uint64_t>(settings_.screensaver_minutes) * 60000000;
 }
 
+void PlaybackOsd::set_media_state(const iptv_player_media_state_t &state)
+{
+    std::lock_guard lock(mutex_);
+    if (media_.available != state.available || media_.paused != state.paused ||
+        media_.seekable != state.seekable ||
+        media_.position_us / 1000000 != state.position_us / 1000000 ||
+        media_.duration_us != state.duration_us || media_.chapter_count != state.chapter_count)
+        dirty_ = true;
+    media_ = state;
+    media_.chapter_count = std::min(media_.chapter_count, unsigned(IPTV_PLAYER_MAX_CHAPTERS));
+    chapter_focus_ = std::min(chapter_focus_, media_.chapter_count ? media_.chapter_count - 1 : 0);
+    const auto now = platform::monotonic_us();
+    if (on_demand_ && state.presented && state.position_us && now - progress_saved_at_ >= 15000000)
+    {
+        if (model_.save_vod_progress(current_id_, state.position_us, state.duration_us))
+            progress_saved_at_ = now;
+    }
+}
+std::optional<std::uint64_t> PlaybackOsd::take_media_seek()
+{
+    std::lock_guard lock(mutex_);
+    const auto result = media_seek_;
+    media_seek_.reset();
+    return result;
+}
+std::optional<bool> PlaybackOsd::take_media_pause()
+{
+    std::lock_guard lock(mutex_);
+    const auto result = media_pause_;
+    media_pause_.reset();
+    return result;
+}
+
 int PlaybackOsd::input(int action, std::uint64_t now)
 {
     std::lock_guard lock(mutex_);
@@ -303,11 +337,30 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         if (action == IPTV_INPUT_L1 || action == IPTV_INPUT_R1)
         {
-            tab_ = (tab_ + (action == IPTV_INPUT_R1 ? 1 : 2)) % 3;
+            const unsigned tabs = live_ ? 3 : 4;
+            tab_ = (tab_ + (action == IPTV_INPUT_R1 ? 1 : tabs - 1)) % tabs;
             subtitle_focus_ = 0;
             for (unsigned i = 0; i < subtitles_.tracks.size(); ++i)
                 if (subtitles_.tracks[i].id == subtitles_.selected)
                     subtitle_focus_ = i + 1;
+            dirty_ = true;
+            return 1;
+        }
+        if (tab_ == 3)
+        {
+            if (action == IPTV_INPUT_CIRCLE)
+                audio_menu_ = false;
+            else if (action == IPTV_INPUT_CROSS && media_.seekable && media_.chapter_count)
+            {
+                media_seek_ = media_.chapter_positions[chapter_focus_];
+                audio_menu_ = false;
+                banner_until_ = now + 5000000;
+            }
+            else if (action == IPTV_INPUT_UP || action == IPTV_INPUT_LEFT)
+                chapter_focus_ = chapter_focus_ ? chapter_focus_ - 1 : 0;
+            else if (action == IPTV_INPUT_DOWN || action == IPTV_INPUT_RIGHT)
+                chapter_focus_ = std::min(chapter_focus_ + 1,
+                                          media_.chapter_count ? media_.chapter_count - 1 : 0);
             dirty_ = true;
             return 1;
         }
@@ -361,7 +414,25 @@ int PlaybackOsd::input(int action, std::uint64_t now)
         return 1;
     }
     if (!live_)
-        return 0;
+    {
+        if (media_.available && action == IPTV_INPUT_PLAY_PAUSE)
+            media_pause_ = !media_.paused;
+        else if (media_.seekable && (action == IPTV_INPUT_LEFT || action == IPTV_INPUT_RIGHT ||
+                                     action == IPTV_INPUT_L1 || action == IPTV_INPUT_R1))
+        {
+            const std::int64_t step =
+                (action == IPTV_INPUT_L1 || action == IPTV_INPUT_R1) ? 60000000 : 10000000;
+            const bool backwards = action == IPTV_INPUT_LEFT || action == IPTV_INPUT_L1;
+            const auto position = static_cast<std::int64_t>(media_.position_us);
+            media_seek_ = static_cast<std::uint64_t>(std::clamp<std::int64_t>(
+                position + (backwards ? -step : step), 0,
+                static_cast<std::int64_t>(media_.duration_us ? media_.duration_us - 1 : 0)));
+        }
+        else
+            return 0;
+        banner_until_ = now + 5000000;
+        return 1;
+    }
     if (!list_ && (action == IPTV_INPUT_PLAY_PAUSE || action == IPTV_INPUT_GO_LIVE ||
                    action == IPTV_INPUT_LEFT || action == IPTV_INPUT_RIGHT))
     {
@@ -431,7 +502,30 @@ std::optional<unsigned> PlaybackOsd::take_picture_selection()
 
 void PlaybackOsd::paint()
 {
-    if (audio_menu_ && tab_ == 2)
+    if (audio_menu_ && tab_ == 3)
+    {
+        panel_.reset(80, 100, 820, 860);
+        line(tr("Chapters"), 28, 54, 32, 760);
+        line(media_.chapter_count ? tr("Choose a chapter") : tr("No chapters in this video"), 28,
+             88, 22, 760);
+        const unsigned begin = chapter_focus_ / 9 * 9;
+        for (unsigned row = 0; row < 9 && begin + row < media_.chapter_count; ++row)
+        {
+            const auto index = begin + row, top = 110 + row * 72;
+            if (index == chapter_focus_)
+                for (unsigned y = top; y < top + 66; ++y)
+                    std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
+            const auto seconds = media_.chapter_positions[index] / 1000000;
+            const auto title = std::string(media_.chapter_titles[index],
+                                           strnlen(media_.chapter_titles[index], 129));
+            line(std::to_string(seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") +
+                     std::to_string(seconds % 60) + "  " + title,
+                 28, top + 43, 28, 760);
+        }
+        line(tr("L1/R1 Audio / Subtitles / Picture / Chapters"), 28, 764, 22, 760);
+        line(tr("Cross Select ? Circle Close"), 28, 833, 22, 760);
+    }
+    else if (audio_menu_ && tab_ == 2)
     {
         panel_.reset(80, 100, 820, 860);
         line(tr("Picture"), 28, 54, 32, 760);
@@ -447,7 +541,9 @@ void PlaybackOsd::paint()
             line(std::string(row == picture_mode_ ? "> " : "") + tr(labels[row]), 28, top + 43, 28,
                  760);
         }
-        line(tr("L1/R1 Audio / Subtitles / Picture"), 28, 764, 22, 760);
+        line(live_ ? tr("L1/R1 Audio / Subtitles / Picture")
+                   : tr("L1/R1 Audio / Subtitles / Picture / Chapters"),
+             28, 764, 22, 760);
         line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
     }
     else if (audio_menu_ && (tab_ == 1))
@@ -484,7 +580,9 @@ void PlaybackOsd::paint()
             }
             line((id == subtitles_.selected ? "> " : "") + label, 28, top + 43, 28, 760);
         }
-        line(tr("L1/R1 Audio / Subtitles / Picture"), 28, 764, 22, 760);
+        line(live_ ? tr("L1/R1 Audio / Subtitles / Picture")
+                   : tr("L1/R1 Audio / Subtitles / Picture / Chapters"),
+             28, 764, 22, 760);
         line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 760);
         line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
     }
@@ -533,7 +631,9 @@ void PlaybackOsd::paint()
             }
             line((pid == audio_.selected_pid ? "> " : "") + label, 28, top + 43, 28, 760);
         }
-        line(tr("L1/R1 Audio / Subtitles / Picture"), 28, 764, 22, 760);
+        line(live_ ? tr("L1/R1 Audio / Subtitles / Picture")
+                   : tr("L1/R1 Audio / Subtitles / Picture / Chapters"),
+             28, 764, 22, 760);
         line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 760);
         line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
     }
@@ -561,7 +661,8 @@ void PlaybackOsd::paint()
     }
     else
     {
-        panel_.reset(80, history_.available ? 690 : 770, 1760, history_.available ? 310 : 230);
+        const bool timeline = history_.available || media_.available;
+        panel_.reset(80, timeline ? 690 : 770, 1760, timeline ? 310 : 230);
         line(title_, 30, 52, 36, 1700);
         line(now_, 30, 101, 28, 1700);
         line(next_, 30, 143, 28, 1700);
@@ -583,11 +684,37 @@ void PlaybackOsd::paint()
             line(tr("L2 Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live"), 30, 231,
                  24, 1700);
         }
+        if (media_.available)
+        {
+            const auto time = [](std::uint64_t us)
+            {
+                const auto seconds = us / 1000000;
+                return std::to_string(seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") +
+                       std::to_string(seconds % 60);
+            };
+            line((media_.paused ? tr("Paused  ") : "") + time(media_.position_us) + " / " +
+                     (media_.duration_us ? time(media_.duration_us) : tr("Unknown duration")),
+                 30, 101, 28, 1700);
+            if (media_.duration_us)
+            {
+                const auto width = static_cast<unsigned>(
+                    1700.0 * std::min(media_.position_us, media_.duration_us) / media_.duration_us);
+                for (unsigned y = 125; y < 137; ++y)
+                {
+                    std::fill_n(panel_.pixels.begin() + y * panel_.width + 30, 1700, 66);
+                    std::fill_n(panel_.pixels.begin() + y * panel_.width + 30, width, 210);
+                }
+            }
+            line(media_.seekable
+                     ? tr("Left / Right 10 seconds ? L1 / R1 1 minute ? L2 Pause / resume")
+                     : tr("Seeking unavailable ? L2 Pause / resume"),
+                 30, 187, 24, 1700);
+        }
         line(live_ ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
                         "Info · "
                         "Circle Back")
                    : tr("Options Tracks · Triangle Info · Circle Back"),
-             30, history_.available ? 281 : 204, 24, 1700);
+             30, timeline ? 281 : 204, 24, 1700);
     }
     dirty_ = false;
 }

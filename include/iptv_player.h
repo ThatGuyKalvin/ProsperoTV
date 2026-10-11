@@ -56,8 +56,21 @@ extern "C"
     int iptv_player_pause_live(int paused);
     int iptv_player_seek_live(int seconds);
     int iptv_player_go_live(void);
+#define IPTV_PLAYER_MAX_CHAPTERS 128
+    typedef struct iptv_player_media_state
+    {
+        uint64_t position_us, duration_us;
+        uint32_t available, seekable, paused, presented, chapter_count;
+        uint64_t chapter_positions[IPTV_PLAYER_MAX_CHAPTERS];
+        char chapter_titles[IPTV_PLAYER_MAX_CHAPTERS][129];
+    } iptv_player_media_state_t;
+    /* Start position is set between foreground sessions; snapshots persist after stop. */
+    void iptv_player_set_start_position(uint64_t position_us);
+    void iptv_player_media_state(iptv_player_media_state_t *state);
+    int iptv_player_seek_media(uint64_t position_us);
+    int iptv_player_pause_media(int paused);
     /* Runs the same foreground path with a bounded automatic stop. A zero timeout
- * disables the
+     * disables the
      * deadline. This is used by controlled hardware acceptance. */
     int iptv_player_run_controlled(const char *url, const char *channel_name,
                                    unsigned stop_after_ms);
@@ -69,7 +82,7 @@ namespace iptv
 {
 // The foreground session owns this synchronized decoder and cue queue.
 Subtitles &player_subtitles();
-}
+} // namespace iptv
 #endif
 
 #endif

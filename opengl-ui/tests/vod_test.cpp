@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/vod.hpp"
 #include "tv/vod_screen.hpp"
+#include "tv/playback_osd.hpp"
+#include "iptv_input.h"
 #include "host_platform.hpp"
 #include "iptv_store.h"
 #include <gtest/gtest.h>
@@ -308,6 +310,91 @@ TEST_F(VodTest, OpensARealSeasonAndOrdersEpisodesNumerically)
     EXPECT_EQ(request.urls.front(),
               "https://provider.invalid/sub/series/user%40home/p%26ss/202.mp4");
     EXPECT_EQ(request.channel_name, "Episode 2 · Earlier");
+    model.close();
+}
+
+TEST_F(VodTest, ResumeSurvivesRestartAndCompletedEpisodesAdvanceInNumericOrder)
+{
+    std::string movie;
+    {
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        model.vod().select(ptv::VodKind::movies);
+        ASSERT_TRUE(settle(model));
+        ASSERT_TRUE(model.play_vod(0));
+        ptv::PlayRequest request;
+        ASSERT_TRUE(model.take_play_request(&request));
+        EXPECT_TRUE(request.on_demand);
+        movie = request.channel_id;
+        EXPECT_EQ(request.start_position_us, 0u);
+        EXPECT_FALSE(model.finish_vod(request, 12000000, 100000000, false));
+        EXPECT_FALSE(model.save_vod_progress(request.channel_id, 100000001, 100000000));
+        EXPECT_FALSE(model.save_vod_progress("", 12000000, 100000000));
+        model.close();
+    }
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play_vod(0));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.channel_id, movie);
+    EXPECT_EQ(request.start_position_us, 12000000u);
+    EXPECT_FALSE(model.finish_vod(request, 99000000, 100000000, true));
+    ASSERT_TRUE(model.play_vod(0));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.start_position_us, 0u);
+    model.vod().select(ptv::VodKind::episodes, "20");
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play_vod(2)); // Season 2, episode 2.
+    ASSERT_TRUE(model.take_play_request(&request));
+    ASSERT_TRUE(model.finish_vod(request, 99000000, 100000000, true));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_TRUE(request.urls[0].ends_with("/201.mkv")); // Season 2, episode 10.
+    ASSERT_TRUE(model.finish_vod(request, 99000000, 100000000, true));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_TRUE(request.urls[0].ends_with("/200.mp4")); // Season 10.
+    EXPECT_FALSE(model.finish_vod(request, 99000000, 100000000, true));
+    EXPECT_FALSE(model.take_play_request(&request));
+    model.close();
+}
+
+TEST_F(VodTest, FilmControlsClampSkipsPauseAndSelectChapters)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    ptv::PlayRequest request;
+    request.on_demand = true;
+    request.record_channel_result = false;
+    ptv::PlaybackOsd controls(model, request);
+    iptv_player_media_state_t state{};
+    state.available = state.seekable = 1;
+    state.position_us = 30000000;
+    state.duration_us = 100000000;
+    state.chapter_count = 2;
+    state.chapter_positions[1] = 50000000;
+    controls.set_media_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 1), 1);
+    EXPECT_EQ(controls.take_media_seek(), 40000000u);
+    EXPECT_FALSE(controls.take_media_seek());
+    EXPECT_EQ(controls.input(IPTV_INPUT_LEFT, 2), 1);
+    EXPECT_EQ(controls.take_media_seek(), 20000000u);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 3), 1);
+    EXPECT_EQ(controls.take_media_seek(), 0u);
+    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 4), 1);
+    EXPECT_EQ(controls.take_media_seek(), 90000000u);
+    EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 5), 1);
+    EXPECT_EQ(controls.take_media_pause(), true);
+    EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 6), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 7), 1); // Chapters, last tab.
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 8), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 9), 1);
+    EXPECT_EQ(controls.take_media_seek(), 50000000u);
+    state.seekable = 0;
+    controls.set_media_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 10), 0);
+    EXPECT_FALSE(controls.take_media_seek());
     model.close();
 }
 

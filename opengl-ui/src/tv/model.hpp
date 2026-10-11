@@ -47,6 +47,9 @@ struct PlayRequest
     bool reconnect_live = false;
     bool live = false;
     bool record_channel_result = true;
+    bool on_demand = false;
+    std::uint64_t start_position_us = 0;
+    std::string series_id;
     PortalCredentials portal;
     std::string portal_command;
 };
@@ -220,6 +223,10 @@ class Model
         return vod_;
     }
     bool play_vod(unsigned index);
+    bool save_vod_progress(std::string_view id, std::uint64_t position_us,
+                           std::uint64_t duration_us);
+    bool finish_vod(const PlayRequest &request, std::uint64_t position_us,
+                    std::uint64_t duration_us, bool completed);
     bool ask_vod_query();
 
     // ---- the catalog ----

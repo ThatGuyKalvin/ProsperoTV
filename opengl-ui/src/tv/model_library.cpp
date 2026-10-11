@@ -390,9 +390,41 @@ bool Model::play_vod(unsigned index)
     play_request_.user_agent = item.http_user_agent;
     play_request_.referrer = item.http_referrer;
     play_request_.record_channel_result = false;
+    play_request_.on_demand = true;
+    play_request_.start_position_us = library_.playback_progress(item.id).first;
+    play_request_.series_id = vod_.kind() == VodKind::episodes ? vod_.series() : std::string();
     play_requested_ = true;
     return true;
 }
+bool Model::save_vod_progress(std::string_view id, std::uint64_t position_us,
+                              std::uint64_t duration_us)
+{
+    return library_.save_playback_progress(id, position_us, duration_us);
+}
+
+bool Model::finish_vod(const PlayRequest &request, std::uint64_t position_us,
+                       std::uint64_t duration_us, bool completed)
+{
+    if (!request.on_demand)
+        return false;
+    if (!save_vod_progress(request.channel_id, completed ? 0 : position_us, duration_us))
+        notify(Level::error, tr("Playback position could not be saved"), "");
+    if (!completed || sleep_timer.sleeping() || vod_.kind() != VodKind::episodes ||
+        request.series_id != vod_.series())
+        return false;
+    const auto &catalog = vod_.catalog();
+    const auto current = catalog.Find(request.channel_id);
+    if (current == iptv::Catalog::npos)
+        return false;
+    unsigned next = static_cast<unsigned>(catalog.size());
+    for (unsigned i = 0; i < catalog.size(); ++i)
+        if (catalog[i].source_line > catalog[current].source_line &&
+            (next == catalog.size() || catalog[i].source_line < catalog[next].source_line))
+            next = i;
+    // Do not skip a locked episode to autoplay something later in the series.
+    return next < catalog.size() && play_vod(next);
+}
+
 bool Model::ask_vod_query()
 {
     if (!keyboard_ready_)

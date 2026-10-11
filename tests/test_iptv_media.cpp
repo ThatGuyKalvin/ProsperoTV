@@ -245,6 +245,23 @@ TEST(Media, SeeksToKeyframesAndReadsMovieChaptersOnTheRealDemuxPath)
     EXPECT_TRUE(invalid.transport.empty());
 }
 
+TEST(Media, SeeksFiniteTransportAndHlsWithTheirOriginalClocks)
+{
+    for (const auto *name : {"seek.ts", "hls-seek/master.m3u8"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        std::string error;
+        ASSERT_EQ(memory.run(&error, 2400000), 0) << error;
+        EXPECT_TRUE(memory.timeline.seekable);
+        EXPECT_NEAR(memory.timeline.duration_us, 6000000, 100000);
+        Frames frames;
+        check_transport(memory, false, 100, &frames);
+        EXPECT_NEAR(frames.first_pts, 4000000, 100000);
+        EXPECT_EQ(memory.opened, memory.closed);
+    }
+}
+
 TEST(Media, ConvertsHevcLengthPrefixedPacketsForTheNativeDecoder)
 {
     Memory memory("hevc.mp4");

@@ -888,6 +888,7 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
             write_autotest_marker(archive_path, marker, marker_bytes);
         }
         std::remove(kLatestReceiptPath);
+        iptv_player_set_start_position(request.start_position_us);
         outcome.result = iptv_player_run_authenticated(
             request.urls[candidate].c_str(), request.channel_name.c_str(),
             request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
@@ -1363,6 +1364,9 @@ int main()
                     iptv_player_live_state_t live{};
                     iptv_player_live_state(&live);
                     osd.set_live_state(live);
+                    iptv_player_media_state_t media{};
+                    iptv_player_media_state(&media);
+                    osd.set_media_state(media);
                     if (TV_DEV_SCRIPTS != 0)
                     {
                         static std::uint64_t last_sample = 0;
@@ -1390,6 +1394,10 @@ int main()
                         }
                     }
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
+                    if (const auto position = osd.take_media_seek())
+                        (void)iptv_player_seek_media(*position);
+                    if (const auto paused = osd.take_media_pause())
+                        (void)iptv_player_pause_media(*paused);
                     if (const auto selected = osd.take_picture_selection())
                         iptv_native_agc_set_picture_mode(*selected);
                     if (const auto selected = osd.take_audio_selection())
@@ -1505,6 +1513,15 @@ int main()
             last.channel_id = request.record_channel_result ? request.channel_id : std::string();
             last.channel_name = request.channel_name;
             last.attempts = outcome.attempts;
+        }
+        iptv_player_media_state_t media{};
+        iptv_player_media_state(&media);
+        if ((media.presented || outcome.result == 0) &&
+            model.finish_vod(request, media.position_us, media.duration_us, outcome.result == 0))
+        {
+            ptv::PlayRequest next;
+            if (model.take_play_request(&next))
+                next_channel = std::move(next);
         }
         if (const auto selected = controls.selected_channel(); selected && outcome.result >= 0 &&
                                                                !model.sleep_timer.sleeping() &&
