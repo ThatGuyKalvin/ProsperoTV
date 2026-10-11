@@ -49,6 +49,7 @@ class PlaybackOsd
     void set_media_state(const iptv_player_media_state_t &state);
     std::optional<std::uint64_t> take_media_seek();
     std::optional<bool> take_media_pause();
+    std::optional<unsigned> take_media_speed();
     std::optional<std::uint32_t> take_subtitle_selection();
     std::optional<unsigned> selected_channel() const
     {
@@ -80,6 +81,7 @@ class PlaybackOsd
     std::uint64_t progress_saved_at_ = 0;
     std::optional<std::uint64_t> media_seek_;
     std::optional<bool> media_pause_;
+    std::optional<unsigned> media_speed_;
     unsigned audio_focus_ = 0;
     iptv_player_audio_state_t audio_{};
     std::optional<std::uint32_t> audio_selection_;

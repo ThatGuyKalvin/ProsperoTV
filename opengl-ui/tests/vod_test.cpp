@@ -393,6 +393,12 @@ TEST_F(VodTest, FilmControlsClampSkipsPauseAndSelectChapters)
     EXPECT_EQ(controls.take_media_seek(), 50000000u);
     EXPECT_EQ(controls.input(IPTV_INPUT_SQUARE, 10), 1);
     EXPECT_EQ(controls.take_media_seek(), 0u);
+    for (const unsigned speed : {125u, 150u, 200u, 50u, 75u, 100u})
+    {
+        EXPECT_EQ(controls.input(IPTV_INPUT_GO_LIVE, 10), 1);
+        EXPECT_EQ(controls.take_media_speed(), speed);
+        EXPECT_FALSE(controls.take_media_speed());
+    }
     state.seekable = 0;
     controls.set_media_state(state);
     EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 10), 0);

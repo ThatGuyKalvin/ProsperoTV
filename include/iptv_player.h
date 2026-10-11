@@ -61,7 +61,7 @@ extern "C"
     typedef struct iptv_player_media_state
     {
         uint64_t position_us, duration_us;
-        uint32_t available, seekable, paused, presented, chapter_count;
+        uint32_t available, seekable, paused, presented, chapter_count, speed_percent;
         uint64_t chapter_positions[IPTV_PLAYER_MAX_CHAPTERS];
         char chapter_titles[IPTV_PLAYER_MAX_CHAPTERS][129];
     } iptv_player_media_state_t;
@@ -70,6 +70,7 @@ extern "C"
     void iptv_player_media_state(iptv_player_media_state_t *state);
     int iptv_player_seek_media(uint64_t position_us);
     int iptv_player_pause_media(int paused);
+    int iptv_player_set_speed(unsigned percent);
     /* Runs the same foreground path with a bounded automatic stop. A zero timeout
      * disables the
      * deadline. This is used by controlled hardware acceptance. */

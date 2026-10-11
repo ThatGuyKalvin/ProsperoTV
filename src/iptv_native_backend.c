@@ -10,6 +10,7 @@
 #include "iptv_mp2.h"
 #include "iptv_audio_frame.h"
 #include "iptv_audio_decode.h"
+#include "iptv_audio_tempo.h"
 #include "iptv_audio_normalize.h"
 #define MINIMP3_IMPLEMENTATION
 #include "../vendor/minimp3/minimp3.h"
@@ -333,6 +334,7 @@ typedef struct backend_state
     int32_t audio_decoder;
     mp3dec_t mp2_decoder;
     iptv_audio_decoder_t *software_audio;
+    iptv_audio_tempo_t *audio_tempo;
     uint32_t audio_module_loaded;
     uint32_t audio_library_initialized;
     sce_audiodec_param_aac_t audio_param;
@@ -843,6 +845,27 @@ static uint32_t pcm_rate_from_pts(uint32_t pcm_bytes, uint32_t channels, uint64_
     return nearest && nearest_difference * 100u <= (uint64_t)nearest * 3u ? nearest : fallback_rate;
 }
 
+static unsigned playback_speed(const backend_state_t *state)
+{
+    return state->config.speed_percent ? state->config.speed_percent : 100;
+}
+static uint64_t media_elapsed(uint64_t wall_us, unsigned speed)
+{
+    return wall_us / 100 * speed + wall_us % 100 * speed / 100;
+}
+static uint64_t wall_elapsed(uint64_t media_us, unsigned speed)
+{
+    return media_us / speed * 100 + media_us % speed * 100 / speed;
+}
+static void publish_audio_clock(backend_state_t *state, uint64_t pts)
+{
+    if (pts == UINT64_MAX)
+        return;
+    atomic_store(&state->audio_clock_generation, state->audio_generation);
+    atomic_store(&state->audio_clock_pts_us, pts);
+    atomic_store_explicit(&state->audio_clock_time_us, monotonic_us(), memory_order_release);
+}
+
 static int32_t audio_sink_volume(audio_sink_t *sink)
 {
     const unsigned percent = iptv_native_get_volume();
@@ -969,6 +992,34 @@ static int32_t audio_push_pcm(backend_state_t *state, const int16_t *samples, ui
     return 0;
 }
 
+static int tempo_output(void *context, const int16_t *samples, size_t frames, uint64_t pts)
+{
+    backend_state_t *state = context;
+    if (atomic_load(&state->stop_requested) || atomic_load(&state->audio_worker_discard))
+        return IPTV_NATIVE_E_CANCELLED;
+    const int result =
+        audio_push_pcm(state, samples, (uint32_t)frames * state->audio_sink.channels);
+    if (result == 0)
+        publish_audio_clock(state, pts);
+    return result;
+}
+
+static int32_t audio_push_timed_pcm(backend_state_t *state, const int16_t *samples,
+                                    uint32_t sample_count, uint64_t pts)
+{
+    const unsigned speed = playback_speed(state);
+    if (speed == 100)
+        return audio_push_pcm(state, samples, sample_count);
+    if (!state->audio_tempo)
+        state->audio_tempo = iptv_audio_tempo_create(state->audio_sink.input_rate,
+                                                     state->audio_sink.channels, speed);
+    if (!state->audio_tempo)
+        return IPTV_NATIVE_E_AUDIO_FRAME;
+    return iptv_audio_tempo_push(state->audio_tempo, samples,
+                                 sample_count / state->audio_sink.channels, pts, tempo_output,
+                                 state);
+}
+
 static int32_t audio_drain(backend_state_t *state)
 {
     audio_sink_t *sink = &state->audio_sink;
@@ -988,12 +1039,19 @@ static int32_t audio_drain(backend_state_t *state)
             return result;
         }
         state->audio_staged_bytes = 0;
-        result = audio_push_pcm(state, (const int16_t *)state->audio_staged_pcm, sample_count);
+        result = audio_push_timed_pcm(state, (const int16_t *)state->audio_staged_pcm, sample_count,
+                                      state->audio_staged_pts_us);
         if (result < 0)
             return result;
     }
     if (sink->handle < 0 || sink->drained)
         return 0;
+    if (state->audio_tempo && !atomic_load(&state->stop_requested))
+    {
+        result = iptv_audio_tempo_finish(state->audio_tempo, tempo_output, state);
+        if (result < 0 && first_result == 0)
+            first_result = result;
+    }
     if (sink->pending != 0)
     {
         memset(sink->block + sink->pending, 0,
@@ -1077,6 +1135,7 @@ static int32_t release_audio(backend_state_t *state)
 
     result = stop_audio_worker(state);
     iptv_audio_decoder_free(&state->software_audio);
+    iptv_audio_tempo_free(&state->audio_tempo);
     if (result != 0)
         first_result = result;
     if (state->audio_sink.handle >= 0)
@@ -1136,7 +1195,7 @@ static int audio_clock_now(const backend_state_t *state, uint64_t now, uint64_t 
         atomic_load(&state->audio_sync_pending) || atomic_load(&state->paused) ||
         atomic_load(&state->audio_clock_generation) != state->video_generation)
         return 0;
-    *pts_us = pts + (now - at);
+    *pts_us = pts + media_elapsed(now - at, playback_speed(state));
     return 1;
 }
 
@@ -1145,7 +1204,8 @@ static void trace_av_offset(backend_state_t *state, uint64_t pts_us, uint64_t no
 
 static uint64_t adjusted_audio_clock(const backend_state_t *state, uint64_t sound)
 {
-    const int64_t offset = (int64_t)atomic_load(&state->audio_delay_ms) * 1000;
+    const int64_t offset =
+        (int64_t)atomic_load(&state->audio_delay_ms) * 1000 * playback_speed(state) / 100;
     if (offset < 0)
         return sound < (uint64_t)-offset ? 0 : sound - (uint64_t)-offset;
     return sound > UINT64_MAX - (uint64_t)offset ? UINT64_MAX : sound + (uint64_t)offset;
@@ -1172,7 +1232,8 @@ static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int 
     uint64_t sound;
     if (audio_clock_now(state, now, &sound))
     {
-        sound = adjusted_audio_clock(state, sound + PACE_SOUND_LEAD_US);
+        sound = adjusted_audio_clock(
+            state, sound + media_elapsed(PACE_SOUND_LEAD_US, playback_speed(state)));
         state->pace_last_pts_us = pts_us;
         if (pts_us <= sound)
         {
@@ -1196,7 +1257,7 @@ static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int 
             return 0;
         }
         state->pace_dropped_in_a_row = 0;
-        uint64_t wait = pts_us - sound;
+        uint64_t wait = wall_elapsed(pts_us - sound, playback_speed(state));
         if (wait > PACE_MAX_WAIT_US)
             wait = PACE_MAX_WAIT_US; // a jump in the timestamps; the next picture asks again
         ++state->telemetry.pacing_waits;
@@ -1229,7 +1290,8 @@ static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int 
 
     if (!reset)
     {
-        target = state->pace_base_clock_us + (pts_us - state->pace_base_pts_us);
+        target = state->pace_base_clock_us +
+                 wall_elapsed(pts_us - state->pace_base_pts_us, playback_speed(state));
         if ((target > now && target - now > PACE_MAX_WAIT_US) ||
             (now > target && now - target > PACE_DISCONTINUITY_US))
             reset = 1;
@@ -1245,7 +1307,8 @@ static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int 
         return 0;
     }
 
-    target = state->pace_base_clock_us + (pts_us - state->pace_base_pts_us);
+    target = state->pace_base_clock_us +
+             wall_elapsed(pts_us - state->pace_base_pts_us, playback_speed(state));
     state->pace_last_pts_us = pts_us;
     if (target <= now)
     {
@@ -1471,6 +1534,8 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
         return IPTV_NATIVE_E_ARGUMENT;
     if (state->state != IPTV_NATIVE_STATE_IDLE)
         return IPTV_NATIVE_E_STATE;
+    if (config->speed_percent && (config->speed_percent < 50 || config->speed_percent > 200))
+        return IPTV_NATIVE_E_ARGUMENT;
     mode = find_video_mode(config);
     const int main10 = config->codec == IPTV_NATIVE_CODEC_HEVC &&
                        config->profile == IPTV_NATIVE_HEVC_PROFILE_MAIN10;
@@ -2640,7 +2705,8 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
         {
             const uint32_t sample_count = state->audio_staged_bytes / sizeof(int16_t);
             state->audio_staged_bytes = 0;
-            result = audio_push_pcm(state, (const int16_t *)state->audio_staged_pcm, sample_count);
+            result = audio_push_timed_pcm(state, (const int16_t *)state->audio_staged_pcm,
+                                          sample_count, state->audio_staged_pts_us);
             if (result < 0)
                 goto failed;
         }
@@ -2651,8 +2717,8 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
         goto failed;
     }
 
-    result = audio_push_pcm(state, (const int16_t *)state->audio_pcm,
-                            state->audio_pcm_item.length / sizeof(int16_t));
+    result = audio_push_timed_pcm(state, (const int16_t *)state->audio_pcm,
+                                  state->audio_pcm_item.length / sizeof(int16_t), pts_us);
     if (result < 0)
         goto failed;
     ++state->telemetry.decoded_audio_frames;
@@ -2734,6 +2800,8 @@ static void *audio_worker_entry(void *argument)
             }
             mp3dec_init(&state->mp2_decoder);
             iptv_audio_decoder_reset(state->software_audio);
+            iptv_audio_tempo_free(&state->audio_tempo);
+            atomic_store(&state->audio_clock_time_us, 0);
             state->audio_staged_bytes = 0;
             state->audio_sink.pending = 0;
             state->audio_sink.have_previous = 0;
@@ -2773,15 +2841,8 @@ static void *audio_worker_entry(void *argument)
             atomic_store(&state->audio_sync_pending, 0);
         }
         const int32_t result = decode_audio_frame(state, item->data, item->bytes, item->pts_us);
-        if (result == 0 && item->pts_us != UINT64_MAX)
-        {
-            // The output takes a frame as fast as it plays it, so this moment
-            // is, within a frame, when its first sample is heard.
-            atomic_store(&state->audio_clock_generation, state->audio_generation);
-            atomic_store(&state->audio_clock_pts_us, item->pts_us);
-            atomic_store_explicit(&state->audio_clock_time_us, monotonic_us(),
-                                  memory_order_release);
-        }
+        if (result == 0 && playback_speed(state) == 100)
+            publish_audio_clock(state, item->pts_us);
         atomic_store_explicit(&state->audio_queue_read, read + 1u, memory_order_release);
         had_data = 1;
         empty_reported = 0;
@@ -3428,6 +3489,11 @@ int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
 
 int main(void)
 {
+    for (unsigned speed = 50; speed <= 200; speed += 25)
+    {
+        assert(media_elapsed(1000000, speed) == 10000u * speed);
+        assert(wall_elapsed(10000u * speed, speed) == 1000000);
+    }
     backend_state_t audio_reset = {0};
     audio_reset.audio_decoder = 43;
     audio_reset.audio_au.address = audio_reset.audio_pcm;
@@ -3456,6 +3522,9 @@ int main(void)
     assert(adjusted_audio_clock(seek, 3000000) == 3000000);
     iptv_native_backend_set_audio_delay(&seeking, 150);
     assert(adjusted_audio_clock(seek, 3000000) == 3150000);
+    seek->config.speed_percent = 200;
+    assert(adjusted_audio_clock(seek, 3000000) == 3300000);
+    seek->config.speed_percent = 0;
     assert(adjusted_audio_clock(seek, UINT64_MAX - 10) == UINT64_MAX);
     iptv_native_backend_set_audio_delay(&seeking, -150);
     assert(adjusted_audio_clock(seek, 3000000) == 2850000);
