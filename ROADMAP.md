@@ -31,7 +31,7 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
 - [ ] **Playback speed.** Faster or slower, for films and catch-up.
 - [ ] **Picture controls.** Zoom and fill for 4:3 and letterboxed channels,
   and the size and colour of subtitles.
-- [ ] **Picture in picture.** Keeping a channel in a corner while browsing
+- [x] **Picture in picture.** Keeping a channel in a corner while browsing
   the guide or the lists.
 - [ ] **Sound delay.** Moving the sound earlier or later on a channel whose
   own timing is wrong.

@@ -897,3 +897,7 @@ write-limit failure, existing-file preservation, conflicts, restart recovery, an
 one-shot reminders. Native transport tests use the real FFmpeg remuxer with file-backed
 HTTP, fragmented input, scoped credentials, cancellation, and output re-parsing.
 Physical console USB writing and unplugging have **not** passed acceptance yet.
+
+### Picture in picture
+
+Touchpad in multiview pins its selected live channel in the upper-right corner while browsing lists or the guide. Other decoder connections stop; the selected connection continues without reopening. L3 from the live list closes it. Starting full-screen playback or a storage operation uses the existing joined preview shutdown. Parental/source changes invalidate the pinned request and close it. Sound uses the existing single-preview audio owner. No second decoder architecture or full-resolution framebuffer is allocated; the preview remains bounded at 960 x 540. Host tests cover connection continuity, stopping other tiles, one audio owner, texture release, list navigation and guide opening. Physical console rendering/audio acceptance remains untested.
