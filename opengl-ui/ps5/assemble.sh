@@ -54,7 +54,8 @@ cp -a "$proto/ps5/third_party" "$out/third_party"
 for source in "$tv"/src/iptv_*.c "$tv"/src/iptv_*.cpp "$tv"/src/iptv_*.h "$tv/src/sqlite_compat.cpp"; do
     [[ ${source##*/} == iptv_app.cpp ]] || cp "$source" "$out/src/"
 done
-for header in "$tv"/include/*.h; do
+for header in "$tv"/include/*.h "$tv"/include/*.hpp; do
+    [[ -f $header ]] || continue
     [[ ${header##*/} == iptv_app.h ]] || cp "$header" "$out/include/"
 done
 cp -a "$tv/vendor/minimp3" "$out/vendor/minimp3"
