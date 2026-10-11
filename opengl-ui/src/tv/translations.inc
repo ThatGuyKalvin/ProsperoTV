@@ -1,6 +1,10 @@
 // ProsperoTV - English keys, followed by Spanish, French, German, Italian, Portuguese, Dutch.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+{"Audio output", {"Salida de audio", "Sortie audio", "Audioausgabe", "Uscita audio", "Saída de áudio", "Audio-uitvoer"}},
+{"Stereo", {"Estéreo", "Stéréo", "Stereo", "Stereo", "Estéreo", "Stereo"}},
+{"5.1 surround", {"Envolvente 5.1", "Surround 5.1", "5.1-Surround", "Surround 5.1", "Surround 5.1", "5.1-surround"}},
+{"Use with a surround-capable HDMI receiver. Applies to the next playback.", {"Usar con un receptor HDMI compatible con sonido envolvente. Se aplica a la próxima reproducción.", "À utiliser avec un ampli HDMI compatible surround. S’applique à la prochaine lecture.", "Für HDMI-Receiver mit Surround-Unterstützung. Gilt ab der nächsten Wiedergabe.", "Usare con un ricevitore HDMI compatibile con il surround. Si applica alla prossima riproduzione.", "Use com um receptor HDMI compatível com surround. Aplica-se à próxima reprodução.", "Gebruik met een HDMI-ontvanger die surround ondersteunt. Geldt vanaf de volgende weergave."}},
 {"Live TV", {"TV en directo", "TV en direct", "Live-TV", "TV in diretta", "TV ao vivo", "Live-tv"}},
 {"On demand", {"A la carta", "À la demande", "Auf Abruf", "On demand", "Sob demanda", "Op aanvraag"}},
 {"Favorites", {"Favoritos", "Favoris", "Favoriten", "Preferiti", "Favoritos", "Favorieten"}},

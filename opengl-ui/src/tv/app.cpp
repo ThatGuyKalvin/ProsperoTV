@@ -77,6 +77,7 @@ enum FormRow : int
     kRowViewingClock,
     kRowShare,
     kRowLanguage,
+    kRowAudioOutput,
 };
 
 constexpr unsigned kAllowances[] = {0, 15, 30, 60, 90, 120, 180};
@@ -206,6 +207,11 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
         .description = tr("Takes effect the next time the menu opens. Video keeps its own size.");
     form_.add_header(tr("AUDIO"));
     form_
+        .add_choice(kRowAudioOutput, tr("Audio output"), {tr("Stereo"), tr("5.1 surround")},
+                    settings.audio_surround ? 1 : 0)
+        .description =
+        tr("Use with a surround-capable HDMI receiver. Applies to the next playback.");
+    form_
         .add_toggle(kRowAudioNormalization, tr("Normalize channel volume"),
                     settings.audio_normalization)
         .description = tr("Gradually balances channel volume and limits loud peaks.");
@@ -318,6 +324,12 @@ void App::set_audio_normalization(bool enabled)
 {
     shared_.settings.audio_normalization = enabled;
     form_.set_toggle(kRowAudioNormalization, enabled);
+}
+
+void App::set_audio_surround(bool enabled)
+{
+    shared_.settings.audio_surround = enabled;
+    form_.set_choice(kRowAudioOutput, enabled ? 1 : 0);
 }
 
 void App::set_profile_name(std::string name)
@@ -547,6 +559,7 @@ void App::apply_settings()
     next.screensaver_minutes = delays[std::clamp(form_.choice_index(kRowScreensaver), 0, 3)];
     next.volume = static_cast<int>(form_.slider_value(kRowVolume));
     next.audio_normalization = form_.toggle_value(kRowAudioNormalization);
+    next.audio_surround = form_.choice_index(kRowAudioOutput) == 1;
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
     next.diagnostics = form_.toggle_value(kRowDiagnostics);
@@ -565,9 +578,10 @@ void App::apply_settings()
     shared_.settings = next;
     settings_changed_ = true;
     diag::event("settings: reduce motion=%d sounds=%d volume=%d menu sharpness=%d diagnostics=%d "
-                "normalization=%d",
+                "normalization=%d surround=%d",
                 next.reduced_motion ? 1 : 0, next.sounds ? 1 : 0, next.volume, next.resolution,
-                next.diagnostics ? 1 : 0, next.audio_normalization ? 1 : 0);
+                next.diagnostics ? 1 : 0, next.audio_normalization ? 1 : 0,
+                next.audio_surround ? 1 : 0);
 }
 
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
@@ -702,6 +716,12 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     case kSettings:
     {
         const ui::Event event = form_.handle(input, feedback);
+        if (event == ui::Event::changed && form_.changed_id() == kRowAudioOutput &&
+            !shared_.model.require_parent())
+        {
+            form_.set_choice(kRowAudioOutput, shared_.settings.audio_surround ? 1 : 0);
+            break;
+        }
         if (event == ui::Event::changed && form_.changed_id() == kRowSleep)
             shared_.model.sleep_timer.arm(static_cast<unsigned>(form_.choice_index(kRowSleep)),
                                           platform::monotonic_us());
@@ -1256,8 +1276,7 @@ void App::draw_about(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, words, x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
         y += 36.0f;
     };
-    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f)
-    {
+    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
     const auto rule = [&]()

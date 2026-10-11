@@ -622,6 +622,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     say("[TV] settings could not be saved");
                     app.set_volume(settings->volume);
                     app.set_audio_normalization(settings->audio_normalization);
+                    app.set_audio_surround(settings->audio_surround);
                     app.remote_notice("Could not save settings. Try again.");
                 }
                 else
@@ -631,6 +632,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     *settings = app.settings();
                     iptv_native_set_volume(static_cast<unsigned>(settings->volume));
                     iptv_native_set_audio_normalization(settings->audio_normalization);
+                    iptv_native_set_audio_surround(settings->audio_surround);
                     iptv_remote_set_volume(static_cast<unsigned>(settings->volume));
                 }
             }
@@ -1222,9 +1224,10 @@ int main()
     const bool recovered_crash = crash_status == ptv::crash::Read::record;
     bool crash_saved = !recovered_crash;
     if (recovered_crash)
-        crash_saved = save::write_atomic(
-            tv::storage::logs_dir() + "/prosperotv-last-failure.txt",
-            ptv::failure_report(crash_record.receipt(), {}, crash_record.timestamp, -1, 0)).empty();
+        crash_saved = save::write_atomic(tv::storage::logs_dir() + "/prosperotv-last-failure.txt",
+                                         ptv::failure_report(crash_record.receipt(), {},
+                                                             crash_record.timestamp, -1, 0))
+                          .empty();
     if (crash_status != ptv::crash::Read::error && crash_saved)
         say("[TV] crash recorder: %s", ptv::crash::install(crash_path) ? "ready" : "unavailable");
     else
@@ -1286,6 +1289,7 @@ int main()
         trace_header();
     iptv_native_set_volume(static_cast<unsigned>(settings.volume));
     iptv_native_set_audio_normalization(settings.audio_normalization);
+    iptv_native_set_audio_surround(settings.audio_surround);
     iptv_remote_set_volume(static_cast<unsigned>(settings.volume));
     iptv_remote_set_volume_handler(
         [](unsigned volume, void *context) -> bool
@@ -1377,6 +1381,7 @@ int main()
             ptv::diag::set_enabled(settings.diagnostics);
             iptv_native_set_volume(static_cast<unsigned>(settings.volume));
             iptv_native_set_audio_normalization(settings.audio_normalization);
+            iptv_native_set_audio_surround(settings.audio_surround);
             iptv_remote_set_volume(static_cast<unsigned>(settings.volume));
             menu_notice = std::move(storage_result);
             last = {};

@@ -30,13 +30,21 @@ void iptv_audio_normalizer_reset(iptv_audio_normalizer_t *state)
 void iptv_audio_normalizer_process(iptv_audio_normalizer_t *state, int16_t *pcm, size_t frames,
                                    int enabled)
 {
-    if (!state || !pcm || !frames)
+    iptv_audio_normalizer_process_channels(state, pcm, frames, 2, enabled);
+}
+
+void iptv_audio_normalizer_process_channels(iptv_audio_normalizer_t *state, int16_t *pcm,
+                                            size_t frames, unsigned channels, int enabled)
+{
+    if (!state || !pcm || !frames || (channels != 2 && channels != 6 && channels != 8) ||
+        frames > SIZE_MAX / channels)
         return;
     enabled = enabled != 0;
-    if (state->enabled != enabled)
+    if (state->enabled != enabled || state->channels != channels)
     {
         iptv_audio_normalizer_reset(state);
         state->enabled = enabled;
+        state->channels = channels;
     }
     if (!enabled)
         return;
@@ -45,18 +53,20 @@ void iptv_audio_normalizer_process(iptv_audio_normalizer_t *state, int16_t *pcm,
     for (size_t i = 0; i < frames; ++i)
     {
         double energy = 0.0;
-        for (unsigned channel = 0; channel < 2; ++channel)
+        for (unsigned channel = 0; channel < channels; ++channel)
         {
-            const double sample = pcm[i * 2 + channel];
+            const double sample = pcm[i * channels + channel];
             if (fabs(sample) > peak)
                 peak = fabs(sample);
+            if (channels > 2 && channel == 3)
+                continue; /* LFE contributes to peak protection, not loudness. */
             /* BS.1770 K weighting, fixed coefficients for 48 kHz. */
             double weighted =
                 filter(sample / 32768.0, state->shelf[channel], 1.53512485958697, -2.69169618940638,
                        1.19839281085285, -1.69065929318241, 0.73248077421585);
             weighted = filter(weighted, state->highpass[channel], 1.0, -2.0, 1.0, -1.99004745483398,
                               0.99007225036621);
-            energy += weighted * weighted;
+            energy += weighted * weighted * (channel >= 4 ? 1.41 : 1.0);
         }
         block_energy += energy;
         state->window_sum += energy;
@@ -114,14 +124,14 @@ void iptv_audio_normalizer_process(iptv_audio_normalizer_t *state, int16_t *pcm,
     {
         const double gain =
             (start_gain + (end_gain - start_gain) * (double)(i + 1) / frames) * state->limiter_gain;
-        for (unsigned channel = 0; channel < 2; ++channel)
+        for (unsigned channel = 0; channel < channels; ++channel)
         {
-            double sample = pcm[i * 2 + channel] * gain;
+            double sample = pcm[i * channels + channel] * gain;
             if (sample > PEAK_CEILING)
                 sample = PEAK_CEILING;
             if (sample < -PEAK_CEILING)
                 sample = -PEAK_CEILING;
-            pcm[i * 2 + channel] = (int16_t)sample;
+            pcm[i * channels + channel] = (int16_t)sample;
         }
     }
 }

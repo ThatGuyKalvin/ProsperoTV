@@ -1,4 +1,4 @@
-/* ProsperoTV - bounded stereo loudness leveling at the 48 kHz output sink.
+/* ProsperoTV - bounded linked loudness leveling at the 48 kHz output sink.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef IPTV_AUDIO_NORMALIZE_H
@@ -14,12 +14,13 @@ extern "C"
 
     typedef struct iptv_audio_normalizer
     {
-        double shelf[2][2], highpass[2][2];
+        double shelf[8][2], highpass[8][2];
         double windows[IPTV_NORMALIZE_WINDOWS], window_sum, energy_sum;
         double gain_db, limiter_gain, loudness_lufs;
         uint32_t window_frames, window_count, window_position;
         uint64_t limited_blocks;
         int enabled, meter_valid;
+        unsigned channels;
     } iptv_audio_normalizer_t;
 
     /* Resets all channel history. Disabled processing is bit-for-bit transparent. */
@@ -30,6 +31,10 @@ extern "C"
      * Gate -50 LUFS; linked block limiter at -1 dBFS (sample peak, not true peak). */
     void iptv_audio_normalizer_process(iptv_audio_normalizer_t *state, int16_t *pcm, size_t frames,
                                        int enabled);
+    /* Supports 2, 6 or 8 channels in FL FR FC LFE BL BR SL SR order.
+     * LFE is excluded from loudness, but included in the linked peak limiter. */
+    void iptv_audio_normalizer_process_channels(iptv_audio_normalizer_t *state, int16_t *pcm,
+                                                size_t frames, unsigned channels, int enabled);
 #ifdef __cplusplus
 }
 #endif

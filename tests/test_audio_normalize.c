@@ -34,8 +34,51 @@ static void advance(iptv_audio_normalizer_t *n, double amplitude, unsigned secon
     }
 }
 
+static void surround_checks(void)
+{
+    for (unsigned channels = 6; channels <= 8; channels += 2)
+    {
+        double loudness[8] = {0};
+        for (unsigned active = 0; active < channels; ++active)
+        {
+            iptv_audio_normalizer_t n;
+            iptv_audio_normalizer_reset(&n);
+            int16_t pcm[FRAMES * 8];
+            for (unsigned at = 0; at < 48000; at += FRAMES)
+            {
+                memset(pcm, 0, sizeof(pcm));
+                for (unsigned i = 0; i < FRAMES; ++i)
+                    pcm[i * channels + active] =
+                        (int16_t)(6000 * sin(2 * PI * 1000 * (at + i) / 48000));
+                iptv_audio_normalizer_process_channels(&n, pcm, FRAMES, channels, 1);
+                for (unsigned i = 0; i < FRAMES; ++i)
+                    for (unsigned c = 0; c < channels; ++c)
+                        if (c != active)
+                            assert(pcm[i * channels + c] == 0);
+            }
+            loudness[active] = n.loudness_lufs;
+            if (active == 3)
+                assert(!n.meter_valid && n.gain_db == 0);
+            else
+                assert(n.meter_valid);
+        }
+        assert(fabs(loudness[0] - loudness[2]) < 0.0001);
+        for (unsigned c = 4; c < channels; ++c)
+            assert(fabs(loudness[c] - loudness[0] - 10 * log10(1.41)) < 0.0001);
+        iptv_audio_normalizer_t n;
+        iptv_audio_normalizer_reset(&n);
+        int16_t pcm[8] = {10000, 5000, 2500, 32767, -5000, 0, 0, 0};
+        iptv_audio_normalizer_process_channels(&n, pcm, 1, channels, 1);
+        assert(pcm[3] <= 29203 && n.limited_blocks == 1);
+        assert(abs(pcm[0] - 2 * pcm[1]) <= 2 && pcm[1] == -pcm[4]);
+        iptv_audio_normalizer_process_channels(&n, pcm, 1, 2, 1);
+        assert(n.channels == 2 && n.window_frames == 1); /* Layout changes clear history. */
+    }
+}
+
 int main(void)
 {
+    surround_checks();
     iptv_audio_normalizer_t n;
     int16_t pcm[FRAMES * 2], original[FRAMES * 2];
     iptv_audio_normalizer_reset(&n);

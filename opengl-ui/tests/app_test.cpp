@@ -1974,6 +1974,55 @@ TEST_F(AppTest, AudioNormalizationIsOptionalAndPersists)
     EXPECT_FALSE(ptv::load_settings(dir_).audio_normalization);
 }
 
+TEST_F(AppTest, SurroundOutputIsOptInPersistsAndRequiresParent)
+{
+    EXPECT_FALSE(app_->settings().audio_surround);
+    EXPECT_FALSE(ptv::load_settings(dir_).audio_surround);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Audio output");
+    move(Direction::right);
+    EXPECT_TRUE(app_->settings().audio_surround);
+    EXPECT_TRUE(app_->take_settings_changed());
+    ASSERT_TRUE(ptv::save_settings(dir_, app_->settings()));
+    EXPECT_TRUE(ptv::load_settings(dir_).audio_surround);
+    app_->set_audio_surround(false);
+    EXPECT_FALSE(app_->settings().audio_surround);
+    move(Direction::right);
+    EXPECT_TRUE(app_->settings().audio_surround);
+    app_->set_volume(35);
+    EXPECT_TRUE(app_->settings().audio_surround);
+    app_->take_settings_changed();
+
+    settings_row("Set or change parent PIN");
+    press(Action::confirm);
+    host::set_keyboard_text("483920");
+    idle();
+    host::set_keyboard_text("483920");
+    idle();
+    ASSERT_TRUE(model_->parental().enabled());
+    ASSERT_FALSE(model_->parental().unlocked());
+    settings_row("Audio output");
+    move(Direction::left);
+    EXPECT_TRUE(app_->settings().audio_surround);
+    EXPECT_FALSE(app_->take_settings_changed());
+    settings_row("Unlock parental controls");
+    press(Action::confirm);
+    host::set_keyboard_text("483920");
+    idle();
+    ASSERT_TRUE(model_->parental().unlocked());
+    settings_row("Audio output");
+    move(Direction::left);
+    EXPECT_FALSE(app_->settings().audio_surround);
+    EXPECT_TRUE(app_->take_settings_changed());
+    ASSERT_TRUE(ptv::save_settings(dir_, app_->settings()));
+    EXPECT_FALSE(ptv::load_settings(dir_).audio_surround);
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=60\n";
+    EXPECT_FALSE(ptv::load_settings(dir_).audio_surround);
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "audio_surround=2\n";
+    EXPECT_FALSE(ptv::load_settings(dir_).audio_surround);
+}
+
 TEST_F(AppTest, AppearanceSettingsPersistAndScreensaverConsumesWakeButton)
 {
     ptv::Settings settings;

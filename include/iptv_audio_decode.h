@@ -1,4 +1,4 @@
-/* ps5-native-app-boilerplate - Software audio fallback, stereo PCM output.
+/* ps5-native-app-boilerplate - Software audio fallback, stereo or 5.1 PCM output.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef IPTV_AUDIO_DECODE_H
@@ -7,6 +7,10 @@
 #include <stdint.h>
 typedef struct iptv_audio_decoder iptv_audio_decoder_t;
 iptv_audio_decoder_t *iptv_audio_decoder_create(uint32_t stream_type);
+/* Six-channel output order: FL FR FC LFE BL BR; stereo sources keep silent rear channels. */
+iptv_audio_decoder_t *iptv_audio_decoder_create_channels(uint32_t stream_type, unsigned channels);
+void iptv_audio_limit_to_s16_channels(float *gain, uint32_t sample_rate, const float *samples,
+                                      size_t frames, unsigned channels, int16_t *pcm);
 void iptv_audio_decoder_free(iptv_audio_decoder_t **decoder);
 void iptv_audio_decoder_reset(iptv_audio_decoder_t *decoder);
 /* Returns PCM bytes (possibly zero while buffering), or a negative codec error. */
@@ -15,6 +19,6 @@ int iptv_audio_decode(iptv_audio_decoder_t *decoder, const uint8_t *data, size_t
 /* Interleaved stereo float to 16-bit, holding peaks at -1 dBFS: the gain drops at once for a
  * peak, the same for both channels, and comes back over a quarter of a second. `gain` is the
  * limiter's state between calls; start it at 1. */
-void iptv_audio_limit_to_s16(float *gain, uint32_t sample_rate, const float *stereo,
-                             size_t frames, int16_t *pcm);
+void iptv_audio_limit_to_s16(float *gain, uint32_t sample_rate, const float *stereo, size_t frames,
+                             int16_t *pcm);
 #endif

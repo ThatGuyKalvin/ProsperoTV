@@ -25,9 +25,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 static atomic_uint master_volume = 100;
 static atomic_uint audio_normalization = 0;
+static atomic_uint audio_surround = 0;
+
+void iptv_native_set_audio_surround(unsigned enabled)
+{
+    atomic_store_explicit(&audio_surround, enabled != 0, memory_order_relaxed);
+}
+
+unsigned iptv_native_get_audio_surround(void)
+{
+    return atomic_load_explicit(&audio_surround, memory_order_relaxed);
+}
 
 void iptv_native_set_audio_normalization(unsigned enabled)
 {
@@ -59,8 +71,9 @@ unsigned iptv_native_get_volume(void)
 #define AUDIO_OUT_GRAIN 256u
 #define AUDIO_OUT_RATE 48000u
 #define AUDIO_OUT_STEREO_S16 1u
+#define AUDIO_OUT_8CH_S16 2u
 #define AUDIO_OUT_VOLUME_0DB 0x8000
-#define AUDIO_PCM_BYTES 0x4000u
+#define AUDIO_PCM_BYTES 0xc000u /* 4096 frames of six-channel S16. */
 #define AUDIO_FRAME_MAX_BYTES 8194u
 #define AUDIO_QUEUE_CAPACITY 1024u
 #define VIDEO_QUEUE_CAPACITY 512u
@@ -273,14 +286,15 @@ typedef struct audio_sink
     iptv_audio_normalizer_t normalizer;
     uint32_t input_rate;
     uint32_t channels;
+    uint32_t output_channels;
+    float downmix_gain;
     uint64_t input_index;
     uint64_t next_output_position;
-    int16_t previous_left;
-    int16_t previous_right;
+    int16_t previous[8];
     uint32_t pending;
     uint8_t have_previous;
     uint8_t drained;
-    int16_t block[AUDIO_OUT_GRAIN * 2u];
+    int16_t block[AUDIO_OUT_GRAIN * 8u];
 } audio_sink_t;
 
 typedef struct audio_queue_item
@@ -334,6 +348,7 @@ typedef struct backend_state
     int32_t audio_decoder;
     mp3dec_t mp2_decoder;
     iptv_audio_decoder_t *software_audio;
+    unsigned surround;
     iptv_audio_tempo_t *audio_tempo;
     uint32_t audio_module_loaded;
     uint32_t audio_library_initialized;
@@ -874,7 +889,8 @@ static int32_t audio_sink_volume(audio_sink_t *sink)
     int volumes[8];
     for (unsigned index = 0; index < 8; ++index)
         volumes[index] = (int)(AUDIO_OUT_VOLUME_0DB * percent / 100u);
-    const int result = sceAudioOutSetVolume(sink->handle, 3, volumes);
+    const int result =
+        sceAudioOutSetVolume(sink->handle, sink->output_channels == 8 ? 255 : 3, volumes);
     if (result >= 0)
         sink->applied_volume = (int)percent;
     return result;
@@ -884,17 +900,30 @@ static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint
 {
     int32_t result;
 
-    if (input_rate < 8000u || input_rate > 192000u || channels == 0 || channels > 2)
+    if (input_rate < 8000u || input_rate > 192000u ||
+        (channels != 1 && channels != 2 && channels != 6))
         return IPTV_NATIVE_E_AUDIO_FRAME;
     result = sceAudioOutInit();
     if (result < 0 && (uint32_t)result != UINT32_C(0x8026000e))
         return result;
+    state->audio_sink.output_channels = state->surround ? 8 : 2;
     state->audio_sink.handle =
-        sceAudioOutOpen(0xff, 0, 0, AUDIO_OUT_GRAIN, AUDIO_OUT_RATE, AUDIO_OUT_STEREO_S16);
+        sceAudioOutOpen(0xff, 0, 0, AUDIO_OUT_GRAIN, AUDIO_OUT_RATE,
+                        state->surround ? AUDIO_OUT_8CH_S16 : AUDIO_OUT_STEREO_S16);
+    if (state->audio_sink.handle < 0 && state->surround)
+    {
+        ++state->telemetry.audio_surround_fallbacks;
+        state->audio_sink.output_channels = 2;
+        state->audio_sink.handle =
+            sceAudioOutOpen(0xff, 0, 0, AUDIO_OUT_GRAIN, AUDIO_OUT_RATE, AUDIO_OUT_STEREO_S16);
+    }
     if (state->audio_sink.handle < 0)
         return state->audio_sink.handle;
     state->audio_sink.input_rate = input_rate;
     state->audio_sink.channels = channels;
+    state->audio_sink.downmix_gain = 1.0f;
+    state->telemetry.audio_pcm_channels = channels;
+    state->telemetry.audio_output_channels = state->audio_sink.output_channels;
     state->audio_sink.applied_volume = -1;
     iptv_audio_normalizer_reset(&state->audio_sink.normalizer);
     result = audio_sink_volume(&state->audio_sink);
@@ -904,8 +933,9 @@ static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint
 static void audio_normalize_block(backend_state_t *state)
 {
     audio_sink_t *sink = &state->audio_sink;
-    iptv_audio_normalizer_process(&sink->normalizer, sink->block, AUDIO_OUT_GRAIN,
-                                  (int)iptv_native_get_audio_normalization());
+    iptv_audio_normalizer_process_channels(&sink->normalizer, sink->block, AUDIO_OUT_GRAIN,
+                                           sink->output_channels,
+                                           (int)iptv_native_get_audio_normalization());
     state->telemetry.audio_normalization_enabled = (uint32_t)sink->normalizer.enabled;
     state->telemetry.audio_normalization_gain_millidb =
         (int32_t)(sink->normalizer.gain_db * 1000.0);
@@ -915,23 +945,58 @@ static void audio_normalize_block(backend_state_t *state)
     state->telemetry.audio_normalization_limited_blocks = sink->normalizer.limited_blocks;
 }
 
-static int32_t audio_output_frame(backend_state_t *state, int16_t left, int16_t right)
+/* Canonical PCM/PS5 slots: FL FR FC LFE BL BR SL SR. LFE stays separate in
+ * surround; stereo fallback uses the same centre/surround weights as FFmpeg. */
+static void audio_stereo_frame(audio_sink_t *sink, const int16_t *frame, int16_t *stereo)
+{
+    const float left = frame[0] + 0.70710678f * (frame[2] + frame[4] + frame[6]);
+    const float right = frame[1] + 0.70710678f * (frame[2] + frame[5] + frame[7]);
+    const float peak = fmaxf(fabsf(left), fabsf(right));
+    float gain = fminf(1.0f, sink->downmix_gain + 4.0f / AUDIO_OUT_RATE);
+    if (peak * gain > 29203.0f)
+        gain = 29203.0f / peak;
+    stereo[0] = (int16_t)lrintf(left * gain);
+    stereo[1] = (int16_t)lrintf(right * gain);
+    sink->downmix_gain = gain;
+}
+
+static int32_t audio_submit_block(backend_state_t *state)
 {
     audio_sink_t *sink = &state->audio_sink;
     uint64_t started;
     uint64_t elapsed;
     int32_t result;
 
-    sink->block[sink->pending++] = left;
-    sink->block[sink->pending++] = right;
-    if (sink->pending != AUDIO_OUT_GRAIN * 2u)
-        return 0;
     started = monotonic_us();
     result = audio_sink_volume(sink);
     if (result < 0)
         return result;
     audio_normalize_block(state);
     result = sceAudioOutOutput(sink->handle, sink->block);
+    if (result < 0 && sink->output_channels == 8)
+    {
+        /* A changed route may reject the surround port. Retry this grain once
+         * through stereo; never retry an already-failed stereo output. */
+        ++state->telemetry.audio_surround_fallbacks;
+        ++state->telemetry.audio_output_errors;
+        const int closed = sceAudioOutClose(sink->handle);
+        if (closed < 0)
+            return closed;
+        sink->handle = -1;
+        sink->handle =
+            sceAudioOutOpen(0xff, 0, 0, AUDIO_OUT_GRAIN, AUDIO_OUT_RATE, AUDIO_OUT_STEREO_S16);
+        if (sink->handle < 0)
+            return sink->handle;
+        for (unsigned i = 0; i < AUDIO_OUT_GRAIN; ++i)
+            audio_stereo_frame(sink, sink->block + i * 8, sink->block + i * 2);
+        sink->output_channels = 2;
+        sink->applied_volume = -1;
+        state->telemetry.audio_output_channels = 2;
+        iptv_audio_normalizer_reset(&sink->normalizer);
+        result = audio_sink_volume(sink);
+        if (result >= 0)
+            result = sceAudioOutOutput(sink->handle, sink->block);
+    }
     elapsed = monotonic_us() - started;
     state->telemetry.audio_output_total_us += elapsed;
     if (elapsed > state->telemetry.audio_output_max_us)
@@ -946,6 +1011,17 @@ static int32_t audio_output_frame(backend_state_t *state, int16_t left, int16_t 
     return 0;
 }
 
+static int32_t audio_output_frame(backend_state_t *state, const int16_t *frame)
+{
+    audio_sink_t *sink = &state->audio_sink;
+    if (sink->output_channels == 2 && sink->channels == 6)
+        audio_stereo_frame(sink, frame, sink->block + sink->pending);
+    else
+        memcpy(sink->block + sink->pending, frame, sink->output_channels * sizeof(int16_t));
+    sink->pending += sink->output_channels;
+    return sink->pending == AUDIO_OUT_GRAIN * sink->output_channels ? audio_submit_block(state) : 0;
+}
+
 static int32_t audio_push_pcm(backend_state_t *state, const int16_t *samples, uint32_t sample_count)
 {
     audio_sink_t *sink = &state->audio_sink;
@@ -954,12 +1030,13 @@ static int32_t audio_push_pcm(backend_state_t *state, const int16_t *samples, ui
 
     for (index = 0; index < frames; ++index)
     {
-        int16_t left = samples[index * sink->channels];
-        int16_t right = sink->channels == 2 ? samples[index * 2u + 1u] : left;
+        int16_t current[8] = {0};
+        memcpy(current, samples + index * sink->channels, sink->channels * sizeof(int16_t));
+        if (sink->channels == 1)
+            current[1] = current[0];
         if (!sink->have_previous)
         {
-            sink->previous_left = left;
-            sink->previous_right = right;
+            memcpy(sink->previous, current, sizeof(current));
             sink->have_previous = 1;
             sink->input_index = 0;
             continue;
@@ -972,22 +1049,20 @@ static int32_t audio_push_pcm(backend_state_t *state, const int16_t *samples, ui
             while (sink->next_output_position < interval_end)
             {
                 uint64_t fraction = sink->next_output_position - interval_start;
-                int32_t out_left =
-                    sink->previous_left +
-                    (int32_t)(((int64_t)(left - sink->previous_left) * (int64_t)fraction) /
-                              AUDIO_OUT_RATE);
-                int32_t out_right =
-                    sink->previous_right +
-                    (int32_t)(((int64_t)(right - sink->previous_right) * (int64_t)fraction) /
-                              AUDIO_OUT_RATE);
-                int32_t result = audio_output_frame(state, (int16_t)out_left, (int16_t)out_right);
+                int16_t output[8];
+                for (unsigned channel = 0; channel < 8; ++channel)
+                    output[channel] =
+                        (int16_t)(sink->previous[channel] +
+                                  ((int64_t)(current[channel] - sink->previous[channel]) *
+                                   (int64_t)fraction) /
+                                      AUDIO_OUT_RATE);
+                int32_t result = audio_output_frame(state, output);
                 if (result < 0)
                     return result;
                 sink->next_output_position += sink->input_rate;
             }
         }
-        sink->previous_left = left;
-        sink->previous_right = right;
+        memcpy(sink->previous, current, sizeof(current));
     }
     return 0;
 }
@@ -1055,21 +1130,15 @@ static int32_t audio_drain(backend_state_t *state)
     if (sink->pending != 0)
     {
         memset(sink->block + sink->pending, 0,
-               (AUDIO_OUT_GRAIN * 2u - sink->pending) * sizeof(int16_t));
-        audio_normalize_block(state);
-        result = sceAudioOutOutput(sink->handle, sink->block);
+               (AUDIO_OUT_GRAIN * sink->output_channels - sink->pending) * sizeof(int16_t));
+        result = audio_submit_block(state);
         if (result < 0)
         {
             first_result = result;
-            ++state->telemetry.audio_output_errors;
-        }
-        else
-        {
-            ++state->telemetry.audio_output_grains;
         }
         sink->pending = 0;
     }
-    result = sceAudioOutOutput(sink->handle, NULL);
+    result = sink->handle >= 0 ? sceAudioOutOutput(sink->handle, NULL) : 0;
     if (first_result == 0 && result < 0)
         first_result = result;
     sink->drained = 1;
@@ -1549,6 +1618,7 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
 
     state->mode = mode;
     state->config = *config;
+    state->surround = !config->picture && iptv_native_get_audio_surround();
     atomic_store(&state->audio_buffer_type,
                  state->config.enable_audio
                      ? (config->audio_stream_type ? config->audio_stream_type : 0x0fu)
@@ -2603,7 +2673,8 @@ int32_t iptv_native_backend_submit_video(iptv_native_backend_t *backend, const v
 static int32_t decode_software_audio(backend_state_t *state, const uint8_t *data, size_t bytes)
 {
     if (!state->software_audio)
-        state->software_audio = iptv_audio_decoder_create(state->config.audio_stream_type);
+        state->software_audio = iptv_audio_decoder_create_channels(state->config.audio_stream_type,
+                                                                   state->surround ? 6 : 2);
     if (!state->software_audio)
         return IPTV_NATIVE_E_UNSUPPORTED;
     uint32_t rate = 0;
@@ -2613,7 +2684,7 @@ static int32_t decode_software_audio(backend_state_t *state, const uint8_t *data
     if (result < 0)
         return result;
     state->audio_pcm_item.length = (uint32_t)result;
-    state->audio_info.channel_count = 2;
+    state->audio_info.channel_count = state->surround ? 6 : 2;
     state->audio_info.sampling_frequency = rate;
     return 0;
 }
@@ -2630,7 +2701,8 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
 
     const int mp2 =
         state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u;
-    if (state->software_audio || iptv_audio_software_type(state->config.audio_stream_type) ||
+    if (state->software_audio || (state->surround && !mp2) ||
+        iptv_audio_software_type(state->config.audio_stream_type) ||
         (!mp2 && (frame_bytes < 7u || (adts[2] >> 6) != 1u ||
                   adts_channels(adts, frame_bytes) == 0 || adts_channels(adts, frame_bytes) > 2)))
     {
@@ -2668,7 +2740,8 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
     if (state->audio_pcm_item.length == 0)
         return 0;
     if (state->audio_pcm_item.length > sizeof(state->audio_pcm) ||
-        state->audio_info.channel_count == 0 || state->audio_info.channel_count > 2 ||
+        (state->audio_info.channel_count != 1 && state->audio_info.channel_count != 2 &&
+         state->audio_info.channel_count != 6) ||
         state->audio_pcm_item.length % (sizeof(int16_t) * state->audio_info.channel_count) != 0)
     {
         result = IPTV_NATIVE_E_AUDIO_FRAME;
@@ -3418,6 +3491,43 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
 static int test_volume_calls, test_volume_left, test_volume_right;
+static int test_volume_flags, test_output_channels = 2;
+static int test_surround_open_error, test_surround_output_error, test_stereo_open_error;
+static unsigned test_output_calls, test_audio_out_closes;
+static int16_t test_output_pcm[AUDIO_OUT_GRAIN * 8];
+int sceAudioOutInit(void)
+{
+    return 0;
+}
+int sceAudioOutOpen(int user, int type, int index, uint32_t length, uint32_t rate, uint32_t format)
+{
+    assert(user == 0xff && type == 0 && index == 0);
+    assert(length == AUDIO_OUT_GRAIN && rate == AUDIO_OUT_RATE);
+    assert(format == AUDIO_OUT_STEREO_S16 || format == AUDIO_OUT_8CH_S16);
+    if (format == AUDIO_OUT_8CH_S16 && test_surround_open_error)
+        return test_surround_open_error;
+    if (format == AUDIO_OUT_STEREO_S16 && test_stereo_open_error)
+        return test_stereo_open_error;
+    test_output_channels = format == AUDIO_OUT_8CH_S16 ? 8 : 2;
+    return 7;
+}
+int sceAudioOutClose(int handle)
+{
+    assert(handle == 7);
+    ++test_audio_out_closes;
+    return 0;
+}
+int sceAudioOutOutput(int handle, const void *pcm)
+{
+    assert(handle == 7);
+    if (!pcm)
+        return 0;
+    if (test_output_channels == 8 && test_surround_output_error)
+        return test_surround_output_error;
+    memcpy(test_output_pcm, pcm, AUDIO_OUT_GRAIN * test_output_channels * sizeof(int16_t));
+    ++test_output_calls;
+    return 0;
+}
 static int test_control_polls, test_join_calls;
 static int test_audio_creates, test_audio_deletes, test_audio_deleted_handle;
 static int test_audio_create_result = 51, test_audio_delete_result;
@@ -3487,7 +3597,8 @@ static void test_drain_controls(void *context)
 }
 int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
 {
-    assert(handle == 7 && flags == 3);
+    assert(handle == 7 && (flags == 3 || flags == 255));
+    test_volume_flags = flags;
     ++test_volume_calls;
     test_volume_left = volumes[0];
     test_volume_right = volumes[1];
@@ -3613,6 +3724,80 @@ int main(void)
     assert(audio_sink_volume(&volume_sink) == 0 && test_volume_calls == 3);
     iptv_native_set_volume(200);
     assert(iptv_native_get_volume() == 100);
+    assert(iptv_native_get_audio_surround() == 0);
+    iptv_native_set_audio_surround(1);
+    assert(iptv_native_get_audio_surround() == 1);
+    iptv_native_set_audio_surround(0);
+    /* Each discrete speaker survives mapping and resampling; unused slots stay silent. */
+    for (unsigned speaker = 0; speaker < 6; ++speaker)
+    {
+        backend_state_t multichannel = {0};
+        multichannel.surround = 1;
+        assert(audio_sink_open(&multichannel, 48000, 6) == 0);
+        assert(test_volume_flags == 255 && multichannel.telemetry.audio_output_channels == 8);
+        int16_t pcm[(AUDIO_OUT_GRAIN + 1) * 6] = {0};
+        for (unsigned i = 0; i <= AUDIO_OUT_GRAIN; ++i)
+            pcm[i * 6 + speaker] = 10000;
+        const unsigned before = test_output_calls;
+        assert(audio_push_pcm(&multichannel, pcm, (AUDIO_OUT_GRAIN + 1) * 6) == 0);
+        assert(test_output_calls == before + 1);
+        for (unsigned i = 0; i < AUDIO_OUT_GRAIN; ++i)
+            for (unsigned channel = 0; channel < 8; ++channel)
+                assert(test_output_pcm[i * 8 + channel] == (channel == speaker ? 10000 : 0));
+    }
+    /* A refused surround port preserves centre dialogue via linked stereo downmix. */
+    backend_state_t fallback = {0};
+    fallback.surround = 1;
+    test_surround_open_error = -55;
+    assert(audio_sink_open(&fallback, 48000, 6) == 0);
+    assert(fallback.telemetry.audio_output_channels == 2 && test_volume_flags == 3);
+    assert(fallback.telemetry.audio_surround_fallbacks == 1);
+    int16_t dialogue[(AUDIO_OUT_GRAIN + 1) * 6] = {0};
+    for (unsigned i = 0; i <= AUDIO_OUT_GRAIN; ++i)
+        dialogue[i * 6 + 2] = 10000;
+    assert(audio_push_pcm(&fallback, dialogue, (AUDIO_OUT_GRAIN + 1) * 6) == 0);
+    for (unsigned i = 0; i < AUDIO_OUT_GRAIN * 2; ++i)
+        assert(test_output_pcm[i] == 7071);
+    test_surround_open_error = 0;
+    /* A route failure during output closes the 8ch port and retries only once in stereo. */
+    memset(&fallback, 0, sizeof(fallback));
+    fallback.surround = 1;
+    assert(audio_sink_open(&fallback, 48000, 6) == 0);
+    test_surround_output_error = -56;
+    assert(audio_push_pcm(&fallback, dialogue, (AUDIO_OUT_GRAIN + 1) * 6) == 0);
+    assert(fallback.telemetry.audio_surround_fallbacks == 1 && test_audio_out_closes == 1);
+    assert(fallback.audio_sink.output_channels == 2 && test_volume_flags == 3);
+    assert(fallback.telemetry.audio_output_grains == 1 && fallback.audio_sink.pending == 0);
+    for (unsigned i = 0; i < AUDIO_OUT_GRAIN * 2; ++i)
+        assert(test_output_pcm[i] == 7071);
+    const unsigned continued = test_output_calls;
+    assert(audio_push_pcm(&fallback, dialogue, AUDIO_OUT_GRAIN * 6) == 0);
+    assert(test_output_calls == continued + 1 && fallback.audio_sink.pending == 0);
+    assert(fallback.telemetry.audio_surround_fallbacks == 1);
+    test_surround_output_error = 0;
+    memset(&fallback, 0, sizeof(fallback));
+    fallback.surround = 1;
+    test_surround_open_error = -55;
+    test_stereo_open_error = -57;
+    assert(audio_sink_open(&fallback, 48000, 6) == -57);
+    test_surround_open_error = test_stereo_open_error = 0;
+    const unsigned rates[] = {24000, 44100, 96000};
+    for (unsigned rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate)
+    {
+        memset(&fallback, 0, sizeof(fallback));
+        fallback.surround = 1;
+        assert(audio_sink_open(&fallback, rates[rate], 6) == 0);
+        int16_t lfe[1025 * 6] = {0};
+        for (unsigned i = 0; i < 1025; ++i)
+            lfe[i * 6 + 3] = 6000;
+        const unsigned before = test_output_calls;
+        assert(audio_push_pcm(&fallback, lfe, 1025 * 6) == 0);
+        const unsigned expected = (1024u * 48000u + rates[rate] - 1u) / rates[rate];
+        assert(test_output_calls - before == expected / AUDIO_OUT_GRAIN);
+        for (unsigned i = 0; i < AUDIO_OUT_GRAIN; ++i)
+            for (unsigned channel = 0; channel < 8; ++channel)
+                assert(test_output_pcm[i * 8 + channel] == (channel == 3 ? 6000 : 0));
+    }
     assert(!media_span_ready(1, 0, 2000000, PLAYBACK_BUFFER_US));
     assert(!media_span_ready(60, 0, 1000000, PLAYBACK_BUFFER_US));
     assert(media_span_ready(121, 0, 2000000, PLAYBACK_BUFFER_US));

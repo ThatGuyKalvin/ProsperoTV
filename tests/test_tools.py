@@ -83,6 +83,28 @@ int main() {
                     subprocess.run([executable, str(kind), str(ROOT / "tests/fixtures" / fixture), str(least_peak)],
                                    check=True, timeout=10)
 
+    def test_audio_surround_speaker_mapping_and_stereo_no_upmix(self):
+        flags = shlex.split(subprocess.check_output(
+            ["pkg-config", "--cflags", "--libs", "libavcodec", "libswresample", "libavutil"], text=True))
+        with tempfile.TemporaryDirectory() as directory:
+            executable = str(Path(directory) / "audio")
+            subprocess.run(["clang", "-std=c11", "-O1", "-fsanitize=address,undefined", "-Iinclude",
+                "src/iptv_audio_decode.c", "tests/test_audio_decode.c", *flags, "-lm", "-o", executable], cwd=ROOT, check=True)
+            for codec, kind, layout, channels in (("aac", 15, "5.1", 6), ("aac", 15, "5.1(side)", 6),
+                                                  ("aac", 15, "7.1", 8), ("ac3", 129, "5.1(side)", 6),
+                                                  ("eac3", 135, "5.1(side)", 6)):
+                for speaker in range(channels):
+                    fixture = str(Path(directory) / "speaker.aac")
+                    tones = ["0"] * channels
+                    tones[speaker] = "0.5*sin(2*PI*%d*t)" % (60 if speaker == 3 else 997)
+                    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "aevalsrc=" + "|".join(tones) + ":s=48000:d=0.2:c=" + layout,
+                        "-c:a", codec, "-b:a", "512k", "-f", "adts" if codec == "aac" else codec, fixture], check=True)
+                    mapped = speaker if speaker < 6 else speaker - 2
+                    with self.subTest(codec=codec, layout=layout, speaker=speaker):
+                        subprocess.run([executable, str(kind), fixture, "1000", "6", str(1 << mapped)], check=True, timeout=10)
+            subprocess.run([executable, "15", str(ROOT / "tests/fixtures/aac-stereo.aac"), "0", "6", "3"], check=True, timeout=10)
+
     def test_mp2_decodes_mpeg1_stereo_and_mpeg2_mono(self):
         with tempfile.TemporaryDirectory() as directory:
             executable = str(Path(directory) / "mp2")
@@ -209,7 +231,8 @@ int main() {
     def test_native_buffering_and_timestamp_state(self):
         with tempfile.TemporaryDirectory() as directory:
             executable = str(Path(directory) / "native-state")
-            subprocess.run(["clang", "-std=gnu11", "-O2", "-ffunction-sections",
+            subprocess.run(["clang", "-std=gnu11", "-O1", "-g", "-fsanitize=address,undefined",
+                            "-fno-omit-frame-pointer", "-ffunction-sections",
                             "-fdata-sections", "-DIPTV_NATIVE_BACKEND_STATE_TEST",
                             "-Iinclude", "-Isrc", "src/iptv_native_backend.c",
                             "src/iptv_audio_normalize.c", "-lm",

@@ -42,7 +42,8 @@ void iptv_audio_tempo_free(iptv_audio_tempo_t **tempo)
 
 iptv_audio_tempo_t *iptv_audio_tempo_create(unsigned rate, unsigned channels, unsigned speed)
 {
-    if (rate < 8000 || rate > 192000 || channels < 1 || channels > 2 || speed < 50 || speed > 200)
+    if (rate < 8000 || rate > 192000 || (channels != 1 && channels != 2 && channels != 6) ||
+        speed < 50 || speed > 200)
         return nullptr;
     auto *t = new (std::nothrow) iptv_audio_tempo;
     if (!t)
@@ -61,7 +62,9 @@ iptv_audio_tempo_t *iptv_audio_tempo_create(unsigned rate, unsigned channels, un
         char args[160];
         std::snprintf(args, sizeof(args),
                       "time_base=1/%u:sample_rate=%u:sample_fmt=s16:channel_layout=%s", rate, rate,
-                      channels == 2 ? "stereo" : "mono");
+                      channels == 6   ? "5.1"
+                      : channels == 2 ? "stereo"
+                                      : "mono");
         if (avfilter_graph_create_filter(&t->source, avfilter_get_by_name("abuffer"), "input", args,
                                          nullptr, t->graph) < 0)
             goto fail;
@@ -122,7 +125,10 @@ int iptv_audio_tempo_push(iptv_audio_tempo_t *t, const int16_t *samples, size_t 
     f->format = AV_SAMPLE_FMT_S16;
     f->sample_rate = static_cast<int>(t->rate);
     f->nb_samples = static_cast<int>(frames);
-    av_channel_layout_default(&f->ch_layout, static_cast<int>(t->channels));
+    if (t->channels == 6)
+        f->ch_layout = AV_CHANNEL_LAYOUT_5POINT1_BACK;
+    else
+        av_channel_layout_default(&f->ch_layout, static_cast<int>(t->channels));
     if (pts != UINT64_MAX && t->anchor == AV_NOPTS_VALUE)
     {
         const auto elapsed =

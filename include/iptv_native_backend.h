@@ -20,8 +20,11 @@ extern "C"
     /* Optional playback loudness leveling; off by default. */
     void iptv_native_set_audio_normalization(unsigned enabled);
     unsigned iptv_native_get_audio_normalization(void);
+    /* Opt-in decoded 5.1 PCM; sampled when foreground playback opens. */
+    void iptv_native_set_audio_surround(unsigned enabled);
+    unsigned iptv_native_get_audio_surround(void);
 
-#define IPTV_NATIVE_BACKEND_STORAGE_BYTES (64u * 1024u)
+#define IPTV_NATIVE_BACKEND_STORAGE_BYTES (128u * 1024u)
 #if IPTV_PROBE
 #define IPTV_NATIVE_PROBE_SAMPLES 36u
     typedef struct iptv_native_probe_sample
@@ -148,6 +151,9 @@ extern "C"
         uint64_t decoded_audio_frames;
         uint64_t audio_output_grains;
         uint64_t audio_output_errors;
+        uint32_t audio_pcm_channels;
+        uint32_t audio_output_channels; /* Opened port, not detected speaker count. */
+        uint32_t audio_surround_fallbacks;
         uint32_t audio_normalization_enabled;
         int32_t audio_normalization_gain_millidb;
         int32_t audio_normalization_loudness_millilufs; /* INT32_MIN until acquired. */

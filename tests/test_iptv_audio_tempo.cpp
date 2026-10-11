@@ -89,3 +89,45 @@ TEST(AudioTempo, RejectsInvalidInputsAndPropagatesOutputFailure)
     EXPECT_EQ(result, -77);
     iptv_audio_tempo_free(&tempo);
 }
+
+TEST(AudioTempo, SurroundSpeakersStayIsolatedAtEverySpeed)
+{
+    for (unsigned speed : {50u, 100u, 150u, 200u})
+        for (unsigned speaker = 0; speaker < 6; ++speaker)
+        {
+            auto *tempo = iptv_audio_tempo_create(48000, 6, speed);
+            ASSERT_NE(tempo, nullptr);
+            struct Check
+            {
+                unsigned speaker;
+                size_t frames = 0;
+                long long energy = 0;
+            } check{speaker};
+            auto output = [](void *context, const int16_t *pcm, size_t frames, uint64_t)
+            {
+                auto &c = *static_cast<Check *>(context);
+                c.frames += frames;
+                for (size_t i = 0; i < frames; ++i)
+                    for (unsigned channel = 0; channel < 6; ++channel)
+                        if (channel == c.speaker)
+                            c.energy +=
+                                static_cast<long long>(pcm[i * 6 + channel]) * pcm[i * 6 + channel];
+                        else
+                            EXPECT_EQ(pcm[i * 6 + channel], 0);
+                return 0;
+            };
+            int16_t pcm[1024 * 6]{};
+            for (unsigned at = 0; at < 48000; at += 1024)
+            {
+                unsigned frames = std::min(1024u, 48000 - at);
+                for (unsigned i = 0; i < frames; ++i)
+                    pcm[i * 6 + speaker] = static_cast<int16_t>(
+                        6000 * std::sin(6.283185307179586 * 997 * (at + i) / 48000));
+                ASSERT_EQ(iptv_audio_tempo_push(tempo, pcm, frames, UINT64_MAX, output, &check), 0);
+            }
+            ASSERT_EQ(iptv_audio_tempo_finish(tempo, output, &check), 0);
+            EXPECT_NEAR(static_cast<double>(check.frames) / 48000, 100.0 / speed, 0.07);
+            EXPECT_GT(check.energy, 1000000);
+            iptv_audio_tempo_free(&tempo);
+        }
+}

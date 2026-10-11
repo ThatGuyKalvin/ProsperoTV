@@ -1,4 +1,8 @@
 // Arabic, Hebrew. Store logical Unicode order; the renderer performs bidi layout.
+    {"Audio output", {"إخراج الصوت", "פלט שמע"}},
+    {"Stereo", {"ستيريو", "סטריאו"}},
+    {"5.1 surround", {"صوت محيطي 5.1", "צליל היקפי 5.1"}},
+    {"Use with a surround-capable HDMI receiver. Applies to the next playback.", {"يُستخدم مع مستقبل HDMI يدعم الصوت المحيطي. يسري على التشغيل التالي.", "לשימוש עם מקלט HDMI התומך בצליל היקפי. יחול בהפעלה הבאה."}},
     {"Live TV", {"تلفزيون مباشر", "טלוויזיה בשידור חי"}},
     {"On demand", {"حسب الطلب", "לפי דרישה"}},
     {"Favorites", {"المفضلة", "מועדפים"}},

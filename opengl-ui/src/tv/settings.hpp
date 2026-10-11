@@ -33,6 +33,7 @@ struct Settings
     bool live_preview = true;
     int volume = 100;
     bool audio_normalization = false;
+    bool audio_surround = false;
     int resolution = kBest;
     // The diagnostic log (tv/diag.hpp). Off unless the viewer turns it on.
     bool diagnostics = false;
