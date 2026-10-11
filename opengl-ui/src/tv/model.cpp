@@ -384,6 +384,8 @@ bool Model::open()
 
 void Model::close()
 {
+    cancel_home_play();
+    home_series_.stop();
     clear_pin();
     end_search();
     vod_.stop();
@@ -438,17 +440,19 @@ void Model::poll()
     poll_pin();
     continue_account_form();
     consume_refresh();
-    if ((vod_.requested() || search_pending()) && !refreshing())
+    if ((home_waiting_ || vod_.requested() || search_pending()) && !refreshing())
         stop_guide();
-    vod_.poll(!refreshing() && !guide_thread_ && !search_busy());
-    search_movies_.poll(searching_ && !refreshing() && !guide_thread_ && !vod_.busy() &&
-                        !vod_.requested() && !search_shows_.busy());
-    search_shows_.poll(searching_ && !refreshing() && !guide_thread_ && !vod_.busy() &&
-                       !vod_.requested() && !search_movies_.busy() && !search_movies_.requested());
-    if (!vod_.busy() && !vod_.requested() && !search_busy() && !search_pending())
+    poll_home_playback();
+    vod_.poll(!home_waiting_ && !refreshing() && !guide_thread_ && !search_busy());
+    search_movies_.poll(!home_waiting_ && searching_ && !refreshing() && !guide_thread_ &&
+                        !vod_.busy() && !vod_.requested() && !search_shows_.busy());
+    search_shows_.poll(!home_waiting_ && searching_ && !refreshing() && !guide_thread_ &&
+                       !vod_.busy() && !vod_.requested() && !search_movies_.busy() &&
+                       !search_movies_.requested());
+    if (!home_waiting_ && !vod_.busy() && !vod_.requested() && !search_busy() && !search_pending())
         poll_guide();
     const auto now = platform::unix_time();
-    if (catalog_loaded_ && !refreshing() && !vod_.busy() && !searching_ &&
+    if (catalog_loaded_ && !home_waiting_ && !refreshing() && !vod_.busy() && !searching_ &&
         now >= next_schedule_check_)
     {
         // A failed scheduled refresh retries in an hour, not on every frame.
@@ -969,6 +973,7 @@ bool Model::play(unsigned catalog_index)
         catalog_[catalog_index].media_kind != iptv::MediaKind::live ||
         !content_allowed(catalog_[catalog_index]))
         return false;
+    clear_home_playback();
     const iptv::ChannelView channel = this->channel(catalog_index);
     sleep_timer.wake();
     play_request_ = {};
@@ -1336,6 +1341,7 @@ void Model::apply_account_password(const char *password)
 
 void Model::refresh()
 {
+    cancel_home_play();
     end_search();
     vod_.stop();
     stop_guide();

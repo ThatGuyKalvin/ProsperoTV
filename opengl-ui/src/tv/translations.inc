@@ -627,3 +627,11 @@
 {"Source referrer (2 of 2)", {"Referente de la fuente (2 de 2)", "Référent de la source (2 sur 2)", "Referrer der Quelle (2 von 2)", "Referente della sorgente (2 di 2)", "Referenciador da fonte (2 de 2)", "Verwijzer van de bron (2 van 2)"}},
 {"Edit long HTTP settings from the paired phone", {"Edita los ajustes HTTP largos desde el teléfono vinculado", "Modifiez les longs paramètres HTTP depuis le téléphone associé", "Lange HTTP-Einstellungen am gekoppelten Telefon bearbeiten", "Modifica le impostazioni HTTP lunghe dal telefono associato", "Edite configurações HTTP longas pelo celular pareado", "Bewerk lange HTTP-instellingen op de gekoppelde telefoon"}},
 {"HTTP settings", {"Ajustes HTTP", "Paramètres HTTP", "HTTP-Einstellungen", "Impostazioni HTTP", "Configurações HTTP", "HTTP-instellingen"}},
+
+{"Loading episodes before playback", {"Cargando episodios antes de reproducir", "Chargement des épisodes avant lecture", "Episoden werden vor der Wiedergabe geladen", "Caricamento episodi prima della riproduzione", "Carregando episódios antes de reproduzir", "Afleveringen laden voor afspelen"}},
+
+{"Press Circle to cancel.", {"Pulsa Círculo para cancelar.", "Appuyez sur Rond pour annuler.", "Zum Abbrechen Kreis drücken.", "Premi Cerchio per annullare.", "Pressione Círculo para cancelar.", "Druk op Cirkel om te annuleren."}},
+
+{"Next episode unavailable", {"Siguiente episodio no disponible", "Épisode suivant indisponible", "Nächste Episode nicht verfügbar", "Episodio successivo non disponibile", "Próximo episódio indisponível", "Volgende aflevering niet beschikbaar"}},
+
+{"Starting your saved episode. Resume from Home again to retry the episode list.", {"Iniciando el episodio guardado. Reanuda desde Inicio para volver a cargar la lista.", "Lecture de votre épisode enregistré. Reprenez depuis Accueil pour réessayer la liste.", "Gespeicherte Episode startet. Auf der Startseite fortsetzen, um die Episodenliste erneut zu laden.", "Avvio episodio salvato. Riprendi dalla Home per riprovare a caricare la lista.", "Iniciando o episódio salvo. Retome pelo Início para tentar carregar a lista novamente.", "Opgeslagen aflevering starten. Hervat vanaf Home om de lijst opnieuw te laden."}},

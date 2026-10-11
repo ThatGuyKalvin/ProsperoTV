@@ -170,3 +170,29 @@ rather than accumulating a new cache after each edit. Editing configuration inva
 programme assignments immediately; successful downloads save the replacement. Offline restart
 keeps the last good guide only when its configuration still matches. Existing parental and
 hidden-channel filtering remains authoritative. Native keyboard/display acceptance is pending.
+### Home episode continuation (host implementation; native acceptance pending)
+
+Resuming an episode from Home prepares an independent series list, without moving
+On Demand to that show. A saved list is usable immediately, including offline. If
+it is missing, one series request runs through the shared menu download gate while
+controller input remains active. Circle, changing tabs, choosing another source or
+refreshing cancels the pending playback. After at most ten seconds plus request
+cancellation, the saved episode starts even if its series could not be downloaded;
+a warning explains that automatic continuation is unavailable. A later Home resume
+retries the missing list. There is no background retry during foreground playback.
+
+At normal end-of-file, the next episode in provider season/episode order is queued
+only for the same source record, source fingerprint and current series episode.
+Playlist episodes retain their bounded category/title series key across restart.
+Hidden channels/categories, inherited show restrictions and current parental rules
+are checked again. A locked next episode is not skipped. Its own stream URLs and
+HTTP headers are retained. Manual stops, playback failures, sleeping, and the final
+episode do not advance. The independent list remains available when menu workers
+are closed for foreground playback.
+
+Native acceptance still needs a restarted app: resume an unfinished episode from
+Home, seek near its end, and confirm the next episode starts while On Demand keeps
+its previous selection. Also verify saved-cache playback offline, Circle/source
+change during a missing-list request, and fallback to the saved stream when that
+request fails. Host tests cover these model transitions and the ten-second bound;
+they do not establish console playback or controller behavior.
