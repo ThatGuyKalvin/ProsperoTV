@@ -309,6 +309,7 @@ typedef struct backend_state
     _Atomic uint32_t stream_generation;
     _Atomic uint64_t presented_frame_count;
     _Atomic uint64_t presented_pts_us;
+    _Atomic int32_t audio_delay_ms;
     _Atomic uint32_t presented_generation;
     iptv_native_picture_t pause_picture;
     const native_video_mode_t *mode;
@@ -1142,6 +1143,14 @@ static int audio_clock_now(const backend_state_t *state, uint64_t now, uint64_t 
 // The diagnostic log, every five seconds: how far the picture was from the sound.
 static void trace_av_offset(backend_state_t *state, uint64_t pts_us, uint64_t now);
 
+static uint64_t adjusted_audio_clock(const backend_state_t *state, uint64_t sound)
+{
+    const int64_t offset = (int64_t)atomic_load(&state->audio_delay_ms) * 1000;
+    if (offset < 0)
+        return sound < (uint64_t)-offset ? 0 : sound - (uint64_t)-offset;
+    return sound > UINT64_MAX - (uint64_t)offset ? UINT64_MAX : sound + (uint64_t)offset;
+}
+
 static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int *drop_frame)
 {
     uint64_t now = monotonic_us();
@@ -1163,7 +1172,7 @@ static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int 
     uint64_t sound;
     if (audio_clock_now(state, now, &sound))
     {
-        sound += PACE_SOUND_LEAD_US;
+        sound = adjusted_audio_clock(state, sound + PACE_SOUND_LEAD_US);
         state->pace_last_pts_us = pts_us;
         if (pts_us <= sound)
         {
@@ -3034,6 +3043,15 @@ int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend)
     return 0;
 }
 
+void iptv_native_backend_set_audio_delay(iptv_native_backend_t *backend, int milliseconds)
+{
+    backend_state_t *state = state_from(backend);
+    if (state && state->magic == BACKEND_MAGIC)
+        atomic_store(&state->audio_delay_ms, milliseconds < -2000  ? -2000
+                                             : milliseconds > 2000 ? 2000
+                                                                   : milliseconds);
+}
+
 void iptv_native_backend_set_paused(iptv_native_backend_t *backend, int paused)
 {
     backend_state_t *state = state_from(backend);
@@ -3435,6 +3453,18 @@ int main(void)
     iptv_native_backend_t seeking = {0};
     assert(iptv_native_backend_init(&seeking) == 0);
     backend_state_t *seek = state_from(&seeking);
+    assert(adjusted_audio_clock(seek, 3000000) == 3000000);
+    iptv_native_backend_set_audio_delay(&seeking, 150);
+    assert(adjusted_audio_clock(seek, 3000000) == 3150000);
+    assert(adjusted_audio_clock(seek, UINT64_MAX - 10) == UINT64_MAX);
+    iptv_native_backend_set_audio_delay(&seeking, -150);
+    assert(adjusted_audio_clock(seek, 3000000) == 2850000);
+    assert(adjusted_audio_clock(seek, 10) == 0);
+    iptv_native_backend_set_audio_delay(&seeking, INT32_MAX);
+    assert(adjusted_audio_clock(seek, 3000000) == 5000000);
+    iptv_native_backend_set_audio_delay(&seeking, INT32_MIN);
+    assert(adjusted_audio_clock(seek, 3000000) == 1000000);
+    iptv_native_backend_set_audio_delay(&seeking, 0);
     // Restoring history before the replacement decoder opens has no old
     // submissions to cancel. No discontinuity callback will clear this flag.
     iptv_native_backend_request_reposition(&seeking);

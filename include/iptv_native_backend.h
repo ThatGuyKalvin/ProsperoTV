@@ -216,6 +216,8 @@ extern "C"
     /* Control-thread requests while an opened backend remains alive; only
      * atomic state is touched. Reposition releases
      * blocked submissions. The stream owner must then reset its timeline. */
+    /* Positive values make sound later than the picture, in milliseconds. */
+    void iptv_native_backend_set_audio_delay(iptv_native_backend_t *backend, int milliseconds);
     void iptv_native_backend_set_paused(iptv_native_backend_t *backend, int paused);
     int iptv_native_backend_paused(const iptv_native_backend_t *backend);
     void iptv_native_backend_request_reposition(iptv_native_backend_t *backend);

@@ -187,7 +187,7 @@ void PlaybackOsd::set_audio_state(const iptv_player_audio_state_t &state)
     std::lock_guard lock(mutex_);
     bool changed = audio_.count != state.count || audio_.selected_pid != state.selected_pid ||
                    audio_.disabled != state.disabled || audio_.pending != state.pending ||
-                   audio_.result != state.result;
+                   audio_.result != state.result || audio_.delay_ms != state.delay_ms;
     const auto count = std::min(state.count, IPTV_STREAM_MAX_AUDIO_TRACKS);
     for (unsigned i = 0; i < count && !changed; ++i)
         changed = audio_.tracks[i].pid != state.tracks[i].pid ||
@@ -203,6 +203,14 @@ void PlaybackOsd::set_audio_state(const iptv_player_audio_state_t &state)
         audio_focus_ = std::min(audio_focus_, count);
         dirty_ = true;
     }
+}
+
+std::optional<int> PlaybackOsd::take_audio_delay()
+{
+    std::lock_guard lock(mutex_);
+    const auto result = audio_delay_;
+    audio_delay_.reset();
+    return result;
 }
 
 std::optional<std::uint32_t> PlaybackOsd::take_audio_selection()
@@ -343,6 +351,15 @@ int PlaybackOsd::input(int action, std::uint64_t now)
             for (unsigned i = 0; i < subtitles_.tracks.size(); ++i)
                 if (subtitles_.tracks[i].id == subtitles_.selected)
                     subtitle_focus_ = i + 1;
+            dirty_ = true;
+            return 1;
+        }
+        if (tab_ == 0 && (action == IPTV_INPUT_PLAY_PAUSE || action == IPTV_INPUT_GO_LIVE ||
+                          action == IPTV_INPUT_SQUARE))
+        {
+            const int step = action == IPTV_INPUT_PLAY_PAUSE ? -50 : 50;
+            audio_delay_ = audio_.delay_ms =
+                action == IPTV_INPUT_SQUARE ? 0 : std::clamp(audio_.delay_ms + step, -2000, 2000);
             dirty_ = true;
             return 1;
         }
@@ -590,7 +607,7 @@ void PlaybackOsd::paint()
     }
     else if (audio_menu_)
     {
-        panel_.reset(80, 100, 820, 860);
+        panel_.reset(80, 70, 820, 950);
         line(tr("Audio"), 28, 54, 32, 760);
         line(!audio_.count       ? tr("No supported audio tracks advertised")
              : audio_.pending    ? tr("Changing audio...")
@@ -633,11 +650,15 @@ void PlaybackOsd::paint()
             }
             line((pid == audio_.selected_pid ? "> " : "") + label, 28, top + 43, 28, 760);
         }
+        line(std::string(tr("Sound delay: ")) + (audio_.delay_ms > 0 ? "+" : "") +
+                 std::to_string(audio_.delay_ms) + tr(" ms (positive = later)"),
+             28, 785, 22, 760);
+        line(tr("L2 Earlier | R2 Later | Square Reset"), 28, 815, 22, 760);
         line(live_ ? tr("L1/R1 Audio / Subtitles / Picture")
                    : tr("L1/R1 Audio / Subtitles / Picture / Chapters"),
-             28, 764, 22, 760);
-        line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 760);
-        line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
+             28, 846, 22, 760);
+        line(tr("Up/Down Browse · Left/Right Page"), 28, 876, 22, 760);
+        line(tr("Cross Select · Circle Close"), 28, 909, 22, 760);
     }
     else if (list_)
     {

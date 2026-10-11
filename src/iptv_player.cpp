@@ -152,6 +152,7 @@ int gMediaPauseRequest = -1;
 bool gMediaSession = false;
 std::atomic<std::uint32_t> gMediaSavedAudio{UINT32_MAX}, gMediaSavedSubtitle{0};
 std::atomic<std::uint32_t> gMediaRestoreAudio{UINT32_MAX};
+std::atomic<int> gAudioDelayMs{0};
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
 #if IPTV_PROBE
 constexpr char kProbePath[] = "/download0/iptv-playback-probe.txt";
@@ -1164,6 +1165,8 @@ class StreamRunner
         if (controls_asked_usec_ && asked_usec - controls_asked_usec_ < kControlsPollUsec)
             return false;
         controls_asked_usec_ = asked_usec;
+        if (adapter_.initialized)
+            iptv_native_backend_set_audio_delay(&adapter_.backend, gAudioDelayMs.load());
         UpdateLiveControls();
         UpdateMediaControls();
         if (gMediaSeekRequest.load(std::memory_order_acquire) >= 0)
@@ -3019,6 +3022,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 void iptv_player_set_start_position(uint64_t position_us)
 {
     gMediaStartPosition.store(std::min<std::uint64_t>(position_us, INT64_MAX / 4));
+    gAudioDelayMs.store(0);
     gMediaSeekRequest.store(-1);
     gMediaSavedAudio = UINT32_MAX;
     gMediaSavedSubtitle = 0;
@@ -3124,12 +3128,18 @@ int iptv_player_go_live()
     return IPTV_STREAM_OK;
 }
 
+void iptv_player_set_audio_delay(int milliseconds)
+{
+    gAudioDelayMs.store(std::clamp(milliseconds, -2000, 2000));
+}
+
 void iptv_player_audio_state(iptv_player_audio_state_t *state)
 {
     if (!state)
         return;
     std::lock_guard lock(gAudioMutex);
     *state = gAudioState;
+    state->delay_ms = gAudioDelayMs.load();
     for (unsigned i = 0; i < state->count; ++i)
         for (const auto &track : gAudioMetadata)
             if (track.pid == state->tracks[i].pid)

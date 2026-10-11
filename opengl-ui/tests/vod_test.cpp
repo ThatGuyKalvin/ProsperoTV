@@ -400,6 +400,32 @@ TEST_F(VodTest, FilmControlsClampSkipsPauseAndSelectChapters)
     model.close();
 }
 
+TEST_F(VodTest, SoundDelayChangesOnlyInsideAudioMenuAndIsBounded)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    ptv::PlaybackOsd controls(model, {});
+    EXPECT_FALSE(controls.take_audio_delay());
+    EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_GO_LIVE, 2), 1);
+    EXPECT_EQ(controls.take_audio_delay(), 50);
+    EXPECT_FALSE(controls.take_audio_delay());
+    EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 3), 1);
+    EXPECT_EQ(controls.take_audio_delay(), 0);
+    for (unsigned i = 0; i < 45; ++i)
+        controls.input(IPTV_INPUT_PLAY_PAUSE, 4 + i);
+    EXPECT_EQ(controls.take_audio_delay(), -2000);
+    for (unsigned i = 0; i < 90; ++i)
+        controls.input(IPTV_INPUT_GO_LIVE, 50 + i);
+    EXPECT_EQ(controls.take_audio_delay(), 2000);
+    EXPECT_EQ(controls.input(IPTV_INPUT_SQUARE, 150), 1);
+    EXPECT_EQ(controls.take_audio_delay(), 0);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 151), 1);
+    controls.input(IPTV_INPUT_GO_LIVE, 152);
+    EXPECT_FALSE(controls.take_audio_delay());
+    model.close();
+}
+
 TEST_F(VodTest, EmptyListsAreValidAndCancellationStopsTheWorker)
 {
     response("get_vod_streams", "[]");

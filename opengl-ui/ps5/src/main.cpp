@@ -1400,6 +1400,8 @@ int main()
                         (void)iptv_player_pause_media(*paused);
                     if (const auto selected = osd.take_picture_selection())
                         iptv_native_agc_set_picture_mode(*selected);
+                    if (const auto delay = osd.take_audio_delay())
+                        iptv_player_set_audio_delay(*delay);
                     if (const auto selected = osd.take_audio_selection())
                         (void)iptv_player_select_audio(*selected);
                     if (const auto selected = osd.take_subtitle_selection())
