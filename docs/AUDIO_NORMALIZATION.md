@@ -5,13 +5,15 @@ volume. It is off by default and saved per console profile. Existing settings
 files keep it off. The normal Volume control still applies afterward, including
 mute. Interface sounds do not pass through this processor.
 
-The processor runs on the common stereo S16, 48 kHz sink after downmixing and
+The processor runs on the common S16, 48 kHz sink after channel mapping and
 resampling. It therefore covers native AAC and software audio paths without
 changing codec selection or downmix coefficients.
 
 ## Control and limits
 
-- K-weighted stereo energy uses the BS.1770 48 kHz filter coefficients.
+- K-weighted energy uses the BS.1770 48 kHz filter coefficients for two, six,
+  or eight channels. LFE is excluded from loudness; surround energy is weighted
+  by 1.41.
 - Up to thirty accepted 100 ms energy windows drive a rolling estimate; at least
   five accepted windows are needed before leveling begins.
 - Target: -23 LUFS. Gain is bounded to [-18, +18] dB; upward changes are limited
@@ -19,7 +21,7 @@ changing codec selection or downmix coefficients.
 - Windows below -50 LUFS are excluded from the program estimate. During quiet
   blocks, gain returns toward unity instead of rising. This cannot distinguish
   background noise above the threshold from intentional audio.
-- A linked stereo block limiter uses the existing 256-frame output buffer as
+- A limiter linked across every channel, including LFE, uses the 256-frame output buffer as
   lookahead. It immediately reduces gain for peaks and releases over roughly
   250 ms. The ceiling is conservatively -1 dBFS **sample peak**, not dBTP.
 - Channel/track changes, stream discontinuities, and toggling the feature reset
@@ -43,7 +45,7 @@ acquired. Values reflect the last submitted output block.
 
 Run `make test-audio-normalize` for sanitizer-backed behavioral checks of
 bypass, silence, tiny signals, gain bounds, slew limits, loud transitions, linked
-stereo limiting, and reset behavior. Run `make test-audio-normalize-ffmpeg` for
+multichannel limiting, LFE exclusion, and reset behavior. Run `make test-audio-normalize-ffmpeg` for
 independent FFmpeg checks of K weighting at 100 Hz, 1 kHz, and 10 kHz, target
 convergence, maximum boost, and bypass. The normal UI tests cover the toggle,
 persistence, legacy defaults, and interactions with the Volume control.

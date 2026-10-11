@@ -152,8 +152,8 @@
 - Show HDR10 and HLG channels as HDR, with SDR tone mapping when HDR output is
   not available.
 - Present each field of an interlaced broadcast separately to keep its motion.
-- Play AAC, MP2, AC-3, and E-AC-3 sound; surround is downmixed to stereo,
-  including the dialogue channel.
+- Play AAC, MP2, AC-3, and E-AC-3 sound, with Stereo by default and optional
+  [decoded 5.1 surround](docs/SURROUND_AUDIO.md) for compatible HDMI receivers.
 - Keep the picture in step with the sound: frames are timed against the sound
   being played.
 - Adapt buffering to live HLS timing, and recover from stale segments and

@@ -12,6 +12,8 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
 
 - [ ] **Surround sound to a receiver.** Sending 5.1 sound as it is, instead
   of mixing it down to stereo, when the console's output allows it.
+  [Decoded PCM support is implemented and console-tested](docs/SURROUND_AUDIO.md);
+  physical receiver/speaker verification remains pending.
 - [ ] **Crash reports.** When the app closes by itself, the next launch
   offers to save what happened, to send with a report.
 - [ ] **Choosing the quality.** Picking a lower quality of a channel by hand,

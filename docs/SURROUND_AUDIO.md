@@ -43,4 +43,20 @@ Their private bitstream/HDMI-route mechanisms are not used.
 - G3: physical speaker identification and route changes require a compatible
   receiver and a listener. These are not inferred from port-open success.
 
-Native and physical acceptance remain pending until recorded below.
+G1 passed: all 282 UI sanitizer tests, 33 tooling tests, audio normalization
+checks, multichannel tempo tests, native sink sanitizer tests, lint and focused
+native static analysis.
+
+G2 passed on 2026-10-11: case94, candidate `6342367`, PPSA88307 on idle .30;
+AAC/AC-3/E-AC-3 each ran 12 seconds with PCM6/output8, no fallback or audio
+queue underrun, and normalization enabled. A 10-second AAC stereo control
+reported PCM2/output2. All four runs presented video and audio, reported no
+audio errors, and cleaned up successfully. The title closed and all approved
+services remained reachable. Screenshots confirmed both setting values.
+
+Tested ELF SHA-256:
+`ecc835bce2e94dd2d4a04c5f8e76c798152f05e052c9e050b7c44e0c9d01704b`.
+
+G3 remains untested: the available setup has TV speakers/headphones, without
+a surround receiver. Discrete physical speaker routing and live route changes
+must be verified on compatible hardware. Stereo remains the default.
