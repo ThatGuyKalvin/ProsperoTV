@@ -61,3 +61,48 @@ TEST(ProviderJson, RejectsBrokenListsAndInvalidScalarValues)
         EXPECT_TRUE(reader.Finished());
     }
 }
+
+TEST(ProviderJson, NullableScalarsAndEscapedControlsStayBounded)
+{
+    for (const auto text : {R"("a\nb\tc")", R"("a\u000ab\u0009c")"})
+    {
+        iptv::json::JsonReader reader(text);
+        std::string value;
+        ASSERT_TRUE(reader.StringOrScalar(&value));
+        EXPECT_EQ(value, "a b c");
+    }
+    for (const auto text : {R"("long")", R"("a\u000ab")", R"("a\nb")", "123", "nonsense"})
+    {
+        iptv::json::JsonReader reader(text);
+        std::string value;
+        EXPECT_FALSE(reader.StringOrScalar(&value, 2)) << text;
+    }
+    iptv::json::JsonReader reader(R"([null,"null"])");
+    std::vector<std::string> values;
+    ASSERT_TRUE(iptv::json::ReadArray(&reader,
+                                      [&](auto *item)
+                                      {
+                                          std::string value;
+                                          if (!item->StringOrScalar(&value))
+                                              return false;
+                                          values.push_back(value);
+                                          return true;
+                                      }));
+    EXPECT_EQ(values, (std::vector<std::string>{"", "null"}));
+}
+
+TEST(ProviderJson, OnlyAcceptsACompleteBomAtTheDocumentStart)
+{
+    for (const std::string text : {"\xef", "\xef\xbb", "\xefX[]", " \xef\xbb\xbf[]",
+                                   "\xef\xbb\xbf\xef\xbb\xbf[]", "[]\xef\xbb\xbf"})
+    {
+        iptv::json::ListSplitter splitter;
+        bool accepted = true;
+        for (const char byte : text)
+            accepted =
+                splitter.Feed(std::string_view(&byte, 1), [](auto) { return true; }) && accepted;
+        EXPECT_FALSE(accepted && splitter.complete()) << text;
+        iptv::json::JsonReader reader(text);
+        EXPECT_FALSE(reader.SkipValue() && reader.Finished()) << text;
+    }
+}

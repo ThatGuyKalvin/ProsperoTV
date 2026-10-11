@@ -27,8 +27,10 @@ inline bool AppendUtf8(std::uint32_t codepoint, std::string *output, std::size_t
 {
     if (!output)
         return true;
-    if (codepoint < 0x20u || codepoint > 0x10ffffu ||
-        (codepoint >= 0xd800u && codepoint <= 0xdfffu))
+    // Match the single-character escapes: keep controls out of UI text and URLs.
+    if (codepoint < 0x20u)
+        codepoint = ' ';
+    if (codepoint > 0x10ffffu || (codepoint >= 0xd800u && codepoint <= 0xdfffu))
         return false;
     const std::size_t bytes = codepoint < 0x80u      ? 1u
                               : codepoint < 0x800u   ? 2u
@@ -66,6 +68,8 @@ class JsonReader
   public:
     explicit JsonReader(std::string_view input) : input_(input)
     {
+        if (input_.starts_with("\xef\xbb\xbf"))
+            position_ = 3;
     }
 
     void Whitespace()
@@ -240,8 +244,11 @@ class JsonReader
     {
         if (Peek() == '"')
             return String(output, maximum);
+        const bool null = Peek() == 'n';
         if (!Scalar(output))
             return false;
+        if (null && output)
+            output->clear();
         return !output || output->size() <= maximum;
     }
 
@@ -370,6 +377,18 @@ class ListSplitter
         for (std::size_t index = 0; index < bytes.size(); ++index)
         {
             const char value = bytes[index];
+            // Providers sometimes prefix JSON with a BOM, even across network chunks.
+            if (prefix_bytes_ < 3)
+            {
+                constexpr std::string_view bom = "\xef\xbb\xbf";
+                if (prefix_bytes_ != 0 || value == bom[0])
+                {
+                    if (value != bom[prefix_bytes_++])
+                        return Fail();
+                    continue;
+                }
+                prefix_bytes_ = 3;
+            }
             switch (phase_)
             {
             case Phase::start:
@@ -570,6 +589,7 @@ class ListSplitter
         return false;
     }
 
+    std::size_t prefix_bytes_ = 0;
     Phase phase_ = Phase::start;
     bool failed_ = false;
     bool found_ = false;
