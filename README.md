@@ -114,8 +114,8 @@
 
 ### Movies and series
 
-- Browse an Xtream account's movies, shows, seasons, and episodes in
-  **On demand**.
+- Browse movies, shows, seasons, and episodes from an Xtream account or a
+  classified M3U playlist in **On demand**, next to Live TV.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
 
 ### While watching
@@ -209,7 +209,7 @@ at 3840×2160. Codec and renderer details are documented in
 | Circle | Back, dismiss, or clear active filters |
 | Square | Add or remove a favorite |
 | Triangle | Open advanced search and filters |
-| L1 / R1 | Switch between Live TV, Favorites, Sources, On demand, Settings, and About |
+| L1 / R1 | Switch between Home, Live TV, On demand, Favorites, Sources, Settings, and About |
 | L2 / R2 | Previous or next page; hold to keep turning |
 | Triangle on a configurable source | Edit the custom M3U URL or Xtream account |
 | Square in Sources | Cycle daily, weekly and manual refresh |

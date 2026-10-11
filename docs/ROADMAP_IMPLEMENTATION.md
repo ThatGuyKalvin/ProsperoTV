@@ -77,7 +77,8 @@ the last good cache. External XML entities are not expanded.
 
 ## On demand
 
-Select an Xtream account, then open On demand. Movies and TV shows have
+Select an Xtream account or a classified M3U playlist, then open On demand
+beside Live TV. Movies and TV shows have
 provider categories, including subcategories and the source's visibility
 choices. Shows open seasons and numerically ordered episodes. Triangle searches
 the current list; Options refreshes it. Lists and episode catalogues have
@@ -89,8 +90,9 @@ still decoded by the native backend; supported audio uses the existing audio
 pipeline. The later audio/subtitle work adds track selection and supported HLS
 renditions; its limits and validation are recorded in the roadmap status. DRM,
 encrypted HLS and unsupported video codecs remain outside this implementation.
-The On demand provider API currently supports Xtream, while MAC portals provide
-live channels.
+The On demand provider API supports Xtream. Extended M3U playlists also supply
+movies and episodes when their entries identify the media type; these use the
+playlist cache and each entry's playback headers. MAC portals provide live channels.
 
 ## Original source/browsing/guide validation
 
