@@ -4,6 +4,7 @@
 #include "tv/recording.hpp"
 #include "tv/model.hpp"
 #include "host_platform.hpp"
+#include "iptv_store.h"
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <fstream>
@@ -79,7 +80,9 @@ TEST_F(RecordingTest, CancelAndUnplugDoNotClaimSuccess)
 }
 TEST_F(RecordingTest, FileWriteFailureKeepsPartialAndReportsFailure)
 {
-    struct rlimit previous{};
+    struct rlimit previous
+    {
+    };
     ASSERT_EQ(getrlimit(RLIMIT_FSIZE, &previous), 0);
     struct rlimit limit = previous;
     limit.rlim_cur = 1024;
@@ -183,6 +186,49 @@ TEST_F(RecordingTest, LockedProfileDoesNotShowOrRunSavedProgrammeJobs)
     model.poll_programme_jobs();
     EXPECT_TRUE(model.programme_jobs().empty());
     EXPECT_TRUE(model.programme_notice().empty());
+    model.close();
+}
+TEST_F(RecordingTest, ChangedInactiveSourceCannotRecordItsOldCachedAccount)
+{
+    const auto catalog =
+        iptv::ParseExtendedM3u("#EXTM3U\n#EXTINF:-1,Old channel\nhttps://old.invalid/live.ts\n",
+                               iptv::CustomSourceId("https://old.invalid/list.m3u"));
+    ASSERT_EQ(iptv::SaveCatalog(dir + "/prosperotv-source-4.sqlite3", catalog),
+              iptv::StoreStatus::ok);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource source{
+            4,  1,  "Changed playlist",          "https://new.invalid/list.m3u", {},
+            {}, {}, ptv::RefreshSchedule::manual};
+        ASSERT_TRUE(library.save_source(&source));
+        ptv::ProgrammeJobs jobs;
+        ASSERT_TRUE(jobs.open(dir + "/prosperotv-programmes.sqlite3"));
+        ptv::ProgrammeJob job;
+        job.source = 4;
+        job.channel = catalog[0].id;
+        job.title = "Old programme";
+        job.start = 1000;
+        job.end = 1100;
+        job.recording = true;
+        job.drive = dir + "/usb0";
+        ASSERT_TRUE(jobs.save(job));
+        job.source = 99;
+        job.recording = false;
+        ASSERT_TRUE(jobs.save(job));
+    }
+    host::set_network(false, "");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.poll_programme_jobs();
+    const auto jobs = model.programme_jobs();
+    ASSERT_EQ(jobs.size(), 2u);
+    EXPECT_EQ(jobs[0].state, 3);
+    EXPECT_EQ(jobs[0].result, "The source changed since this programme was scheduled");
+    EXPECT_EQ(jobs[1].state, 3);
+    EXPECT_EQ(jobs[1].result, "This source was removed");
+    EXPECT_TRUE(model.programme_notice().empty());
+    EXPECT_TRUE(fs::is_empty(dir + "/usb0"));
     model.close();
 }
 } // namespace
