@@ -49,6 +49,8 @@ struct XtreamCredentials
 struct XtreamAuth
 {
     bool authenticated = false;
+    std::int64_t expires_unix = -1;    // -1: unknown, 0: no expiry supplied.
+    std::int64_t max_connections = -1; // -1: unknown, 0: provider reports unlimited.
     std::string status;
     std::string message;
 };

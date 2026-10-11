@@ -30,6 +30,15 @@ enum class RefreshSchedule : int
 bool refresh_due(RefreshSchedule schedule, std::uint64_t saved, std::uint64_t now);
 const char *schedule_name(RefreshSchedule schedule);
 
+struct AccountInfo
+{
+    std::int64_t expires_unix = -1;
+    std::int64_t max_connections = -1;
+    std::int64_t checked_unix = 0;
+};
+// Positive: days remaining (rounded up) within one week, -1: expired, 0: no warning.
+int account_expiry_notice(const AccountInfo &info, std::uint64_t now);
+
 // IDs 1..3 are the original built-in, playlist and Xtream source slots.
 // Subsequent records allow any number of playlists and accounts.
 struct SavedSource
@@ -42,6 +51,7 @@ struct SavedSource
     std::string password;
     std::string mac;
     RefreshSchedule schedule = RefreshSchedule::daily;
+    AccountInfo account{};
 };
 bool valid_source(const SavedSource &source);
 
@@ -71,6 +81,7 @@ class Library
     std::vector<SavedSource> sources() const;
     bool save_source(SavedSource *source);
     bool remove_source(std::int64_t id);
+    bool save_account_info(std::int64_t source, const AccountInfo &info);
     std::int64_t selected_source() const;
     bool select_source(std::int64_t id);
     bool observe_channels(std::int64_t source, const iptv::Catalog &catalog, std::int64_t now);

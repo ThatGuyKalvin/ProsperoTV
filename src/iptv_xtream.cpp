@@ -355,25 +355,50 @@ XtreamStatus ParseXtreamAuth(std::string_view json, XtreamAuth *auth)
     JsonReader reader(json);
     bool found_user = false;
     std::string authenticated;
-    const bool valid =
-        ReadObject(&reader,
-                   [&](const std::string &key, JsonReader *value)
-                   {
-                       if (key != "user_info")
-                           return value->SkipValue();
-                       found_user = true;
-                       return ReadObject(value,
-                                         [&](const std::string &field, JsonReader *entry)
-                                         {
-                                             if (field == "auth")
-                                                 return entry->StringOrScalar(&authenticated, 16u);
-                                             if (field == "status")
-                                                 return entry->StringOrScalar(&auth->status, 64u);
-                                             if (field == "message")
-                                                 return entry->StringOrScalar(&auth->message, 256u);
-                                             return entry->SkipValue();
-                                         });
-                   });
+    const auto optional_number = [](JsonReader *entry, std::int64_t *out, std::int64_t maximum)
+    {
+        auto copy = *entry;
+        std::string text;
+        if (!copy.StringOrScalar(&text, 32u))
+            return entry->SkipValue();
+        *entry = copy;
+        std::int64_t value = 0;
+        if (text.empty())
+            return true;
+        for (const auto c : text)
+        {
+            if (c < '0' || c > '9' || value > (maximum - (c - '0')) / 10)
+                return true;
+            value = value * 10 + c - '0';
+        }
+        if (value <= maximum)
+            *out = value;
+        return true;
+    };
+    const bool valid = ReadObject(
+        &reader,
+        [&](const std::string &key, JsonReader *value)
+        {
+            if (key != "user_info")
+                return value->SkipValue();
+            found_user = true;
+            return ReadObject(
+                value,
+                [&](const std::string &field, JsonReader *entry)
+                {
+                    if (field == "auth")
+                        return entry->StringOrScalar(&authenticated, 16u);
+                    if (field == "exp_date")
+                        return optional_number(entry, &auth->expires_unix, INT64_C(253402300799));
+                    if (field == "max_connections")
+                        return optional_number(entry, &auth->max_connections, 1000000);
+                    if (field == "status")
+                        return entry->StringOrScalar(&auth->status, 64u);
+                    if (field == "message")
+                        return entry->StringOrScalar(&auth->message, 256u);
+                    return entry->SkipValue();
+                });
+        });
     if (!valid || !reader.Finished() || !found_user)
         return XtreamStatus::malformed_json;
     auth->authenticated = authenticated == "1" || EqualsCi(authenticated, "true");

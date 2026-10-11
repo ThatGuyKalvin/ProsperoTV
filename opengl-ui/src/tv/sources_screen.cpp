@@ -6,8 +6,10 @@
 #include "tv/sources_screen.hpp"
 #include "tv/draw.hpp"
 #include "tv/stream_sniff.hpp"
+#include "tv/platform.hpp"
 
 #include <algorithm>
+#include <ctime>
 
 namespace ptv
 {
@@ -15,6 +17,20 @@ namespace
 {
 constexpr Rect kList{kMargin, 250, 1010, 670};
 constexpr Rect kPanel{1144, 250, kWidth - kMargin - 1144, 640};
+
+std::string account_date(std::int64_t stamp)
+{
+    if (stamp < 0)
+        return tr("Not supplied");
+    if (stamp == 0)
+        return tr("No expiry reported");
+    const auto seconds = static_cast<std::time_t>(stamp);
+    char text[32]{};
+    const auto *utc = std::gmtime(&seconds);
+    if (utc && std::strftime(text, sizeof(text), "%Y-%m-%d UTC", utc))
+        return text;
+    return tr("Not supplied");
+}
 
 const char *source_title(const SavedSource &source)
 {
@@ -57,6 +73,12 @@ void SourcesScreen::sync()
         row.subtitle = source.url.empty() && source.kind != 0 ? tr("Press Cross to set up")
                                                               : tr(schedule_name(source.schedule));
         row.badge = source.id == model.selected_source_id() ? tr("In use") : "";
+        if (source.kind == 2)
+        {
+            const auto days = account_expiry_notice(source.account, platform::unix_time());
+            if (days)
+                row.badge = days < 0 ? tr("Expired") : tr("Expires soon");
+        }
         rows.push_back(std::move(row));
         ids_.push_back(source.id);
     }
@@ -174,10 +196,38 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     ui::text(draw, fonts.semibold,
              tr("Refresh: ") + std::string(tr(schedule_name(source->schedule))), left, 510, 26,
              theme.text);
-    ui::paragraph(draw, fonts.regular,
-                  tr("Square changes the schedule. A saved list opens immediately; a download runs "
-                     "only when due or when requested."),
-                  left, 563, 24, width, 34, theme.text_muted, 4);
+    if (source->kind == 2)
+    {
+        const auto &info = source->account;
+        const auto line = [&](const std::string &text, float y)
+        {
+            ui::text(draw, fonts.regular, fonts.regular.font->fit(text, 22, width), left, y, 22,
+                     theme.text_muted);
+        };
+        line(tr("Expires: ") + account_date(info.expires_unix), 563);
+        line(tr("Connection limit: ") + (info.max_connections < 0 ? std::string(tr("Not supplied"))
+                                         : info.max_connections == 0
+                                             ? std::string(tr("No limit reported"))
+                                             : std::to_string(info.max_connections)),
+             607);
+        const int days = account_expiry_notice(info, platform::unix_time());
+        if (days)
+            line(days < 0 ? tr("Account expiry date has passed")
+                          : tr("Account expires within a week"),
+                 651);
+        else if (!info.checked_unix)
+            line(tr("Details are checked on the next refresh."), 651);
+        if (info.checked_unix)
+            line(tr("Last checked: ") + account_date(info.checked_unix), 695);
+    }
+    else
+    {
+        ui::paragraph(
+            draw, fonts.regular,
+            tr("Square changes the schedule. A saved list opens immediately; a download runs "
+               "only when due or when requested."),
+            left, 563, 24, width, 34, theme.text_muted, 4);
+    }
     if (id == model.selected_source_id())
     {
         ui::text(draw, fonts.semibold, group_digits(model.channel_count()) + tr(" channels"), left,

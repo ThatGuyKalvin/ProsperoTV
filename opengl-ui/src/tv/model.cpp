@@ -304,6 +304,7 @@ bool Model::open()
     refresh_done_.store(false, std::memory_order_relaxed);
     stop_requested_.store(false, std::memory_order_relaxed);
     pending_account_ = iptv::XtreamStatus::ok;
+    pending_account_info_ = {};
     pending_account_message_.clear();
     play_requested_ = false;
     play_request_ = {};
@@ -446,7 +447,8 @@ void Model::poll()
     if (!vod_.busy() && !vod_.requested() && !search_busy() && !search_pending())
         poll_guide();
     const auto now = platform::unix_time();
-    if (catalog_loaded_ && !refreshing() && !vod_.busy() && !searching_ && now >= next_schedule_check_)
+    if (catalog_loaded_ && !refreshing() && !vod_.busy() && !searching_ &&
+        now >= next_schedule_check_)
     {
         // A failed scheduled refresh retries in an hour, not on every frame.
         next_schedule_check_ = now + 3600;
@@ -1345,6 +1347,7 @@ void Model::refresh()
     const bool custom = active_source_ == iptv::SourceKind::Custom;
     const bool account = active_source_ == iptv::SourceKind::Xtream;
     refresh_source_ = active_source_;
+    refresh_saved_source_id_ = selected_source_id_;
     refresh_url_ = custom ? custom_url_ : account ? std::string() : std::string(kCatalogUrl);
     refresh_cache_path_ = cache_path(active_source_);
     refresh_source_id_ = source_id(active_source_);
@@ -1359,6 +1362,7 @@ void Model::refresh()
     refresh_count_.store(0, std::memory_order_relaxed);
     pending_saved_ = false;
     pending_account_ = iptv::XtreamStatus::ok;
+    pending_account_info_ = {};
     pending_account_message_.clear();
     set_status(tr("Updating"), Level::busy);
     set_source_text(std::string(tr("Downloading ")) + source_name(active_source_),
@@ -1410,6 +1414,7 @@ void Model::run_refresh()
     pending_report_ = {};
     pending_saved_ = false;
     pending_account_ = iptv::XtreamStatus::ok;
+    pending_account_info_ = {};
     pending_account_stage_.clear();
     pending_account_message_.clear();
     pending_network_ = platform::network_init();
@@ -1464,6 +1469,11 @@ void Model::run_refresh()
             {
                 pending_account_ = iptv::ParseXtreamAuth(
                     std::string_view(response.data(), pending_fetch_.bytes), &auth);
+                if (auth.authenticated &&
+                    (pending_account_ == iptv::XtreamStatus::ok ||
+                     pending_account_ == iptv::XtreamStatus::account_inactive))
+                    pending_account_info_ = {auth.expires_unix, auth.max_connections,
+                                             static_cast<std::int64_t>(platform::unix_time())};
                 if (pending_account_ != iptv::XtreamStatus::ok)
                     pending_account_message_ = auth.message;
             }
@@ -1633,6 +1643,24 @@ void Model::consume_refresh()
     const bool account = refresh_source_ == iptv::SourceKind::Xtream;
     if (account)
         save_account_receipt();
+    const auto *refreshed = saved_source(refresh_saved_source_id_);
+    const bool account_info_ready = account && pending_account_info_.checked_unix && refreshed &&
+                                    refreshed->kind == 2 &&
+                                    refreshed->url == refresh_account_.server_url &&
+                                    refreshed->username == refresh_account_.username &&
+                                    refreshed->password == refresh_account_.password;
+    if (account_info_ready)
+    {
+        const bool saved =
+            library_.save_account_info(refresh_saved_source_id_, pending_account_info_);
+        if (saved)
+            sources_ = library_.sources();
+        else
+            for (auto &source : sources_)
+                if (source.id == refresh_saved_source_id_)
+                    source.account = pending_account_info_;
+        ++revision_;
+    }
     const bool success = pending_network_ == iptv::http::Status::ok &&
                          pending_fetch_.status == iptv::http::Status::ok &&
                          (!account || pending_account_ == iptv::XtreamStatus::ok) &&
@@ -1703,6 +1731,8 @@ void Model::consume_refresh()
             catalog_error_ = problem;
         }
     }
+    if (account_info_ready)
+        warn_account_expiry();
     pending_catalog_ = {};
     pending_index_.clear();
     refresh_count_.store(0, std::memory_order_relaxed);
@@ -1714,7 +1744,7 @@ void Model::consume_refresh()
 }
 
 std::vector<Model::SearchResult> Model::search_results(std::string_view query,
-                                                     bool *truncated) const
+                                                       bool *truncated) const
 {
     std::vector<SearchResult> rows;
     if (truncated)

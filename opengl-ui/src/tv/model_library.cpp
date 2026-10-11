@@ -53,6 +53,7 @@ void Model::load_library()
         select_source_record(*source);
     else
         selected_source_id_ = 1;
+    warn_account_expiry();
 }
 
 const SavedSource *Model::saved_source(std::int64_t id) const
@@ -106,6 +107,19 @@ bool Model::refresh_needed() const
     return !catalog_loaded_ || refresh_due(schedule_, saved_unix_, platform::unix_time());
 }
 
+void Model::warn_account_expiry()
+{
+    const auto *source = saved_source(selected_source_id_);
+    if (!source || source->kind != 2)
+        return;
+    const int days = account_expiry_notice(source->account, platform::unix_time());
+    if (days)
+        notify(Level::warning,
+               days < 0 ? tr("Account expiry date has passed")
+                        : tr("Account expires within a week"),
+               source->name + ". " + tr("Check the account details in Sources."));
+}
+
 void Model::use_saved_source(std::int64_t id)
 {
     if (refreshing())
@@ -142,6 +156,7 @@ void Model::use_saved_source(std::int64_t id)
         refresh();
     else
         set_status(tr("Saved copy"), Level::ready);
+    warn_account_expiry();
 }
 
 void Model::add_source(iptv::SourceKind kind)
