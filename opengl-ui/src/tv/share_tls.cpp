@@ -123,9 +123,8 @@ bool local_address(const std::string &address, sockaddr_in &peer)
     if (inet_pton(AF_INET, address.c_str(), &peer.sin_addr) != 1)
         return false;
     const auto ip = ntohl(peer.sin_addr.s_addr);
-    return (ip >> 24 == 10 || ip >> 24 == 127 || ip >> 20 == 0xac1 || ip >> 16 == 0xc0a8 ||
-            ip >> 16 == 0xa9fe) &&
-           (ip & 255) != 255 && (ip & 255) != 0;
+    return ip >> 24 == 10 || ip >> 24 == 127 || ip >> 20 == 0xac1 || ip >> 16 == 0xc0a8 ||
+           ip >> 16 == 0xa9fe;
 }
 } // namespace
 
