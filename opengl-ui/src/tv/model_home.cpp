@@ -92,7 +92,62 @@ bool Model::home_vod_allowed(const ResumeItem &item) const
         if (const auto at = catalog->Find(item.channel.id);
             at != iptv::Catalog::npos && !search_vod_allowed((*catalog)[at]))
             return false;
+    for (const auto *shows : {&vod_, &search_shows_})
+        if (!item.series.empty() && shows->kind() == VodKind::series)
+            for (const auto parent : shows->catalog())
+                if (parent.source_id == item.channel.source_id && parent.tvg_id == item.series &&
+                    (hidden_channels_.contains(std::string(parent.id)) ||
+                     !search_vod_allowed(parent)))
+                    return false;
     return true;
+}
+bool Model::queue_home_vod(ResumeItem item)
+{
+    const auto inherit_policy = [&](const iptv::ChannelView &current)
+    {
+        item.channel.adult = item.channel.adult || current.adult;
+        const auto add_group = [&](std::string_view group)
+        {
+            auto &groups = item.channel.alternate_group_titles;
+            if (!group.empty() && group != item.channel.group_title &&
+                std::find(groups.begin(), groups.end(), group) == groups.end())
+                groups.emplace_back(group);
+        };
+        add_group(current.group_title);
+        for (const auto group : current.alternate_group_titles)
+            add_group(group);
+    };
+    bool stream_updated = false;
+    const iptv::Catalog *catalogs[] = {&home_series_.catalog(), &vod_.catalog(),
+                                       &search_movies_.catalog(), &search_shows_.catalog(),
+                                       &catalog_};
+    for (const auto *catalog : catalogs)
+        if (const auto at = catalog->Find(item.channel.id); at != iptv::Catalog::npos)
+        {
+            const auto current = (*catalog)[at];
+            if (current.source_id != item.channel.source_id)
+                continue;
+            inherit_policy(current);
+            if (!stream_updated)
+            {
+                const auto copy = current.Copy();
+                item.channel.url = copy.url;
+                item.channel.alternate_urls = copy.alternate_urls;
+                item.channel.http_user_agent = copy.http_user_agent;
+                item.channel.http_referrer = copy.http_referrer;
+                stream_updated = true;
+            }
+        }
+    for (const auto *shows : {&vod_, &search_shows_})
+        if (!item.series.empty() && shows->kind() == VodKind::series)
+            for (const auto parent : shows->catalog())
+                if (parent.source_id == item.channel.source_id && parent.tvg_id == item.series)
+                    inherit_policy(parent);
+    if (item.channel.alternate_group_titles.size() > 4 || !home_vod_allowed(item))
+        return false;
+    if (!item.series.empty())
+        home_playback_ = item;
+    return queue_vod(item.channel, item.series, false);
 }
 bool Model::play_home(std::string_view id, bool on_demand)
 {
@@ -128,7 +183,7 @@ bool Model::play_home(std::string_view id, bool on_demand)
             }
         }
         // The snapshot already includes its show's policy; leave the VOD browser intact.
-        return queue_vod(item.channel, item.series, false);
+        return queue_home_vod(item);
     }
     return false;
 }
@@ -174,7 +229,7 @@ void Model::poll_home_playback()
         notify(
             Level::warning, tr("Next episode unavailable"),
             tr("Starting your saved episode. Resume from Home again to retry the episode list."));
-    queue_vod(home_playback_.channel, home_playback_.series, false);
+    queue_home_vod(home_playback_);
 }
 bool Model::next_home_episode(const PlayRequest &request)
 {
@@ -213,6 +268,6 @@ bool Model::next_home_episode(const PlayRequest &request)
     if (!home_vod_allowed(item))
         return false;
     home_playback_ = std::move(item);
-    return queue_vod(home_playback_.channel, home_playback_.series, false);
+    return queue_home_vod(home_playback_);
 }
 } // namespace ptv
