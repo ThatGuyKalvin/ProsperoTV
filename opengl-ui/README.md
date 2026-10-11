@@ -38,10 +38,12 @@ TV_DEBUG_TRACE=1 ps5/assemble.sh          # the app with its diagnostic log alwa
 
 ## The diagnostic log
 
-Settings has a switch, **Diagnostic log**, off by default. While it is on the
-app appends what it does to `/data/prosperotv/logs/debug-trace.txt` (the
-title's `/download0/prosperotv/` without filesystem access), each line with
-the seconds since the app started:
+Settings has a switch, **Diagnostic log**, off by default, and displays the
+current log's full path. While it is on the app appends what it does to
+`debug-trace.txt` in the selected profile's log directory, each line with
+the seconds since the app started. Use the path shown in Settings: it depends
+on the active profile and filesystem access, and disposable test builds can
+use a different directory. The log includes:
 
 - what the viewer pressed and where the interface was, every tab, list and
   search, every notice and failure dialog, settings as they change;
