@@ -176,7 +176,12 @@ struct Subtitles::State
         if (!selected)
             return true;
         const auto *entry = track();
-        const auto *codec = entry ? avcodec_find_decoder(codec_id(entry->info.codec)) : nullptr;
+        if (!entry)
+        {
+            error = SubtitleError::unavailable;
+            return false;
+        }
+        const auto *codec = avcodec_find_decoder(codec_id(entry->info.codec));
         if (codec)
             decoder = avcodec_alloc_context3(codec);
         if (!decoder)
