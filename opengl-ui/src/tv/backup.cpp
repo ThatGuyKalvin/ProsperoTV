@@ -26,7 +26,7 @@ constexpr std::array kNames = {"prosperotv-interface-v1.txt", "prosperotv-librar
                                "iptv-active-source-v1.txt",   "iptv-custom-source-v1.txt",
                                "prosperotv-xtream-v1.txt",    "iptv-favorites-v1.bin",
                                "iptv-history-v1.bin",         "prosperotv-playback-history.sqlite3",
-                               "prosperotv-parental-v1.txt"};
+                               "prosperotv-parental-v1.txt",  "prosperotv-programmes.sqlite3"};
 struct File
 {
     bool present = false;
@@ -36,9 +36,7 @@ using Files = std::array<File, kNames.size()>;
 
 bool regular(const std::string &path, std::size_t limit, bool &exists)
 {
-    struct stat status
-    {
-    };
+    struct stat status{};
     exists = false;
     if (lstat(path.c_str(), &status) != 0)
         return errno == ENOENT;
@@ -140,7 +138,7 @@ bool write_archive(const std::string &path, const Files &files)
         sqlite3_exec(
             db,
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA application_id=1347704386;"
-            "PRAGMA user_version=1; CREATE TABLE files(name TEXT PRIMARY KEY,present INTEGER,data "
+            "PRAGMA user_version=2; CREATE TABLE files(name TEXT PRIMARY KEY,present INTEGER,data "
             "BLOB,crc INTEGER); BEGIN;",
             nullptr, nullptr, nullptr) == SQLITE_OK;
     sqlite3_stmt *row = nullptr;
@@ -193,7 +191,10 @@ bool read_archive(const std::string &path, Files &files)
     sqlite3_finalize(row);
     row = nullptr;
     ok = ok && sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &row, nullptr) == SQLITE_OK &&
-         sqlite3_step(row) == SQLITE_ROW && sqlite3_column_int(row, 0) == 1;
+         sqlite3_step(row) == SQLITE_ROW;
+    const int version = ok ? sqlite3_column_int(row, 0) : 0;
+    ok = ok && (version == 1 || version == 2);
+    const std::size_t expected_files = version == 1 ? 9 : kNames.size();
     sqlite3_finalize(row);
     row = nullptr;
     ok = ok && sqlite3_prepare_v2(db, "SELECT name,present,data,crc FROM files", -1, &row,
@@ -207,7 +208,7 @@ bool read_archive(const std::string &path, Files &files)
         std::size_t index = 0;
         while (index < kNames.size() && (!name || std::strcmp(name, kNames[index]) != 0))
             ++index;
-        if (index == kNames.size() || seen[index] || sqlite3_column_type(row, 0) != SQLITE_TEXT ||
+        if (index >= expected_files || seen[index] || sqlite3_column_type(row, 0) != SQLITE_TEXT ||
             sqlite3_column_bytes(row, 0) != static_cast<int>(std::strlen(kNames[index])) ||
             sqlite3_column_type(row, 1) != SQLITE_INTEGER ||
             sqlite3_column_type(row, 2) != SQLITE_BLOB ||
@@ -240,7 +241,7 @@ bool read_archive(const std::string &path, Files &files)
     }
     sqlite3_finalize(row);
     sqlite3_close(db);
-    return ok && step == SQLITE_DONE && count == kNames.size();
+    return ok && step == SQLITE_DONE && count == expected_files;
 }
 } // namespace
 
@@ -252,17 +253,13 @@ std::vector<std::string> usb_drives(const std::string &mount_root)
     // is plugged in. With nothing mounted a folder belongs to the same
     // filesystem as the one that holds it: offering it as a drive would put
     // a "backup" on the console's own storage and call it saved.
-    struct stat parent
-    {
-    };
+    struct stat parent{};
     const bool parent_known = stat(mount_root.empty() ? "/" : mount_root.c_str(), &parent) == 0;
 #endif
     for (unsigned i = 0; i < 8; ++i)
     {
         const auto path = mount_root + "/usb" + std::to_string(i);
-        struct stat status
-        {
-        };
+        struct stat status{};
         // The actual operation checks read/write access and reports failures.
         // access() is not a reliable availability probe in the console sandbox.
         if (lstat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))

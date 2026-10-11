@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/backup.hpp"
+#include "tv/recording.hpp"
 #include "tv/library.hpp"
 #include "tv/settings.hpp"
 #include <gtest/gtest.h>
@@ -184,3 +185,31 @@ TEST_F(BackupTest, FindsMultipleUsbMountsAndSkipsLinks)
     EXPECT_EQ(ptv::usb_drives(root), (std::vector<std::string>{drive, root + "/usb2"}));
 }
 } // namespace
+
+TEST_F(BackupTest, ProgrammeJobsRoundTripAndVersionOneRestoresClearNewerSchedules)
+{
+    const auto jobs_path = config + "/prosperotv-programmes.sqlite3";
+    ptv::ProgrammeJobs jobs;
+    ASSERT_TRUE(jobs.open(jobs_path));
+    ptv::ProgrammeJob job;
+    job.source = 1;
+    job.channel = "channel-1";
+    job.title = "Saved reminder";
+    job.start = 100;
+    job.end = 200;
+    ASSERT_TRUE(jobs.save(job));
+    ASSERT_TRUE(jobs.close());
+    ASSERT_TRUE(ptv::backup_settings(config, archive, error)) << error;
+    std::filesystem::remove(jobs_path);
+    ASSERT_TRUE(ptv::restore_settings(config, archive, error)) << error;
+    ASSERT_TRUE(jobs.open(jobs_path));
+    ASSERT_EQ(jobs.list().size(), 1u);
+    EXPECT_EQ(jobs.list()[0].title, "Saved reminder");
+    ASSERT_TRUE(jobs.close());
+    edit_archive(
+        "DELETE FROM files WHERE name='prosperotv-programmes.sqlite3'; PRAGMA user_version=1;");
+    ASSERT_TRUE(ptv::restore_settings(config, archive, error)) << error;
+    EXPECT_FALSE(std::filesystem::exists(jobs_path));
+    ASSERT_TRUE(jobs.open(jobs_path));
+    EXPECT_TRUE(jobs.list().empty());
+}
