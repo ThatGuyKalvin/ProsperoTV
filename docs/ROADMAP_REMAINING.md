@@ -838,3 +838,24 @@ served from a PC on the same network:
 Still open, each needing a person or equipment: the system keyboard itself
 (the script answers in its place), HDR on a display, and a second console
 user.
+
+## Appearance and accessibility implementation (October 11)
+
+Settings now persists Dusk, Ocean and Forest palettes, 25% larger text,
+high contrast, and an Off / 1 / 5 / 10 minute screensaver. Themes recolor
+menu geometry without recoloring logos or video. High contrast uses black
+panels and opaque white text/outlines. Larger text loads scaled font metrics
+when the next menu opens, including East Asian fallback fonts and playback
+controls. Long footer hints wrap into two rows.
+
+The screensaver blanks idle menus and paused SDR/Main10 video; active
+multiview stays visible and idle live preview stops. The first button wakes
+without activating the underlying control. VOD pause state must be wired
+through PlaybackOsd::set_paused by the VOD media-state integration.
+
+Host validation covers settings navigation/persistence, glyph measurement
+and rendering scale, palette/image preservation, glass geometry, menu wake
+consumption and paused SDR/Main10 planes. Native visual and timer checks
+still require an idle console. No spoken-focus switch was added: the pinned
+homebrew SDK exposes no usable text-to-speech API; the system screen reader
+does not establish an app-callable interface for this custom renderer.

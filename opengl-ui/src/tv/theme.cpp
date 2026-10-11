@@ -3,9 +3,117 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tv/theme.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 
 namespace ptv
 {
+
+bool load_menu_font(std::string data, gfx::Font &font, bool larger)
+{
+    if (larger && data.size() >= sizeof(gfx::font_format::Header))
+    {
+        gfx::font_format::Header header;
+        std::memcpy(&header, data.data(), sizeof(header));
+        if (!std::isfinite(header.pixel_size) || header.pixel_size <= 0)
+            return false;
+        header.pixel_size /= 1.25f;
+        std::memcpy(data.data(), &header, sizeof(header));
+    }
+    return font.load(data);
+}
+
+void apply_appearance(Frame &frame, const Settings &settings)
+{
+    if (!settings.theme && !settings.high_contrast)
+        return;
+    const auto recolor = [&](float *c)
+    {
+        if (settings.high_contrast)
+        {
+            c[0] = c[1] = c[2] = 1;
+            if (c[3] > 0)
+                c[3] = 1;
+        }
+        else if (settings.theme == 1)
+            std::swap(c[0], c[2]);
+        else if (settings.theme == 2)
+            std::swap(c[0], c[1]);
+    };
+    for (auto *list : {&frame.scene, &frame.overlay})
+    {
+        // DrawList exposes read-only inspection; this frame is ours and mutable.
+        auto &instances = const_cast<std::vector<gfx::Instance> &>(list->instances());
+        for (const auto &run : list->runs())
+        {
+            if (run.mesh)
+                continue;
+            for (unsigned i = run.first; i < run.first + run.count; ++i)
+            {
+                auto &item = instances[i];
+                auto shape = static_cast<gfx::Shape>(static_cast<unsigned>(item.params[3]));
+                if (shape == gfx::Shape::image)
+                {
+                    if (!settings.high_contrast || run.texture != frame.glass_texture)
+                        continue;
+                    shape = gfx::Shape::rounded_rect;
+                    item.params[3] = static_cast<float>(shape);
+                    // Image UV coordinates would rotate a rectangle in the batch shader.
+                    std::fill(std::begin(item.extra), std::end(item.extra), 0.0f);
+                    item.color_top[0] = item.color_top[1] = item.color_top[2] = 0;
+                    item.color_bottom[0] = item.color_bottom[1] = item.color_bottom[2] = 0;
+                    item.color_top[3] = item.color_bottom[3] = 1;
+                }
+                if (settings.high_contrast && shape == gfx::Shape::shadow)
+                {
+                    item.color_top[3] = item.color_bottom[3] = 0;
+                    continue;
+                }
+                recolor(item.color_top);
+                recolor(item.color_bottom);
+                recolor(item.border_color);
+                if (settings.high_contrast &&
+                    (shape == gfx::Shape::rounded_rect || shape == gfx::Shape::chamfer) &&
+                    item.rect[2] > 6 && item.rect[3] > 6)
+                {
+                    // Translucent white cards must become black, not hide white labels.
+                    item.color_top[0] = item.color_top[1] = item.color_top[2] = 0;
+                    item.color_bottom[0] = item.color_bottom[1] = item.color_bottom[2] = 0;
+                    if (item.color_top[3] > 0 || item.color_bottom[3] > 0)
+                    {
+                        item.params[1] = std::max(item.params[1], 1.5f);
+                        item.border_color[0] = item.border_color[1] = item.border_color[2] =
+                            item.border_color[3] = 1;
+                    }
+                }
+            }
+        }
+        for (auto &vertex : const_cast<std::vector<gfx::MeshVertex> &>(list->mesh_vertices()))
+        {
+            float color[] = {vertex.r, vertex.g, vertex.b, vertex.a};
+            recolor(color);
+            vertex.r = color[0];
+            vertex.g = color[1];
+            vertex.b = color[2];
+            vertex.a = color[3];
+        }
+    }
+    if (settings.high_contrast)
+    {
+        frame.backdrop.mode = gfx::BackdropMode::gradient;
+        for (auto &color : frame.backdrop.colors)
+            color = Color::rgb(0);
+        frame.glass = false;
+    }
+    else
+        for (auto &color : frame.backdrop.colors)
+        {
+            float c[] = {color.r, color.g, color.b, color.a};
+            recolor(c);
+            color = {c[0], c[1], c[2], c[3]};
+        }
+}
 
 ui::Theme dusk()
 {

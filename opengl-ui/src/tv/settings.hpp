@@ -18,6 +18,10 @@ struct Settings
         kFullHd = 1, // always 1080p
     };
 
+    int theme = 0; // 0 Dusk, 1 Ocean, 2 Forest
+    bool larger_text = false;
+    bool high_contrast = false;
+    int screensaver_minutes = 5; // 0 disables; supported delays 1, 5, 10
     bool reduced_motion = false;
     bool sounds = true;
     bool hide_failed = false;

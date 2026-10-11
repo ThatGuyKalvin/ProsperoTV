@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/i18n.hpp"
 #include "tv/playback_osd.hpp"
+#include "tv/theme.hpp"
 #include "tv/draw.hpp"
 #include "tv/platform.hpp"
 #include "core/save_file.hpp"
@@ -112,9 +113,9 @@ bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, uns
     return true;
 }
 
-PlaybackOsd::PlaybackOsd(Model &model, const PlayRequest &request)
-    : model_(model), current_id_(request.channel_id), title_(request.channel_name),
-      live_(request.record_channel_result)
+PlaybackOsd::PlaybackOsd(Model &model, const PlayRequest &request, const Settings &settings)
+    : model_(model), settings_(settings), current_id_(request.channel_id),
+      title_(request.channel_name), live_(request.record_channel_result)
 {
     if (live_)
     {
@@ -137,7 +138,8 @@ bool PlaybackOsd::load_fonts(const std::string &directory)
     const auto load = [&](const char *name, hui::gfx::Font &font, hui::ui::FontRef &ref)
     {
         std::string data;
-        if (!hui::save::read_file(directory + "/" + name, &data, 64u << 20) || !font.load(data))
+        if (!hui::save::read_file(directory + "/" + name, &data, 64u << 20) ||
+            !load_menu_font(std::move(data), font, settings_.larger_text))
             return false;
         ref.font = &font;
         return true;
@@ -243,12 +245,42 @@ void PlaybackOsd::set_live_state(const iptv_player_live_state_t &state)
     if (state.available != history_.available || state.paused != history_.paused ||
         state.expired != history_.expired || behind(state) != behind(history_))
         dirty_ = true;
+    if (live_ && paused_ != (state.paused != 0))
+    {
+        paused_ = state.paused != 0;
+        last_activity_ = 0;
+    }
     history_ = state;
+}
+
+void PlaybackOsd::set_paused(bool paused)
+{
+    std::lock_guard lock(mutex_);
+    if (paused_ != paused)
+    {
+        paused_ = paused;
+        last_activity_ = 0;
+    }
+}
+
+bool PlaybackOsd::sleeping(std::uint64_t now) const
+{
+    return paused_ && settings_.screensaver_minutes > 0 && last_activity_ &&
+           now >= last_activity_ &&
+           now - last_activity_ >=
+               static_cast<std::uint64_t>(settings_.screensaver_minutes) * 60000000;
 }
 
 int PlaybackOsd::input(int action, std::uint64_t now)
 {
     std::lock_guard lock(mutex_);
+    if (action >= 0)
+    {
+        const bool wake = sleeping(now);
+        last_activity_ = now;
+        if (wake)
+            return 1;
+    }
     if (action == -1)
     {
         if (platform::unix_time() / 60 != guide_minute_)
@@ -602,12 +634,14 @@ void PlaybackOsd::paint_subtitles()
             break;
     }
     const unsigned width = lines.empty() ? 0 : static_cast<unsigned>(std::ceil(widest)) + 44;
+    const unsigned line_height = settings_.larger_text ? 58 : 46;
+    const unsigned baseline = settings_.larger_text ? 53 : 42;
     subtitle_panel_.reset((1920 - width) / 2, 0, width,
-                          lines.size() * 46 + (lines.empty() ? 0 : 20));
+                          lines.size() * line_height + (lines.empty() ? 0 : 20));
     for (unsigned i = 0; i < lines.size(); ++i)
         subtitle_panel_.text(*lines[i].font, lines[i].text,
-                             (width - lines[i].font->measure(lines[i].text, size)) / 2, 42 + i * 46,
-                             size, max_width);
+                             (width - lines[i].font->measure(lines[i].text, size)) / 2,
+                             baseline + i * line_height, size, max_width);
 }
 
 bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigned sh, unsigned vw,
@@ -616,6 +650,35 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
                        unsigned hdr)
 {
     std::lock_guard lock(mutex_);
+    if (!last_activity_ || !paused_)
+        last_activity_ = now;
+    if (sleeping(now))
+    {
+        if (!surface)
+            return true;
+        if ((depth != 8 && depth != 10) || !vw || !vh || vw > pitch || vh > sh || pitch > 8192 ||
+            sh > 8192 || (pitch & 1u))
+            return false;
+        const std::size_t luma = static_cast<std::size_t>(pitch) * sh;
+        const std::size_t samples = luma + static_cast<std::size_t>(pitch) * ((sh + 1) / 2);
+        if (samples * (depth == 10 ? 2 : 1) > bytes)
+            return false;
+        if (depth == 8)
+        {
+            std::memset(surface, 16, luma);
+            std::memset(static_cast<std::uint8_t *>(surface) + luma, 128, samples - luma);
+        }
+        else
+        {
+            auto *pixels = static_cast<std::uint8_t *>(surface);
+            for (std::size_t i = 0; i < samples; ++i)
+            {
+                const std::uint16_t value = i < luma ? 64 : 512;
+                std::memcpy(pixels + i * 2, &value, sizeof(value));
+            }
+        }
+        return true;
+    }
     if (!fonts_.regular.font)
         return false;
     if (!started_)

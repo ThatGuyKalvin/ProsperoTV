@@ -186,11 +186,13 @@ bool save_picture(const std::string &path, int width, int height)
     return std::fclose(file) == 0 && ok;
 }
 
-bool load_font(gfx::Renderer &renderer, const char *name, gfx::Font *font, ui::FontRef *ref)
+bool load_font(gfx::Renderer &renderer, const char *name, gfx::Font *font, ui::FontRef *ref,
+               bool larger = false)
 {
     std::string data;
     const std::string path = tv::storage::app_file(std::string("assets/fonts/") + name);
-    if (!save::read_file(path, &data, 64u << 20) || !font->load(data))
+    if (!save::read_file(path, &data, 64u << 20) ||
+        !ptv::load_menu_font(std::move(data), *font, larger))
     {
         say("[TV] font %s failed: %s", name, font->error().c_str());
         return false;
@@ -360,10 +362,13 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
     gfx::Font korean;
     ui::Fonts fonts;
     if (!renderer.init() ||
-        !load_font(renderer, "inter-regular.huifont", &regular, &fonts.regular) ||
-        !load_font(renderer, "inter-semibold.huifont", &semibold, &fonts.semibold) ||
-        !load_font(renderer, "montserrat-medium.huifont", &display_font, &fonts.display) ||
-        !load_font(renderer, "dejavu-sans-mono.huifont", &mono, &fonts.mono))
+        !load_font(renderer, "inter-regular.huifont", &regular, &fonts.regular,
+                   settings->larger_text) ||
+        !load_font(renderer, "inter-semibold.huifont", &semibold, &fonts.semibold,
+                   settings->larger_text) ||
+        !load_font(renderer, "montserrat-medium.huifont", &display_font, &fonts.display,
+                   settings->larger_text) ||
+        !load_font(renderer, "dejavu-sans-mono.huifont", &mono, &fonts.mono, settings->larger_text))
     {
         say("[TV] fatal: renderer init failed");
         notify_failure("renderer");
@@ -386,8 +391,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         {
             east_asian_loaded = true;
             const std::int64_t began = sys::monotonic_us();
-            const bool ok =
-                load_font(renderer, "noto-sans-east-asian.huifont", &east_asian, &fonts.hand);
+            const bool ok = load_font(renderer, "noto-sans-east-asian.huifont", &east_asian,
+                                      &fonts.hand, settings->larger_text);
             say("[TV] Chinese and Japanese face loaded=%d in %lld ms", ok ? 1 : 0,
                 static_cast<long long>((sys::monotonic_us() - began) / 1000));
         }
@@ -395,7 +400,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         {
             korean_loaded = true;
             const std::int64_t began = sys::monotonic_us();
-            const bool ok = load_font(renderer, "noto-sans-korean.huifont", &korean, &fonts.pixel);
+            const bool ok = load_font(renderer, "noto-sans-korean.huifont", &korean, &fonts.pixel,
+                                      settings->larger_text);
             say("[TV] Korean face loaded=%d in %lld ms", ok ? 1 : 0,
                 static_cast<long long>((sys::monotonic_us() - began) / 1000));
         }
@@ -1180,8 +1186,9 @@ int main()
     iptv_remote_set_icon(tv::storage::app_file("sce_sys/icon0.png").c_str());
     const bool remote_started = iptv_remote_start(8888);
     // Said after it: the log moved with the app's data.
-    say("[TV] phone remote: %s at %s (ports tried: %s)", remote_started ? "listening" : "unavailable",
-        remote_started ? iptv_remote_url() : "-", iptv_remote_start_report());
+    say("[TV] phone remote: %s at %s (ports tried: %s)",
+        remote_started ? "listening" : "unavailable", remote_started ? iptv_remote_url() : "-",
+        iptv_remote_start_report());
     say("[TV] modules videodec2=0x%08x compute=0x%08x h264=0x%08x hevc=0x%08x vp9=0x%08x "
         "audiodec=0x%08x dialogs=0x%08x keyboard=0x%08x",
         static_cast<unsigned>(decoders[0]), static_cast<unsigned>(decoders[1]),
@@ -1340,7 +1347,7 @@ int main()
         // A scripted run plays each channel for a set time; the player stops it.
         tv::diag::flush();
         iptv_native_agc_set_picture_mode(IPTV_PICTURE_FIT);
-        ptv::PlaybackOsd controls(model, request);
+        ptv::PlaybackOsd controls(model, request, settings);
         const bool osd_ready = controls.load_fonts(tv::storage::app_file("assets/fonts"));
         if (osd_ready)
         {

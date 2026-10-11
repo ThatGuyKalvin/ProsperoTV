@@ -28,7 +28,15 @@ Settings load_settings(const std::string &data_dir)
     while (std::fgets(line, sizeof(line), file) != nullptr)
     {
         int value = 0;
-        if (std::sscanf(line, "reduced_motion=%d", &value) == 1)
+        if (std::sscanf(line, "theme=%d", &value) == 1)
+            settings.theme = value >= 0 && value <= 2 ? value : 0;
+        else if (std::sscanf(line, "larger_text=%d", &value) == 1)
+            settings.larger_text = value != 0;
+        else if (std::sscanf(line, "high_contrast=%d", &value) == 1)
+            settings.high_contrast = value != 0;
+        else if (std::sscanf(line, "screensaver_minutes=%d", &value) == 1)
+            settings.screensaver_minutes = value == 0 || value == 1 || value == 10 ? value : 5;
+        else if (std::sscanf(line, "reduced_motion=%d", &value) == 1)
             settings.reduced_motion = value != 0;
         else if (std::sscanf(line, "sounds=%d", &value) == 1)
             settings.sounds = value != 0;
@@ -65,6 +73,13 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
                  settings.resume_last ? 1 : 0);
     std::fprintf(file, "live_preview=%d\n", settings.live_preview ? 1 : 0);
     std::fprintf(file, "audio_normalization=%d\n", settings.audio_normalization ? 1 : 0);
+    std::fprintf(file, "theme=%d\nlarger_text=%d\nhigh_contrast=%d\nscreensaver_minutes=%d\n",
+                 std::clamp(settings.theme, 0, 2), settings.larger_text ? 1 : 0,
+                 settings.high_contrast ? 1 : 0,
+                 settings.screensaver_minutes == 0 || settings.screensaver_minutes == 1 ||
+                         settings.screensaver_minutes == 10
+                     ? settings.screensaver_minutes
+                     : 5);
     const bool written = std::ferror(file) == 0 && std::fflush(file) == 0;
     const bool closed = std::fclose(file) == 0;
     if (!written || !closed)

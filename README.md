@@ -174,7 +174,12 @@
 - Use a full-screen OpenGL interface at up to 4K, built with the
   [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit,
   with fonts for Latin, Greek, Cyrillic, Chinese, Japanese, and Korean channel
-  names, interface sounds, and a Reduce motion setting.
+  names, interface sounds, and a Reduce motion setting. Settings also offers
+  Dusk, Ocean and Forest themes, opaque high-contrast menus, and 25% larger text
+  (applied when the menu next opens). Channel artwork and video retain their colors.
+  A black screensaver protects idle menus and paused video after 1, 5 or 10 minutes;
+  five minutes is the default, and it can be turned off. The first button wakes
+  the screen without activating a control. Active multiview stays visible.
 
 Provider requirements and validation for these features are in
 [the implementation guide](docs/ROADMAP_IMPLEMENTATION.md).

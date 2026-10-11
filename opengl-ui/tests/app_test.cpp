@@ -1739,3 +1739,60 @@ TEST_F(AppTest, AudioNormalizationIsOptionalAndPersists)
     std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=60\n";
     EXPECT_FALSE(ptv::load_settings(dir_).audio_normalization);
 }
+
+TEST_F(AppTest, AppearanceSettingsPersistAndScreensaverConsumesWakeButton)
+{
+    ptv::Settings settings;
+    settings.theme = 2;
+    settings.larger_text = settings.high_contrast = true;
+    settings.screensaver_minutes = 1;
+    ASSERT_TRUE(ptv::save_settings(dir_, settings));
+    EXPECT_EQ(ptv::load_settings(dir_), settings);
+    app_ = std::make_unique<ptv::App>(*model_, font_set().fonts, 7u, settings, "test");
+    for (int i = 0; i < 61; ++i)
+        app_->update({}, 1, feedback_);
+    ASSERT_TRUE(app_->screensaver_active());
+    app_->draw(frame_);
+    ASSERT_EQ(frame_.scene.instances().size(), 1u);
+    EXPECT_TRUE(frame_.overlay.empty());
+    EXPECT_FALSE(frame_.glass);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_EQ(frame_.scene.instances()[0].color_top[i], 0);
+    press(Action::confirm);
+    EXPECT_FALSE(app_->screensaver_active());
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model_->take_play_request(&request));
+    press(Action::confirm);
+    EXPECT_TRUE(model_->take_play_request(&request));
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "theme=999\nscreensaver_minutes=-1\n";
+    const auto invalid = ptv::load_settings(dir_);
+    EXPECT_EQ(invalid.theme, 0);
+    EXPECT_EQ(invalid.screensaver_minutes, 5);
+}
+
+TEST_F(AppTest, AppearanceChoicesAreReachableAndChangeTheRenderedPalette)
+{
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    for (int i = 0; i < 60 && app_->settings_row() != "Theme"; ++i)
+        move(Direction::down);
+    ASSERT_EQ(app_->settings_row(), "Theme");
+    move(Direction::right);
+    EXPECT_EQ(app_->settings().theme, 1);
+    move(Direction::down);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->settings().larger_text);
+    move(Direction::down);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->settings().high_contrast);
+    EXPECT_EQ(frame_.backdrop.mode, ptv::gfx::BackdropMode::gradient);
+    EXPECT_EQ(frame_.backdrop.colors[0].r, 0);
+    move(Direction::down);
+    move(Direction::left);
+    EXPECT_EQ(app_->settings().screensaver_minutes, 1);
+    move(Direction::left);
+    EXPECT_EQ(app_->settings().screensaver_minutes, 0);
+    for (int i = 0; i < 61; ++i)
+        app_->update({}, 10, feedback_);
+    EXPECT_FALSE(app_->screensaver_active());
+}

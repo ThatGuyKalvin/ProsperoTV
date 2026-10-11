@@ -66,6 +66,10 @@ enum FormRow : int
     kRowParentState,
     kRowSleep,
     kRowSleepRemaining,
+    kRowTheme,
+    kRowLargeText,
+    kRowContrast,
+    kRowScreensaver,
 };
 
 constexpr const char *kTabNames[] = {"Live TV", "On demand", "Favorites",
@@ -222,6 +226,21 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_header(tr("BACKUP AND RESTORE"));
     form_.add_action(kRowBackup, tr("Back up to USB"));
     form_.add_action(kRowRestore, tr("Restore from USB"));
+    form_.add_header(tr("APPEARANCE AND ACCESSIBILITY"));
+    form_.add_choice(kRowTheme, tr("Theme"), {tr("Dusk"), tr("Ocean"), tr("Forest")},
+                     settings.theme);
+    form_.add_toggle(kRowLargeText, tr("Larger text"), settings.larger_text).description =
+        tr("25% larger text. Takes effect the next time the menu opens.");
+    form_.add_toggle(kRowContrast, tr("High contrast"), settings.high_contrast);
+    form_
+        .add_choice(kRowScreensaver, tr("Screensaver"),
+                    {tr("Off"), tr("1 minute"), tr("5 minutes"), tr("10 minutes")},
+                    settings.screensaver_minutes == 0    ? 0
+                    : settings.screensaver_minutes == 1  ? 1
+                    : settings.screensaver_minutes == 10 ? 3
+                                                         : 2)
+        .description =
+        tr("Blacks out idle menus and paused video. Any button wakes without acting.");
     form_.set_bounds(kSettingsPanel.inset(22.0f));
     // The viewer's switch; a debug build or a scripted run keeps its own.
     diag::set_enabled(settings.diagnostics);
@@ -472,6 +491,11 @@ void App::apply_settings()
     Settings next = shared_.settings;
     next.reduced_motion = form_.toggle_value(kRowMotion);
     next.sounds = form_.toggle_value(kRowSounds);
+    next.theme = form_.choice_index(kRowTheme);
+    next.larger_text = form_.toggle_value(kRowLargeText);
+    next.high_contrast = form_.toggle_value(kRowContrast);
+    const int delays[] = {0, 1, 5, 10};
+    next.screensaver_minutes = delays[std::clamp(form_.choice_index(kRowScreensaver), 0, 3)];
     next.volume = static_cast<int>(form_.slider_value(kRowVolume));
     next.audio_normalization = form_.toggle_value(kRowAudioNormalization);
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
@@ -672,6 +696,8 @@ bool App::remote_search(const char *query)
 {
     if (!accepts_remote_search() || query == nullptr)
         return false;
+    idle_seconds_ = 0;
+    sleeping_ = false;
     iptv_ime_cancel();
     shared_.model.set_query(query);
     search_.dismiss();
@@ -681,6 +707,18 @@ bool App::remote_search(const char *query)
 
 void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
+    const bool activity = input.pressed || input.held || input.nav != Direction::none ||
+                          std::abs(input.stick_x) > .1f || std::abs(input.stick_y) > .1f ||
+                          std::abs(input.stick2_x) > .1f || std::abs(input.stick2_y) > .1f;
+    const bool waking = sleeping_ && activity;
+    idle_seconds_ = activity || multiview_.active() ? 0 : idle_seconds_ + std::max(0.0f, dt);
+    sleeping_ = shared_.settings.screensaver_minutes > 0 &&
+                idle_seconds_ >= shared_.settings.screensaver_minutes * 60;
+    if (waking)
+    {
+        step({}, dt, feedback);
+        return;
+    }
     if (intro_ < 0.0f)
     {
         step(input, dt, feedback);
@@ -884,7 +922,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 
     tabs_.update(dt);
     browse_.update(dt);
-    const bool preview_allowed = !multiview_.active() && browsing() &&
+    const bool preview_allowed = !sleeping_ && !multiview_.active() && browsing() &&
                                  shared_.settings.live_preview && intro_ < 0 &&
                                  !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
                                  !library_sheet_.is_open() && !guide_sheet_.is_open() &&
@@ -972,7 +1010,7 @@ void App::draw_header(ui::Canvas &canvas) const
     const ui::Fonts &fonts = canvas.fonts;
     draw_mark(list, kMargin + 22.0f, kHeaderY, 42.0f);
     ui::text(list, fonts.display, "ProsperoTV", kMargin + 58.0f, baseline_for(kHeaderY, 30.0f),
-             30.0f, shared_.theme.text);
+             shared_.settings.larger_text ? 24.0f : 30.0f, shared_.theme.text);
 
     tabs_.draw(canvas);
     const ui::GlyphStyle glyphs = ui::GlyphStyle::dark();
@@ -1154,7 +1192,7 @@ App::TuningBar App::tuning_bar()
 void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
                       float preview_fill) const
 {
-    draw(frame);
+    draw(frame, false);
     const ui::Theme &theme = shared_.theme;
     const ui::Fonts &fonts = shared_.fonts;
     const std::optional<iptv::ChannelView> channel = shared_.model.find(channel_id);
@@ -1214,6 +1252,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
                           radius, tone::accent);
     list.pop_opacity();
     frame.glass = true;
+    apply_appearance(frame, shared_.settings);
 }
 
 void App::draw_hints(ui::Canvas &canvas) const
@@ -1255,8 +1294,20 @@ void App::draw_hints(ui::Canvas &canvas) const
     layout.text_size = 23.0f;
     layout.cy = kHintsY;
     layout.item_gap = 34.0f;
-    ui::draw_hints(canvas.list, canvas.fonts, ui::GlyphStyle::dark(), hints, count,
-                   kWidth - kMargin, true, layout);
+    if (shared_.settings.larger_text && count > 4)
+    {
+        canvas.list.rounded_rect({0, 962, kWidth, 118}, 0, tone::night);
+        const int first_row = (count + 1) / 2;
+        layout.cy = 982;
+        ui::draw_hints(canvas.list, canvas.fonts, ui::GlyphStyle::dark(), hints, first_row,
+                       kWidth - kMargin, true, layout);
+        layout.cy = kHintsY;
+        ui::draw_hints(canvas.list, canvas.fonts, ui::GlyphStyle::dark(), hints + first_row,
+                       count - first_row, kWidth - kMargin, true, layout);
+    }
+    else
+        ui::draw_hints(canvas.list, canvas.fonts, ui::GlyphStyle::dark(), hints, count,
+                       kWidth - kMargin, true, layout);
     if (!remote_hint_.empty())
         ui::text(canvas.list, canvas.fonts.regular, remote_hint_, kMargin, 1062.0f, 20.0f,
                  shared_.theme.text_muted);
@@ -1273,10 +1324,15 @@ void App::draw_hints(ui::Canvas &canvas) const
     }
 }
 
-void App::draw(Frame &frame) const
+void App::draw(Frame &frame, bool themed) const
 {
     frame.reset();
     frame.glass_texture = glass_texture_;
+    if (sleeping_)
+    {
+        frame.scene.rounded_rect({0, 0, kWidth, kHeight}, 0, Color::rgb(0));
+        return;
+    }
     frame.backdrop = dusk_sky(lean_.value(), lean_dark_.value(), lean_amount_.value, drift_ * 0.6f);
 
     // The screens: nothing here frosts anything, so no blurred copy is needed.
@@ -1332,6 +1388,8 @@ void App::draw(Frame &frame) const
     frame.glass = !frame.overlay.empty();
     if (intro_ >= 0.0f)
         draw_intro(over);
+    if (themed)
+        apply_appearance(frame, shared_.settings);
 }
 
 void App::draw_intro(ui::Canvas &canvas) const
