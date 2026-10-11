@@ -703,6 +703,7 @@ void BuildNativeCandidates(iptv_hls_playlist_t *master, const iptv_hls_limits_t 
     if (!master || !limits || !candidates)
         return;
 
+    candidates->count = 0;
     iptv_hls_quality_t preference{};
     unsigned quality_indices[IPTV_HLS_MAX_VARIANTS]{};
     {
