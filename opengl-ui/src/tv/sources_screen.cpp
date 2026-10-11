@@ -212,6 +212,10 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
              tone::accent, gfx::Align::left, 4);
     ui::text(draw, fonts.display, tr("Sources"), kMargin - 3, 224, 60, theme.text);
     list_.draw(canvas);
+    const auto focused = list_.row_rect(list_.focus());
+    draw.push_clip(kList);
+    draw.rounded_rect({focused.x + 7, focused.y + 14, 5, focused.h - 28}, 2, tone::accent);
+    draw.pop_clip();
     draw_glass(canvas, theme, kPanel, 26);
     const float left = kPanel.x + 36, width = kPanel.w - 72;
     const auto id = focused_id();
