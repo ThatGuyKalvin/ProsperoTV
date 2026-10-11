@@ -348,6 +348,14 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         if (platform::unix_time() / 60 != guide_minute_)
             update_guide();
+        model_.poll_programme_jobs();
+        if (const auto notice = model_.take_programme_notice(); !notice.empty())
+        {
+            now_ = notice;
+            banner_until_ = now + 8000000;
+            dirty_ = true;
+        }
+
         return 0;
     }
     if (action == IPTV_INPUT_OPTIONS)
@@ -449,6 +457,17 @@ int PlaybackOsd::input(int action, std::uint64_t now)
             focus = static_cast<unsigned>(
                 std::clamp(static_cast<int>(focus) + delta, 0, static_cast<int>(count)));
         }
+        dirty_ = true;
+        return 1;
+    }
+    if (live_ && action == IPTV_INPUT_TOUCHPAD)
+    {
+        const bool stopping = model_.recording();
+        model_.toggle_recording(current_id_);
+        now_ = stopping             ? "Stopping recording..."
+               : model_.recording() ? "Recording to USB. Touchpad stops."
+                                    : "Recording requested; check USB and programme schedules.";
+        banner_until_ = now + 5000000;
         dirty_ = true;
         return 1;
     }
@@ -803,7 +822,7 @@ void PlaybackOsd::paint()
                      : tr("Seeking unavailable | L2 Pause / resume"),
                  30, 187, 24, 1700);
         }
-        line(live_ ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
+        line(live_ ? tr("Touchpad Record · Square Last · Cross List · Options Tracks · Triangle "
                         "Info · "
                         "Circle Back")
                    : tr("Options Tracks · Triangle Info · Circle Back"),

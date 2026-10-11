@@ -312,6 +312,8 @@ bool Model::open()
 
     if (first)
     {
+        if (!programme_jobs_.open(path("prosperotv-programmes.sqlite3")))
+            notify(Level::error, "Programme schedules could not be opened");
         if (!parental_.load(path("prosperotv-parental-v1.txt")))
             notify(Level::error, tr("Parental settings could not be read"),
                    tr("Playback is locked until the profile settings are recovered."));
@@ -411,12 +413,15 @@ void Model::close()
 
 bool Model::close_for_storage()
 {
+    recorder_.cancel();
+    recorder_.join();
     close();
     return library_.close();
 }
 
 void Model::poll()
 {
+    poll_programme_jobs();
     check_sleep_timer();
     if (keyboard_ready_)
         iptv_ime_poll();

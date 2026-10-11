@@ -22,7 +22,7 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
 
 ## Watching
 
-- [ ] **Recording.** Saving what is playing to a USB drive, and scheduling a
+- [x] **Recording.** Saving what is playing to a USB drive, and scheduling a
   recording from the programme guide.
 - [ ] **Continue watching.** Resuming a movie or an episode where it was
   left, and playing the next episode when one ends.
@@ -35,7 +35,7 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
   the guide or the lists.
 - [ ] **Sound delay.** Moving the sound earlier or later on a channel whose
   own timing is wrong.
-- [ ] **Reminders.** Marking a programme in the guide and being told when it
+- [x] **Reminders.** Marking a programme in the guide and being told when it
   starts.
 
 ## Browsing

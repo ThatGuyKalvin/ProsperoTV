@@ -127,6 +127,9 @@
 - Choose among the audio tracks a channel carries, and show its subtitles.
 - Pause live TV and go back a few minutes.
 - Set a sleep timer.
+- Record live TV to USB with Touchpad, or schedule a recording or reminder from
+  the guide's Options menu. Keep the app running; recording uses an additional
+  provider connection.
 - Watch two or four live channels side by side in Multiview, with sound
   following the focused one. Four 720p H.264 feeds are validated on hardware;
   higher resolutions depend on the decoder resources available.

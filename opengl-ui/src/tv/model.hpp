@@ -17,6 +17,7 @@
 #include "tv/channel_text.hpp"
 #include "tv/library.hpp"
 #include "tv/guide.hpp"
+#include "tv/recording.hpp"
 #include "tv/portal.hpp"
 #include "tv/vod.hpp"
 #include "tv/parental.hpp"
@@ -376,6 +377,31 @@ class Model
     // never a hidden or parent-blocked channel.
     std::optional<unsigned> previous_channel(std::string_view current) const;
     bool play_programme(unsigned catalog_index, const Programme &programme);
+    bool schedule_programme(unsigned index, const Programme &programme, bool record);
+    void poll_programme_jobs();
+    void toggle_recording(std::string_view channel);
+    void cancel_programme_job(std::int64_t id);
+    std::vector<ProgrammeJob> programme_jobs() const
+    {
+        if (!parental_.valid() || parental_.kids_only() ||
+            (parental_.enabled() && !parental_.unlocked()))
+            return {};
+        return programme_jobs_.list();
+    }
+    const std::string &programme_notice() const
+    {
+        return programme_notice_;
+    }
+    std::string take_programme_notice()
+    {
+        std::string notice;
+        notice.swap(programme_notice_);
+        return notice;
+    }
+    bool recording() const
+    {
+        return recorder_.active();
+    }
     const Guide &guide() const
     {
         return guide_;
@@ -566,6 +592,11 @@ class Model
     bool opened_once_ = false;
     bool keyboard_ready_ = false;
     Library library_;
+    ProgrammeJobs programme_jobs_;
+    Recorder recorder_;
+    std::int64_t recording_job_ = 0;
+    std::uint64_t next_job_check_ = 0;
+    std::string programme_notice_;
     std::vector<SavedSource> sources_;
     std::int64_t selected_source_id_ = 1;
     std::int64_t editing_source_id_ = 2;

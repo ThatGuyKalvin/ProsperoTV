@@ -15,10 +15,12 @@ fi
 ffmpeg="$root/.deps/ffmpeg-host/root"
 gtest=$(bash tools/setup-test-dependencies.sh | tail -1)
 "${HOST_CXX:-clang++}" -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -Wall -Wextra -Wpedantic -Werror -pthread -Iinclude -I"$ffmpeg/include" \
+    -Wall -Wextra -Wpedantic -Werror -pthread -Iinclude -Iopengl-ui/src -I"$ffmpeg/include" \
     -isystem "$gtest/googletest/include" -I"$gtest/googletest" \
-    tests/test_iptv_media.cpp tests/test_iptv_subtitles.cpp tests/test_iptv_fields.cpp tests/test_iptv_audio_tempo.cpp \
-    src/iptv_media.cpp src/iptv_stream.cpp src/iptv_subtitles.cpp src/iptv_fields.cpp src/iptv_audio_tempo.cpp \
+    tests/test_iptv_media.cpp tests/test_iptv_subtitles.cpp tests/test_iptv_fields.cpp \
+    tests/test_iptv_audio_tempo.cpp tests/test_iptv_recording_transport.cpp \
+    src/iptv_media.cpp src/iptv_stream.cpp src/iptv_subtitles.cpp src/iptv_fields.cpp \
+    src/iptv_audio_tempo.cpp src/iptv_http.cpp src/iptv_catalog.cpp \
     "$gtest/googletest/src/gtest-all.cc" "$gtest/googletest/src/gtest_main.cc" \
     "$ffmpeg/lib/libavfilter.a" "$ffmpeg/lib/libavformat.a" "$ffmpeg/lib/libavcodec.a" "$ffmpeg/lib/libswresample.a" "$ffmpeg/lib/libavutil.a" \
     -lssl -lcrypto -lm -o "$build/media_tests"

@@ -868,3 +868,32 @@ saved immediately. Cropped views remap controls and captions into their
 visible source region. Captions use the existing SDR/PQ/HLG compositor;
 bitmap subtitles keep the provider's artwork. Native hardware visual
 verification is still pending an idle console.
+
+## USB recording and programme reminders (October 2026)
+
+The guide Options menu schedules/cancels recordings and reminders and lists their
+saved state and failure reason. Touchpad starts/stops the current live channel:
+it records until the current programme ends, or for two hours without guide data.
+Jobs are stored per profile in `prosperotv-programmes.sqlite3`; stream credentials
+are resolved from the source at execution time and are not copied into schedules.
+One recording can run at once, with up to 128 saved jobs and a 24-hour maximum per
+recording. Conflicting recordings are rejected. The app must stay running; these
+jobs do not wake or launch the console. Late reminders appear while their programme
+is still on; missed/aborted jobs are marked explicitly after restart.
+
+Recordings use the first detected normal `/mnt/usb0` through `/mnt/usb7` mount and
+are written as `ProsperoTV-<start>-<job>.ts`. An extra provider connection is required.
+Direct TS is preserved; MP4/Matroska and HLS are remuxed through the same bounded
+container reader as playback. Container subtitle retention is format-dependent.
+Writes use exclusive temporary files, periodic flushes, disconnect checks, and
+retain `.partial` on write/network failure. Early stream EOF is reported as a
+failure rather than claiming the whole scheduled programme was captured. Recording
+never changes console permissions or accesses an elevated USB namespace. ExFAT is
+appropriate for long recordings; filesystem file-size limits are reported as errors.
+Parental schedules require an unlocked adult session and stop if the profile locks.
+
+Host regressions exercise real writes, cancellation, disconnected directories,
+write-limit failure, existing-file preservation, conflicts, restart recovery, and
+one-shot reminders. Native transport tests use the real FFmpeg remuxer with file-backed
+HTTP, fragmented input, scoped credentials, cancellation, and output re-parsing.
+Physical console USB writing and unplugging have **not** passed acceptance yet.

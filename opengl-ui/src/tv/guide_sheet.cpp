@@ -18,6 +18,7 @@ constexpr float kTimeX = 435, kTimeWidth = 1360, kRowY = 304, kRowHeight = 70;
 void GuideSheet::open(std::string_view channel, ui::Feedback &feedback)
 {
     open_ = true;
+    actions_ = jobs_ = false;
     channel_ = channel;
     row_ = static_cast<unsigned>(std::max(0, shared_.model.position_of(channel)));
     top_ = row_;
@@ -61,6 +62,46 @@ const Programme *GuideSheet::selected() const
 void GuideSheet::handle(const InputFrame &input, ui::Feedback &feedback)
 {
     auto &model = shared_.model;
+    if (actions_ || jobs_)
+    {
+        const auto jobs = model.programme_jobs();
+        const unsigned count = jobs_ ? static_cast<unsigned>(jobs.size()) : 4u;
+        if (input.is_pressed(Action::back) || input.is_pressed(Action::menu))
+        {
+            actions_ = jobs_ = false;
+            return;
+        }
+        if (input.nav == Direction::up && action_row_)
+            --action_row_;
+        if (input.nav == Direction::down && action_row_ + 1 < count)
+            ++action_row_;
+        action_row_ = std::min(action_row_, count ? count - 1 : 0);
+        if (input.is_pressed(Action::confirm))
+        {
+            if (jobs_)
+            {
+                if (action_row_ < jobs.size())
+                    model.cancel_programme_job(jobs[action_row_].id);
+            }
+            else if (action_row_ == 2)
+            {
+                actions_ = false;
+                jobs_ = true;
+                action_row_ = 0;
+            }
+            else if (action_row_ == 3)
+            {
+                model.refresh_guide();
+                actions_ = false;
+            }
+            else if (const auto *p = selected())
+            {
+                model.schedule_programme(model.visible(row_), *p, action_row_ == 0);
+                actions_ = false;
+            }
+        }
+        return;
+    }
     if (input.is_pressed(Action::back) || input.is_pressed(Action::r3))
     {
         dismiss();
@@ -69,7 +110,8 @@ void GuideSheet::handle(const InputFrame &input, ui::Feedback &feedback)
     }
     if (input.is_pressed(Action::menu))
     {
-        model.refresh_guide();
+        actions_ = true;
+        action_row_ = 0;
         return;
     }
     if (input.is_pressed(Action::north))
@@ -202,7 +244,7 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         const std::string status = programme_time(p->start) + " - " + programme_time(p->end) +
                                    (available                         ? tr("   Catch-up available")
                                     : p->start <= now && now < p->end ? tr("   On now")
-                                    : p->start > now                  ? tr("   Upcoming")
+                                    : p->start > now ? tr("   Upcoming")
                                                      : tr("   Archive unavailable"));
         ui::text(list, fonts.regular, status, kMargin, 890, 22,
                  available ? tone::accent : theme.text_muted);
@@ -219,6 +261,47 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         tr("Cross: Watch   D-pad: Channel / programme   L1/R1: Day   L2/R2: Page   Square: Now   "
            "Triangle: Search   Circle: Back"),
         kMargin, 990, 21, theme.text_muted);
-    ui::text(list, fonts.regular, tr("Options: Update guide"), kMargin, 1030, 21, theme.text_muted);
+    ui::text(list, fonts.regular, "Options: Record / Remind / Scheduled programmes / Update guide",
+             kMargin, 1030, 21, theme.text_muted);
+    if (actions_ || jobs_)
+    {
+        list.rounded_rect({420, 230, 1140, 650}, 16, tone::night);
+        ui::text(list, fonts.semibold, jobs_ ? "Scheduled programmes" : "Programme actions", 460,
+                 290, 32, theme.text);
+        const auto jobs = model.programme_jobs();
+        const char *actions[] = {"Record to USB / cancel recording", "Set / cancel reminder",
+                                 "Scheduled programmes", "Update guide"};
+        const unsigned count = jobs_ ? static_cast<unsigned>(jobs.size()) : 4;
+        const unsigned top = action_row_ / 6 * 6;
+        for (unsigned i = top; i < count && i < top + 6; ++i)
+        {
+            const float y = 350 + static_cast<float>(i - top) * 68;
+            if (i == action_row_)
+                list.rounded_rect({448, y - 33, 1078, 56}, 8, kWhite.with_alpha(0.16f));
+            std::string label;
+            if (jobs_)
+            {
+                const auto &job = jobs[i];
+                const char *state[] = {"Pending", "Recording", "Done", "Failed", "Cancelled"};
+                label = std::string(job.recording ? "Record  " : "Remind  ") +
+                        programme_time(job.start, true) + "  " + job.title + "  [" +
+                        state[std::clamp(job.state, 0, 4)] + "]";
+            }
+            else
+                label = actions[i];
+            const auto &face = face_for(fonts, fonts.regular, label);
+            ui::text(list, face, face.font->fit(label, 24, 1040), 465, y, 24, theme.text);
+        }
+        if (jobs_ && action_row_ < jobs.size())
+            ui::text(list, fonts.regular,
+                     fonts.regular.font->fit(jobs[action_row_].result, 21, 1040), 460, 760, 21,
+                     theme.text_muted);
+        ui::text(list, fonts.regular,
+                 jobs_ ? "Cross: Remove / stop selected job   Circle: Back"
+                       : "Cross: Select   Circle: Back",
+                 460, 806, 22, theme.text_muted);
+        ui::text(list, fonts.regular, "Keep ProsperoTV running for recordings and reminders.", 460,
+                 850, 22, theme.text_muted);
+    }
 }
 } // namespace ptv
