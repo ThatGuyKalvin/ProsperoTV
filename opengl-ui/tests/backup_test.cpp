@@ -162,10 +162,12 @@ TEST_F(BackupTest, ReportsKeepUsefulNumericEvidenceAndExcludeProviderDetails)
     auto report = ptv::failure_report(
         "stream_state=7\ncoded=1920x1080\nvisible=bad\nresult=999\n"
         "native_result=-125\ndecoder_output_error=0x123a\ncodec=deadbeef\n"
+        "crash_signal=11\ncrash_code=-6\ncrash_phase=2\ncrash_stack=SECRET\n"
         "channel=PRIVATE\nurl=https://provider.invalid/user/password\nplayback_error=SECRET\n",
         "01.000.030", 123456, -4, 3);
     EXPECT_NE(report.find("result=-4\n"), std::string::npos);
     EXPECT_NE(report.find("native_result=-125\n"), std::string::npos);
+    EXPECT_NE(report.find("crash_signal=11\ncrash_code=-6\ncrash_phase=2\n"), std::string::npos);
     EXPECT_NE(report.find("coded=1920x1080\n"), std::string::npos);
     EXPECT_EQ(report.find("999"), std::string::npos);
     EXPECT_EQ(report.find("deadbeef"), std::string::npos);

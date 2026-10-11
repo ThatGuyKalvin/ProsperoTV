@@ -365,6 +365,9 @@ std::string sanitize_report(std::string_view receipt)
     // Only known numeric decoder/network fields leave the console. Free-form
     // provider responses, channel names, URLs, account details and logs do not.
     constexpr std::array fields = {"version",
+                                   "crash_signal",
+                                   "crash_code",
+                                   "crash_phase",
                                    "unix_time",
                                    "result",
                                    "attempts",

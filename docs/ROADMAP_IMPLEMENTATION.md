@@ -321,3 +321,23 @@ time; backward changes that stay after the last persisted clock observation can 
 undetected after a restart. This is a household convenience, not tamper-proof enforcement against a user with
 console clock or profile-file access. Native local timezone/DST and real playback stop
 behavior still require console testing. No roadmap completion box has been changed.
+
+## Fatal-signal crash reports
+
+The app preopens a profile-local 32-byte record before starting application workers.
+Default fatal handlers for ABRT, BUS, FPE, ILL and SEGV record only signal/code, coarse
+startup/menu/playback phase and time, then preserve the operating system's fatal action.
+Existing platform handlers are left alone. No account, stream address, stack or memory
+contents enter the record. A normal close leaves no crash report.
+
+The next launch atomically saves a redacted failure report, shows where to export it in
+Settings and skips automatic last-channel playback for that launch. Failed recovery
+preserves the pending record. The report omits the app version because the crashing
+binary might have been replaced before recovery. The existing USB export sanitizer
+allows only the new numeric crash fields, alongside playback diagnostics.
+
+`opengl-ui/tools/check-crash-report.sh` passes 114 unsanitized host checks, including
+all five signals, preserved termination, custom/ignored handlers and malformed files.
+Capture is best effort: stack exhaustion, forced termination, power loss and hangs may
+produce no record; a blocked filesystem may delay a fatal handler. Native signal
+delivery and export still require console validation. No console crash was induced.
