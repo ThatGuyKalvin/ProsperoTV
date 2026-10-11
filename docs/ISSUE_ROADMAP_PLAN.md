@@ -84,3 +84,18 @@ Draft PRs #41–#46 separate the completed implementation groups; their bodies
 identify the prerequisite order and pending native acceptance. No new console
 installation or runtime acceptance is claimed. One obsolete worktree test cache
 was removed, freeing 199,290,676 bytes without deleting source or current evidence.
+
+## Host sanitizer build correction
+
+CI exposed mixed RTTI flags across font ownership: app translation units created
+shared-pointer control blocks without RTTI, while kit code used RTTI-enabled
+UBSan checks when releasing them. A two-file Clang 18 reproduction using only
+`make_shared<int>` fails with the same invalid-vptr report; enabling RTTI
+consistently makes it pass without suppressing any sanitizer check.
+
+Candidate `0854ff7` keeps host tests/previews consistent and adds a real-font
+copy/move/reload/failed-load regression. All 281 integrated Clang 18 ASan/UBSan
+tests pass (114.7 seconds), plus 173 standalone shaping checks. Native compiler
+flags and application code are unchanged; case 88 remains the native candidate.
+The correction is included in draft PRs #45 and #46. Console acceptance is still
+pending while `.30` runs another title.
