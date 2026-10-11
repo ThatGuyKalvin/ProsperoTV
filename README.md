@@ -210,9 +210,14 @@ at 3840×2160. Codec and renderer details are documented in
 | L3 in Live TV / Favorites | Open Multiview; Square chooses a channel, Triangle switches two/four tiles, R3 mutes, Cross opens full screen |
 | Options | Refresh the selected catalog source |
 | Circle during playback | Close the open panel, or stop playback and return to the browser |
-| Options during playback | Open or close the audio/subtitle track panel |
-| L1 / R1 in the track panel | Switch between Audio and Subtitles |
+| Options during playback | Open or close the audio/subtitle/picture panel |
+| L1 / R1 in the playback panel | Switch between Audio, Subtitles and Picture |
 | Touchpad + R1 during playback | Toggle codec and performance statistics |
+
+During playback, Options then L1 opens Picture. Fit preserves the decoded picture's
+proportions by default; Stretch fills the screen, while 4:3 and 16:9 correct
+anamorphic or incorrectly advertised proportions. The choice lasts for the current
+playback session. Picture correction applies to live TV, movies and episodes.
 
 ## Phone remote
 

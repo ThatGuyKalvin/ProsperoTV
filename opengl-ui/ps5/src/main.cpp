@@ -1339,6 +1339,7 @@ int main()
             &favorite);
         // A scripted run plays each channel for a set time; the player stops it.
         tv::diag::flush();
+        iptv_native_agc_set_picture_mode(IPTV_PICTURE_FIT);
         ptv::PlaybackOsd controls(model, request);
         const bool osd_ready = controls.load_fonts(tv::storage::app_file("assets/fonts"));
         if (osd_ready)
@@ -1382,6 +1383,8 @@ int main()
                         }
                     }
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
+                    if (const auto selected = osd.take_picture_selection())
+                        iptv_native_agc_set_picture_mode(*selected);
                     if (const auto selected = osd.take_audio_selection())
                         (void)iptv_player_select_audio(*selected);
                     if (const auto selected = osd.take_subtitle_selection())

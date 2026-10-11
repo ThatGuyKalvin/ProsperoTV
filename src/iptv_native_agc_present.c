@@ -170,6 +170,7 @@ typedef struct iptv_native_agc_presenter
     int64_t pending_marker;
     uint32_t output_width;
     uint32_t output_height;
+    float picture_width[2], picture_height[2];
     size_t framebuffer_bytes;
     size_t framebuffer_pool_bytes;
     uint8_t ready;
@@ -195,6 +196,29 @@ static uint8_t agc_initialized;
 static uint64_t render_sequence;
 static _Atomic int present_cancelled;
 static _Atomic int overlay_enabled = 1;
+static _Atomic unsigned picture_mode;
+
+void iptv_native_agc_set_picture_mode(unsigned mode)
+{
+    atomic_store(&picture_mode, mode <= IPTV_PICTURE_16_9 ? mode : IPTV_PICTURE_FIT);
+}
+
+static void picture_size(unsigned width, unsigned height, unsigned output_width,
+                         unsigned output_height, unsigned mode, float *w, float *h)
+{
+    *w = (float)output_width;
+    *h = (float)output_height;
+    if (!width || !height || !output_height || mode == IPTV_PICTURE_STRETCH)
+        return;
+    const double aspect = mode == IPTV_PICTURE_4_3    ? 4.0 / 3.0
+                          : mode == IPTV_PICTURE_16_9 ? 16.0 / 9.0
+                                                      : (double)width / height;
+    if (aspect > (double)output_width / output_height)
+        *h = (float)(output_width / aspect);
+    else
+        *w = (float)(output_height * aspect);
+}
+
 static _Atomic int force_sdr_output;
 static _Atomic int sample_color_output;
 static iptv_native_osd_t draw_osd;
@@ -749,7 +773,7 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
                         void *vertex_shader, void *pixel_shader, const void *source,
                         size_t source_bytes, uint32_t pitch, uint32_t surface_height,
                         uint32_t visible_width, uint32_t visible_height, uint32_t output_width,
-                        uint32_t output_height, int64_t render_marker)
+                        uint32_t output_height, int64_t render_marker, unsigned mode)
 {
     static const uint16_t target_offsets[16] = {0x318, 0x31b, 0x31c, 0x31d, 0x31e, 0x31f,
                                                 0x321, 0x323, 0x324, 0x325, 0x390, 0x398,
@@ -819,9 +843,39 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     {                                                                                              \
         cx[cx_count++] = (agc_register_t){(register_offset), 0, (register_value)};                 \
     } while (0)
-    ADD_REG(0x10f, float_bits(output_width * .5f));
+    float picture_width, picture_height;
+    picture_size(visible_width, visible_height, output_width, output_height, mode, &picture_width,
+                 &picture_height);
+    // Erase bars left by earlier frames when the viewer changes picture shape.
+    const unsigned left = (unsigned)((output_width - picture_width) * .5f + .999f);
+    const unsigned top = (unsigned)((output_height - picture_height) * .5f + .999f);
+    if ((left || top) && (presenter.picture_width[buffer_index] != picture_width ||
+                          presenter.picture_height[buffer_index] != picture_height))
+    {
+        uint32_t *pixels = target;
+        for (unsigned y = 0; y < output_height; ++y)
+        {
+            uint32_t *row = pixels + (size_t)y * output_width;
+            if (y < top || y >= output_height - top)
+                memset(row, 0, output_width * sizeof(*row));
+            else if (left)
+            {
+                memset(row, 0, left * sizeof(*row));
+                memset(row + output_width - left, 0, left * sizeof(*row));
+            }
+        }
+        flush_gpu_data(target, (size_t)output_width * output_height * sizeof(*pixels));
+    }
+    if (presenter.picture_width[buffer_index] != picture_width ||
+        presenter.picture_height[buffer_index] != picture_height)
+        fprintf(stderr, "[TV] picture mode=%u source=%ux%u viewport=%.1fx%.1f output=%ux%u\n", mode,
+                visible_width, visible_height, picture_width, picture_height, output_width,
+                output_height);
+    presenter.picture_width[buffer_index] = picture_width;
+    presenter.picture_height[buffer_index] = picture_height;
+    ADD_REG(0x10f, float_bits(picture_width * .5f));
     ADD_REG(0x110, float_bits(output_width * .5f));
-    ADD_REG(0x111, float_bits(output_height * -.5f));
+    ADD_REG(0x111, float_bits(picture_height * -.5f));
     ADD_REG(0x112, float_bits(output_height * .5f));
     ADD_REG(0x113, float_bits(1));
     ADD_REG(0x114, 0);
@@ -1414,7 +1468,8 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
     result = render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
                           presenter.vertex_shader, presenter.pixel_shader, source, source_bytes,
                           pitch, surface_height, visible_width, visible_height,
-                          presenter.output_width, presenter.output_height, render_marker);
+                          presenter.output_width, presenter.output_height, render_marker,
+                          overlay ? atomic_load(&picture_mode) : IPTV_PICTURE_STRETCH);
     if (result != 0)
         return result;
     presenter.pending_marker = render_marker;
@@ -1503,6 +1558,19 @@ int sceVideoOutSubmitChangeBufferAttribute2(int32_t handle, int32_t index,
 }
 int main(void)
 {
+    float w, h;
+    picture_size(640, 480, 1920, 1080, IPTV_PICTURE_FIT, &w, &h);
+    assert(w == 1440 && h == 1080);
+    picture_size(1920, 800, 1920, 1080, IPTV_PICTURE_FIT, &w, &h);
+    assert(w == 1920 && h == 800);
+    picture_size(720, 576, 3840, 2160, IPTV_PICTURE_16_9, &w, &h);
+    assert(w == 3840 && h == 2160);
+    picture_size(720, 576, 1920, 1080, IPTV_PICTURE_4_3, &w, &h);
+    assert(w == 1440 && h == 1080);
+    picture_size(640, 480, 1920, 1080, IPTV_PICTURE_STRETCH, &w, &h);
+    assert(w == 1920 && h == 1080);
+    iptv_native_agc_set_picture_mode(99);
+    assert(atomic_load(&picture_mode) == IPTV_PICTURE_FIT);
     test_output_result = -99;
     assert(switch_output(1) == 0);
     assert(!presenter.hdr && presenter.hdr_unavailable && test_output_calls == 1);

@@ -36,6 +36,14 @@ extern "C"
     typedef int (*iptv_native_osd_t)(void *context, void *surface, size_t bytes, uint32_t pitch,
                                      uint32_t surface_height, uint32_t width, uint32_t height,
                                      uint32_t depth, uint64_t pts_us, int hdr);
+    enum
+    {
+        IPTV_PICTURE_FIT,
+        IPTV_PICTURE_STRETCH,
+        IPTV_PICTURE_4_3,
+        IPTV_PICTURE_16_9
+    };
+    void iptv_native_agc_set_picture_mode(unsigned mode);
     void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context);
 
     int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
