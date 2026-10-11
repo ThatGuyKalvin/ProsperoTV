@@ -4,6 +4,8 @@
 {"Live TV", {"TV en directo", "TV en direct", "Live-TV", "TV in diretta", "TV ao vivo", "Live-tv"}},
 {"On demand", {"A la carta", "À la demande", "Auf Abruf", "On demand", "Sob demanda", "Op aanvraag"}},
 {"Favorites", {"Favoritos", "Favoris", "Favoriten", "Preferiti", "Favoritos", "Favorieten"}},
+{"Recently added", {"Añadidos recientemente", "Ajouts récents", "Zuletzt hinzugefügt", "Aggiunti di recente", "Adicionados recentemente", "Onlangs toegevoegd"}},
+{"Most watched", {"Más vistos", "Les plus regardés", "Meistgesehen", "Più visti", "Mais assistidos", "Meest bekeken"}},
 {"Sources", {"Fuentes", "Sources", "Quellen", "Sorgenti", "Fontes", "Bronnen"}},
 {"Settings", {"Ajustes", "Paramètres", "Einstellungen", "Impostazioni", "Configurações", "Instellingen"}},
 {"About", {"Acerca de", "À propos", "Info", "Informazioni", "Sobre", "Over"}},
