@@ -262,6 +262,12 @@ apply. Search accepts up to 39 Unicode characters and is available in the
 channel browser. It also works while the TV's native search keyboard is open.
 The **Search & filters on TV** button opens the existing advanced search panel.
 
+Open **Channels and guide** to browse the active source on the phone, search
+channel names or programmes on now, and read upcoming programmes. Tap a channel
+to watch it, including while another channel or movie is playing. Hidden and
+parentally restricted channels stay unavailable; changing sources on the TV
+requires reloading the phone's channel list.
+
 The **Volume** sliders in TV Settings and on the phone control the same saved
 ProsperoTV volume, including live playback and interface sounds. Zero mutes it;
 100% keeps the stream's original level. This does not change the television's
