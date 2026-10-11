@@ -22,7 +22,7 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
 
 ## Watching
 
-- [x] **Recording.** Saving what is playing to a USB drive, and scheduling a
+- [ ] **Recording.** Saving what is playing to a USB drive, and scheduling a
   recording from the programme guide.
 - [ ] **Continue watching.** Resuming a movie or an episode where it was
   left, and playing the next episode when one ends.
@@ -31,11 +31,11 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
 - [ ] **Playback speed.** Faster or slower, for films and catch-up.
 - [ ] **Picture controls.** Zoom and fill for 4:3 and letterboxed channels,
   and the size and colour of subtitles.
-- [x] **Picture in picture.** Keeping a channel in a corner while browsing
+- [ ] **Picture in picture.** Keeping a channel in a corner while browsing
   the guide or the lists.
 - [ ] **Sound delay.** Moving the sound earlier or later on a channel whose
   own timing is wrong.
-- [x] **Reminders.** Marking a programme in the guide and being told when it
+- [ ] **Reminders.** Marking a programme in the guide and being told when it
   starts.
 
 ## Browsing
@@ -48,7 +48,7 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
   guide from the same box.
 - [ ] **Movie and show details.** Poster, plot, cast, year and rating from
   the provider, with sorting and filters by genre or year.
-- [x] **Recently added and most watched.** Two more lists beside Favorites
+- [ ] **Recently added and most watched.** Two more lists beside Favorites
   and Recent.
 - [ ] **A home screen.** What was being watched, the favorites, and what is
   on now on the usual channels, in one place.
