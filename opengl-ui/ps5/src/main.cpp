@@ -462,8 +462,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             }
         }
         app.configure_images(
-            [&renderer](const ptv::ImagePixels &pixels)
-            {
+            [&renderer](const ptv::ImagePixels &pixels) {
                 return renderer.batch().create_texture(pixels.width, pixels.height,
                                                        pixels.rgba.data());
             },
