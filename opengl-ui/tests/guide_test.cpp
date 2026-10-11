@@ -365,8 +365,8 @@ TEST_F(GuideTest, ExplicitMatchesOverrideAutomaticNamesAndAllowSharedGuideIds)
 {
     const std::string first(catalog[0].id), second(catalog[1].id);
     ptv::Guide guide;
-    const std::map<std::string, std::string> mapping{{first, "news"}, {second, "news"},
-                                                  {"missing-channel", "station"}};
+    const std::map<std::string, std::string> mapping{
+        {first, "news"}, {second, "news"}, {"missing-channel", "station"}};
     ptv::XmltvReader reader(catalog, now, guide, mapping);
     ASSERT_TRUE(reader.feed(kXml));
     ASSERT_TRUE(reader.finish());
@@ -392,8 +392,10 @@ TEST_F(GuideTest, GuideConfigurationPersistsIsolatesSourcesAndClearsOnIdentityCh
     ptv::Library library;
     const auto database = dir + "/library.sqlite3";
     ASSERT_TRUE(library.open(database));
-    ptv::SavedSource a{0,1,"A","https://one.invalid/list",{},{},{},ptv::RefreshSchedule::manual};
-    ptv::SavedSource b{0,1,"B","https://two.invalid/list",{},{},{},ptv::RefreshSchedule::manual};
+    ptv::SavedSource a{0,  1,  "A", "https://one.invalid/list",
+                       {}, {}, {},  ptv::RefreshSchedule::manual};
+    ptv::SavedSource b{0,  1,  "B", "https://two.invalid/list",
+                       {}, {}, {},  ptv::RefreshSchedule::manual};
     ASSERT_TRUE(library.save_source(&a));
     ASSERT_TRUE(library.save_source(&b));
     EXPECT_FALSE(library.set_guide_url(a.id, "file:///etc/passwd"));
@@ -446,7 +448,8 @@ TEST_F(GuideTest, OverrideAndMatchingInvalidateOldGuideAndSurviveOfflineRestart)
         sheet.handle(input, feedback);
         input = {};
         input.nav = hui::Direction::down;
-        for (int i = 0; i < 4; ++i) sheet.handle(input, feedback);
+        for (int i = 0; i < 4; ++i)
+            sheet.handle(input, feedback);
         input = {};
         input.pressed = hui::action_bit(hui::Action::confirm);
         sheet.handle(input, feedback);

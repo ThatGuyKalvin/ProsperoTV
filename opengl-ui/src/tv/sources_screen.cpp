@@ -175,14 +175,16 @@ void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         if (id == -6)
         {
             sync();
-            model.announce(Level::ready, usb_files_.empty() ? tr("No USB playlists found")
-                                                          : tr("Choose a playlist below"),
+            model.announce(Level::ready,
+                           usb_files_.empty() ? tr("No USB playlists found")
+                                              : tr("Choose a playlist below"),
                            tr("Use the root of a USB drive, with .m3u or .m3u8 files."), 4);
         }
         else if (id <= -100)
         {
             const auto index = static_cast<std::size_t>(-100 - id);
-            if (index < usb_files_.size()) model.import_usb_playlist(usb_files_[index]);
+            if (index < usb_files_.size())
+                model.import_usb_playlist(usb_files_[index]);
         }
         else if (id < 0)
             model.add_source(static_cast<iptv::SourceKind>(-id));
@@ -242,8 +244,9 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     ui::paragraph(draw, fonts.regular, address, left, 375, 24, width, 34, theme.text_muted, 3);
     const auto guide_url = model.guide_url_override(id);
     if (!guide_url.empty())
-        ui::text(draw, fonts.regular, fonts.regular.font->fit(tr("XMLTV: ") + redact_address(guide_url),
-                                                           20, width), left, 488, 20, theme.text_muted);
+        ui::text(draw, fonts.regular,
+                 fonts.regular.font->fit(tr("XMLTV: ") + redact_address(guide_url), 20, width),
+                 left, 488, 20, theme.text_muted);
     ui::text(draw, fonts.semibold,
              tr("Refresh: ") + std::string(tr(schedule_name(source->schedule))), left, 510, 26,
              theme.text);

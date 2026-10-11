@@ -249,7 +249,7 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         const std::string status = programme_time(p->start) + " - " + programme_time(p->end) +
                                    (available                         ? tr("   Catch-up available")
                                     : p->start <= now && now < p->end ? tr("   On now")
-                                    : p->start > now ? tr("   Upcoming")
+                                    : p->start > now                  ? tr("   Upcoming")
                                                      : tr("   Archive unavailable"));
         ui::text(list, fonts.regular, status, kMargin, 890, 22,
                  available ? tone::accent : theme.text_muted);
@@ -266,8 +266,9 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         tr("Cross: Watch   D-pad: Channel / programme   L1/R1: Day   L2/R2: Page   Square: Now   "
            "Triangle: Search   Circle: Back"),
         kMargin, 990, 21, theme.text_muted);
-    ui::text(list, fonts.regular, "Options: Record / Remind / Scheduled programmes / Update / Match XMLTV",
-             kMargin, 1030, 21, theme.text_muted);
+    ui::text(list, fonts.regular,
+             "Options: Record / Remind / Scheduled programmes / Update / Match XMLTV", kMargin,
+             1030, 21, theme.text_muted);
     if (actions_ || jobs_)
     {
         list.rounded_rect({420, 230, 1140, 650}, 16, tone::night);

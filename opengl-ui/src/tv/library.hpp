@@ -94,7 +94,8 @@ class Library
     std::string guide_url(std::int64_t source) const;
     std::map<std::string, std::string> guide_mapping(std::int64_t source) const;
     bool set_guide_url(std::int64_t source, std::string_view url);
-    bool set_guide_mapping(std::int64_t source, std::string_view channel, std::string_view guide_id);
+    bool set_guide_mapping(std::int64_t source, std::string_view channel,
+                           std::string_view guide_id);
     std::int64_t selected_source() const;
     bool select_source(std::int64_t id);
     bool observe_channels(std::int64_t source, const iptv::Catalog &catalog, std::int64_t now);
