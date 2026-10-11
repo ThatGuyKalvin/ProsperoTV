@@ -591,6 +591,7 @@ class Model
     void set_status(std::string label, Level level);
     void set_source_text(std::string title, std::string detail);
     void notify(Level level, std::string title, std::string body = {});
+    void warn_account_expiry();
 
     void apply_custom_url(const char *url);
     void apply_account_server(const char *server);
@@ -724,6 +725,8 @@ class Model
     CatalogIndex pending_index_; // of pending_catalog_
     iptv::XtreamStatus pending_account_ = iptv::XtreamStatus::ok;
     std::string pending_account_stage_;
+    AccountInfo pending_account_info_{};
+    std::int64_t refresh_saved_source_id_ = 0;
     std::string pending_account_message_;
     bool pending_saved_ = false;
 

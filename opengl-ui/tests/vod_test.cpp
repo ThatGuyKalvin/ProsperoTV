@@ -9,6 +9,8 @@
 #include "iptv_store.h"
 #include <gtest/gtest.h>
 #include <chrono>
+#include <algorithm>
+#include <ctime>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -714,4 +716,51 @@ TEST_F(VodTest, MalformedMovieDetailsKeepPreviousMetadataAndDoNotComplete)
     EXPECT_TRUE(model.vod().details(id).complete);
     EXPECT_EQ(model.vod().details(id).cast, "Good actor");
     model.close();
+}
+
+TEST_F(VodTest, AccountInfoComesFromNormalRefreshAndSurvivesOfflineCachedStartup)
+{
+    const auto expiry = std::time(nullptr) + 3 * 86400;
+    response("", std::string(R"({"user_info":{"auth":1,"exp_date":)") + std::to_string(expiry) +
+                     R"(,"max_connections":"4"}})");
+    response("get_live_categories", R"([])");
+    response("get_live_streams", R"([{"stream_id":1,"name":"Live"}])");
+    {
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        model.refresh();
+        ASSERT_TRUE(settle(model));
+        ASSERT_NE(model.saved_source(3), nullptr);
+        EXPECT_EQ(model.saved_source(3)->account.expires_unix, expiry);
+        EXPECT_EQ(model.saved_source(3)->account.max_connections, 4);
+        std::string auth_url;
+        ASSERT_TRUE(iptv::BuildXtreamApiUrl(account, "", &auth_url));
+        const auto requests = host::requests();
+        EXPECT_EQ(std::count_if(requests.begin(), requests.end(),
+                                [&](const auto &request) { return request.url == auth_url; }),
+                  1);
+        const auto notices = model.take_notices();
+        EXPECT_TRUE(std::any_of(notices.begin(), notices.end(), [](const auto &notice)
+                                { return notice.title == "Account expires within a week"; }));
+        const auto checked = model.saved_source(3)->account.checked_unix;
+        host::set_unix_time(static_cast<std::uint64_t>(checked + 60));
+        response("", R"({"user_info":{"auth":0}})");
+        model.refresh();
+        ASSERT_TRUE(settle(model));
+        EXPECT_EQ(model.saved_source(3)->account.checked_unix, checked);
+        host::set_unix_time(0);
+        model.close();
+    }
+    host::set_network(false, "");
+    const auto downloads = host::fetch_count();
+    ptv::Model offline(dir);
+    ASSERT_TRUE(offline.open());
+    EXPECT_FALSE(offline.refreshing());
+    EXPECT_EQ(offline.saved_source(3)->account.expires_unix, expiry);
+    EXPECT_EQ(offline.saved_source(3)->account.max_connections, 4);
+    EXPECT_EQ(host::fetch_count(), downloads);
+    const auto notices = offline.take_notices();
+    EXPECT_TRUE(std::any_of(notices.begin(), notices.end(), [](const auto &notice)
+                            { return notice.title == "Account expires within a week"; }));
+    offline.close();
 }

@@ -64,6 +64,17 @@ bool valid_text(std::string_view text, std::size_t max)
 
 } // namespace
 
+int account_expiry_notice(const AccountInfo &info, std::uint64_t now)
+{
+    if (!now || info.expires_unix <= 0)
+        return 0;
+    const auto expiry = static_cast<std::uint64_t>(info.expires_unix);
+    if (expiry <= now)
+        return -1;
+    const auto remaining = expiry - now;
+    return remaining <= 7u * 86400u ? static_cast<int>((remaining + 86399u) / 86400u) : 0;
+}
+
 bool valid_source(const SavedSource &source)
 {
     if (source.id < 0 || source.kind < 0 || source.kind > 5 || !valid_text(source.name, 128) ||
@@ -154,6 +165,14 @@ bool Library::open(const std::string &path)
         "CREATE TABLE IF NOT EXISTS sources (id INTEGER PRIMARY KEY,kind INTEGER NOT NULL,"
         "name TEXT NOT NULL,url TEXT NOT NULL,username TEXT NOT NULL,password TEXT NOT NULL,"
         "mac TEXT NOT NULL,schedule INTEGER NOT NULL CHECK(schedule BETWEEN 0 AND 2));"
+        "CREATE TABLE IF NOT EXISTS account_info (source INTEGER PRIMARY KEY REFERENCES sources(id)"
+        " ON DELETE CASCADE,expires INTEGER NOT NULL,connections INTEGER NOT NULL,checked INTEGER "
+        "NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS account_source_changed AFTER UPDATE OF "
+        "kind,url,username,password ON sources "
+        "WHEN OLD.kind!=NEW.kind OR OLD.url!=NEW.url OR OLD.username!=NEW.username OR "
+        "OLD.password!=NEW.password "
+        "BEGIN DELETE FROM account_info WHERE source=OLD.id; END;"
         "CREATE TRIGGER IF NOT EXISTS history_source_removed AFTER DELETE ON sources BEGIN "
         "DELETE FROM channel_history WHERE source=OLD.id; END;"
         "CREATE TABLE IF NOT EXISTS selection (singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
@@ -287,9 +306,34 @@ std::vector<SavedSource> Library::sources() const
                            query.string(6),
                            static_cast<RefreshSchedule>(sqlite3_column_int(query.stmt, 7))};
         if (valid_source(source))
+        {
+            if (source.kind == 2)
+            {
+                Statement info(
+                    db_, "SELECT expires,connections,checked FROM account_info WHERE source=?1");
+                if (info.integer(1, source.id) && info.row())
+                    source.account = {sqlite3_column_int64(info.stmt, 0),
+                                      sqlite3_column_int64(info.stmt, 1),
+                                      sqlite3_column_int64(info.stmt, 2)};
+            }
             result.push_back(std::move(source));
+        }
     }
     return result;
+}
+
+bool Library::save_account_info(std::int64_t source, const AccountInfo &info)
+{
+    if (info.expires_unix < -1 || info.expires_unix > INT64_C(253402300799) ||
+        info.max_connections < -1 || info.max_connections > 1000000 || info.checked_unix <= 0)
+        return false;
+    Statement query(
+        db_, "INSERT INTO account_info SELECT id,?2,?3,?4 FROM sources WHERE id=?1 AND kind=2 "
+             "ON CONFLICT(source) DO UPDATE SET expires=excluded.expires,"
+             "connections=excluded.connections,checked=excluded.checked");
+    return query.integer(1, source) && query.integer(2, info.expires_unix) &&
+           query.integer(3, info.max_connections) && query.integer(4, info.checked_unix) &&
+           query.done() && sqlite3_changes(db_) == 1;
 }
 
 bool Library::save_source(SavedSource *source)
