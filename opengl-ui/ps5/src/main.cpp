@@ -1218,7 +1218,7 @@ int main()
     if (recovered_crash)
         crash_saved = save::write_atomic(
             tv::storage::logs_dir() + "/prosperotv-last-failure.txt",
-            ptv::failure_report(crash_record.receipt(), {}, crash_record.timestamp, -1, 0));
+            ptv::failure_report(crash_record.receipt(), {}, crash_record.timestamp, -1, 0)).empty();
     if (crash_status != ptv::crash::Read::error && crash_saved)
         say("[TV] crash recorder: %s", ptv::crash::install(crash_path) ? "ready" : "unavailable");
     else
