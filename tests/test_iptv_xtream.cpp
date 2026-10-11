@@ -58,6 +58,48 @@ TEST(IptvXtreamTest, ParsesAuthenticationAndExplainsAccountFailures)
               iptv::XtreamStatus::account_inactive);
 }
 
+TEST(IptvXtreamTest, AcceptsBomAndNullableProviderFieldsWithoutInventingIdsOrExtensions)
+{
+    iptv::XtreamAuth auth;
+    EXPECT_EQ(
+        iptv::ParseXtreamAuth("\xef\xbb\xbf"
+                              R"({"user_info":{"auth":1,"status":null,"message":"Hello\u000aTV"}})",
+                              &auth),
+        iptv::XtreamStatus::ok);
+    EXPECT_EQ(auth.message, "Hello TV");
+    EXPECT_EQ(iptv::ParseXtreamAuth(R"({"user_info":{"auth":null}})", &auth),
+              iptv::XtreamStatus::authentication_failed);
+    std::vector<iptv::XtreamCategory> categories;
+    ASSERT_EQ(
+        iptv::ParseXtreamCategories(
+            "\xef\xbb\xbf"
+            R"([{"category_id":1,"category_name":"News\u0009HD","parent_id":null},{"category_id":null,"category_name":"Missing"}])",
+            &categories),
+        iptv::XtreamStatus::ok);
+    ASSERT_EQ(categories.size(), 1u);
+    EXPECT_EQ(categories[0].name, "News HD");
+    EXPECT_TRUE(categories[0].parent_id.empty());
+    const std::string answer =
+        "\xef\xbb\xbf"
+        R"([{"stream_id":1,"name":null,"container_extension":null,"epg_channel_id":null,"direct_source":null,"stream_url":"https://cdn.example/1.ts","category_id":1},{"stream_id":null,"name":"Missing"}])";
+    for (std::size_t piece = 1; piece <= answer.size(); ++piece)
+    {
+        iptv::Catalog catalog;
+        iptv::ParseReport report;
+        iptv::XtreamStreamsParser parser(Credentials(), categories, 1, &catalog, &report);
+        for (std::size_t at = 0; at < answer.size(); at += piece)
+            ASSERT_TRUE(parser.Feed(std::string_view(answer).substr(at, piece)));
+        ASSERT_EQ(parser.Finish(), iptv::XtreamStatus::ok);
+        ASSERT_EQ(catalog.size(), 1u);
+        EXPECT_EQ(catalog[0].name, "Channel 1");
+        EXPECT_TRUE(catalog[0].tvg_id.empty());
+        EXPECT_EQ(catalog[0].url, "https://cdn.example/1.ts");
+        ASSERT_EQ(catalog[0].alternate_urls.size(), 1u);
+        EXPECT_TRUE(catalog[0].alternate_urls[0].ends_with("/1.ts"));
+        EXPECT_EQ(report.skipped, 1u);
+    }
+}
+
 TEST(IptvXtreamTest, ConvertsLiveJsonIntoTheSharedCatalog)
 {
     const iptv::XtreamCredentials credentials = Credentials();

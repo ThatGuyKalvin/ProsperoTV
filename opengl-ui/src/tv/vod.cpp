@@ -157,11 +157,24 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
                                     return value->SkipValue();
                                 found = true;
                                 if (value->Peek() == '[')
-                                    return ReadArray(value, [&](JsonReader *episode)
-                                                     { return parser.item(episode); });
+                                {
+                                    unsigned season = 0;
+                                    return ReadArray(
+                                        value,
+                                        [&](JsonReader *episode)
+                                        {
+                                            const auto number = std::to_string(season++);
+                                            if (episode->Peek() == '[')
+                                                return ReadArray(
+                                                    episode, [&](JsonReader *item)
+                                                    { return parser.item(item, number); });
+                                            return parser.item(episode);
+                                        });
+                                }
                                 return ReadObject(
                                     value,
-                                    [&](const std::string &season, JsonReader *episodes) {
+                                    [&](const std::string &season, JsonReader *episodes)
+                                    {
                                         return ReadArray(episodes, [&](JsonReader *episode)
                                                          { return parser.item(episode, season); });
                                     });

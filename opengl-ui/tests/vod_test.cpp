@@ -158,6 +158,41 @@ TEST_F(VodTest, DownloadsNestedCategoriesAndEscapesMovieAndEpisodeCredentials)
     EXPECT_NE(catalog[0].id, movie_id);
 }
 
+TEST_F(VodTest, LoadsBomPrefixedListsAndIndexedSeasonArrays)
+{
+    response("get_vod_categories",
+             "\xef\xbb\xbf"
+             R"([{"category_id":3,"category_name":"Movies","parent_id":null}])");
+    response(
+        "get_vod_streams",
+        "\xef\xbb\xbf"
+        R"({"data":[{"stream_id":10,"name":"A\u0009movie","container_extension":null,"stream_icon":null,"category_id":3},{"stream_id":null,"name":"Missing"}]})");
+    iptv::Catalog catalog;
+    std::string error;
+    ASSERT_TRUE(ptv::load_vod(account, ptv::VodKind::movies, {}, &catalog, nullptr, &error))
+        << error;
+    ASSERT_EQ(catalog.size(), 1u);
+    EXPECT_EQ(catalog[0].name, "A movie");
+    EXPECT_TRUE(catalog[0].tvg_logo.empty());
+    EXPECT_EQ(catalog[0].url, "https://provider.invalid/sub/movie/user%40home/p%26ss/10.mp4");
+    std::string series;
+    ASSERT_TRUE(iptv::BuildXtreamSeriesUrl(account, "20", &series));
+    reply(
+        series,
+        "\xef\xbb\xbf"
+        R"({"episodes":[[],[{"id":200,"title":"Pilot","episode_num":1,"container_extension":null}],[{"id":201,"title":"Return","episode_num":1,"season":5}]]})");
+    ASSERT_TRUE(ptv::load_vod(account, ptv::VodKind::episodes, "20", &catalog, nullptr, &error))
+        << error;
+    ASSERT_EQ(catalog.size(), 2u);
+    EXPECT_EQ(catalog[0].group_title, "Season 1");
+    EXPECT_EQ(catalog[0].source_line, 100001u);
+    EXPECT_EQ(catalog[1].group_title, "Season 5");
+    EXPECT_TRUE(catalog[0].url.ends_with("/200.mp4"));
+    reply(series, R"({"episodes":[[],[{"id":200,"title":"Pilot"}],false]})");
+    EXPECT_FALSE(ptv::load_vod(account, ptv::VodKind::episodes, "20", &catalog, nullptr, &error));
+    EXPECT_TRUE(catalog.empty());
+}
+
 TEST_F(VodTest, ControllerBrowsesChildrenAndStartsAMovieWithoutChangingLiveHistory)
 {
     ptv::Model model(dir);
