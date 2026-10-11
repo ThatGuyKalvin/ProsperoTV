@@ -773,3 +773,5 @@
 {"Recording to USB. Touchpad stops.", {"جارٍ التسجيل على USB. لوحة اللمس توقفه.", "מקליט ל-USB. משטח המגע עוצר."}},
 {"Recording requested; check USB and programme schedules.", {"طُلب التسجيل؛ تحقق من USB وجدول البرامج.", "התבקשה הקלטה; בדוק את ה-USB ואת התזמון."}},
 {"Touchpad Record · Square Last · Cross List · Options Tracks · Triangle Info · Circle Back", {"لوحة اللمس تسجيل · المربع السابقة · الصليب القائمة · Options المسارات · المثلث معلومات · الدائرة رجوع", "משטח מגע הקלטה · ריבוע אחרון · איקס רשימה · Options רצועות · משולש מידע · עיגול חזרה"}},
+{"Auto (reduce on buffering)", {"تلقائي (خفض الجودة عند التخزين المؤقت)", "אוטומטי (הפחתת איכות בזמן טעינה)"}},
+{"Auto unavailable (missing bitrate)", {"التلقائي غير متاح (معدل البت غير مذكور)", "אוטומטי אינו זמין (חסר קצב סיביות)"}},
