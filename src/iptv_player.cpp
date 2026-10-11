@@ -761,6 +761,7 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     config.poll_controls = adapter->poll_controls;
     config.controls_context = adapter->controls_context;
     config.speed_percent = gMediaSession ? gPlaybackSpeed.load() : 100;
+    config.poll_during_submit = gMediaSession && format->video_codec == IPTV_STREAM_VIDEO_VP9;
     iptv_native_agc_loading_stop();
     const int handoff = iptv_native_agc_present_shutdown();
     if (handoff != 0)
@@ -2568,6 +2569,26 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
                 std::snprintf(gMediaState.chapter_titles[i], sizeof(gMediaState.chapter_titles[i]),
                               "%s", timeline.chapters[i].title.c_str());
             }
+        },
+        [](void *self, const iptv::MediaVp9Packet &packet)
+        {
+            auto *player = static_cast<StreamRunner *>(self);
+            if (!player->IsWebm() && !player->StartWebm())
+                return false;
+            iptv_webm_video_info_t video{};
+            video.track_number = 1;
+            video.timestamp_scale_ns = 1000000;
+            video.profile_present = 1;
+            video.pixel_width = video.display_width = packet.width;
+            video.pixel_height = video.display_height = packet.height;
+            iptv_webm_block_t block{};
+            block.data = packet.data;
+            block.bytes = packet.bytes;
+            block.pts_us = packet.pts_us;
+            block.track_number = 1;
+            block.kind = IPTV_WEBM_SIMPLE_BLOCK;
+            block.keyframe = packet.keyframe;
+            return player->PushWebm(video, block) == IPTV_STREAM_OK;
         }};
     std::string error;
     const int result =
@@ -2670,8 +2691,9 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             iptv::http::CloseStream(&request);
             return RunHls(request.effective_url, runner, read_buffer, playlist_data, headers);
         }
-        if (!UrlLooksLikeWebm(request.effective_url) &&
-            (iptv::LooksLikeMedia(read_buffer, static_cast<std::size_t>(first)) ||
+        if ((!UrlLooksLikeWebm(request.effective_url) || gMediaSession) &&
+            ((gMediaSession && UrlLooksLikeWebm(request.effective_url)) ||
+             iptv::LooksLikeMedia(read_buffer, static_cast<std::size_t>(first)) ||
              (gMediaSession && first >= 376 && read_buffer[0] == 0x47 && read_buffer[188] == 0x47)))
         {
             const std::string media_url = request.effective_url;
@@ -2883,7 +2905,7 @@ static int RunPlayerOnce(const char *url, const char *channel_name, const char *
 #endif
         if (runner->PlaybackStopRequested())
             result = 1;
-        else if (!(UrlLooksLikeWebm(url) ? runner->StartWebm() : runner->Start()))
+        else if (!(live && UrlLooksLikeWebm(url) ? runner->StartWebm() : runner->Start()))
         {
             SetLastPlaybackError("The hardware decoder session could not be initialized.");
             Notify("IPTV: decoder session initialization failed");

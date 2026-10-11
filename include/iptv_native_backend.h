@@ -96,6 +96,8 @@ extern "C"
         void (*poll_controls)(void *context);
         void *controls_context;
         uint32_t speed_percent; /* 0 or 100 is normal; 50 through 200 is supported. */
+        /* Only set when submit_video runs on the foreground control thread. */
+        uint32_t poll_during_submit;
     } iptv_native_open_config_t;
 
     typedef struct iptv_native_telemetry

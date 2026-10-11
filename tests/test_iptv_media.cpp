@@ -24,6 +24,8 @@ struct Memory
     std::vector<std::uint8_t> bytes, transport;
     std::size_t at = 0, piece = 4096;
     bool stop = false, reject_output = false;
+    bool vp9_output = false, stop_after_vp9 = false;
+    std::vector<iptv::MediaVp9Packet> vp9;
     unsigned seeks = 0;
     iptv::Subtitles *subtitles = nullptr;
     unsigned subtitle_language = 0;
@@ -108,7 +110,7 @@ struct Memory
                 return true;
             };
         }
-        const iptv::MediaOutput output{
+        iptv::MediaOutput output{
             this,
             [](void *self, const std::uint8_t *bytes, std::size_t count)
             {
@@ -139,6 +141,18 @@ struct Memory
             { static_cast<Memory *>(self)->audio_tracks = tracks; },
             [](void *self, const iptv::MediaTimeline &timeline)
             { static_cast<Memory *>(self)->timeline = timeline; }};
+        if (vp9_output)
+            output.vp9_packet = [](void *self, const iptv::MediaVp9Packet &packet)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                EXPECT_NE(packet.data, nullptr);
+                EXPECT_GT(packet.bytes, 0u);
+                m.vp9.push_back(packet);
+                m.vp9.back().data = nullptr;
+                if (m.stop_after_vp9)
+                    m.stop = true;
+                return !m.reject_output;
+            };
         return iptv::ReadMedia(input, output, error, start_us);
     }
 };
@@ -845,3 +859,38 @@ TEST(Media, HlsResolvesSegmentsAgainstTheRedirectedPlaylist)
     check_transport(memory, false);
 }
 } // namespace
+
+TEST(Media, Vp9WebmSeeksToKeyframeWithTimeline)
+{
+    Memory media("seek.webm");
+    media.vp9_output = true;
+    std::string error;
+    ASSERT_FALSE(media.bytes.empty());
+    ASSERT_EQ(media.run(&error, 2400000), 0) << error;
+    EXPECT_TRUE(media.transport.empty());
+    EXPECT_EQ(media.timeline.duration_us, 6000000);
+    ASSERT_EQ(media.timeline.chapters.size(), 2u);
+    EXPECT_EQ(media.timeline.chapters[1].position_us, 2000000);
+    EXPECT_TRUE(media.timeline.seekable);
+    ASSERT_EQ(media.vp9.size(), 100u);
+    EXPECT_EQ(media.vp9.front().pts_us, 4000000u);
+    EXPECT_EQ(media.vp9.back().pts_us, 7960000u);
+    EXPECT_TRUE(media.vp9.front().keyframe);
+    EXPECT_EQ(media.vp9.front().width, 320u);
+    EXPECT_EQ(media.vp9.front().height, 180u);
+}
+
+TEST(Media, Vp9WebmRequiresConsumerAndHonorsStopAndFailure)
+{
+    std::string error;
+    Memory unsupported("seek.webm");
+    EXPECT_EQ(unsupported.run(&error), -1);
+    Memory rejected("seek.webm");
+    rejected.vp9_output = rejected.reject_output = true;
+    EXPECT_EQ(rejected.run(&error), -1);
+    EXPECT_EQ(rejected.vp9.size(), 1u);
+    Memory stopped("seek.webm");
+    stopped.vp9_output = stopped.stop_after_vp9 = true;
+    EXPECT_EQ(stopped.run(&error), 1);
+    EXPECT_EQ(stopped.vp9.size(), 1u);
+}

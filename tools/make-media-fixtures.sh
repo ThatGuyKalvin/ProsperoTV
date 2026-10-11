@@ -207,4 +207,7 @@ ffmpeg -hide_banner -loglevel error -y -i "$output/chapters.mp4" -map 0:v -map 0
 mkdir -p "$output/hls-seek"
 ffmpeg -hide_banner -loglevel error -y -i "$output/chapters.mp4" -map 0:v -map 0:a \
     -c copy -hls_time 1 -hls_list_size 0 "$output/hls-seek/master.m3u8"
+ffmpeg -hide_banner -loglevel error -y -i "$output/chapters.mp4" -map 0:v -an \
+    -map_chapters 0 -c:v libvpx-vp9 -threads 2 -deadline good -cpu-used 5 -g 25 \
+    -b:v 300k "$output/seek.webm"
 printf '%s\n' "$stamp" > "$output/.complete"

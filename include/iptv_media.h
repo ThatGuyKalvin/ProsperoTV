@@ -47,6 +47,14 @@ struct MediaTimeline
     bool seekable = false;
     std::vector<MediaChapter> chapters; // At most 128; titles at most 128 bytes.
 };
+struct MediaVp9Packet
+{
+    const std::uint8_t *data = nullptr;
+    std::size_t bytes = 0;
+    std::uint64_t pts_us = 0;
+    std::uint32_t width = 0, height = 0;
+    bool keyframe = false;
+};
 struct MediaOutput
 {
     void *context = nullptr;
@@ -56,6 +64,8 @@ struct MediaOutput
                             std::int64_t pts_us, std::int64_t duration_us) = nullptr;
     void (*audio_tracks)(void *, const std::vector<MediaAudioTrack> &) = nullptr;
     void (*timeline)(void *, const MediaTimeline &) = nullptr;
+    // Optional video-only VP9 path; packet storage is borrowed for this call.
+    bool (*vp9_packet)(void *, const MediaVp9Packet &) = nullptr;
 };
 // 0: complete, 1: cancelled, -1: error. Streaming I/O, no transcoding.
 // start_us is relative to the beginning; seek to the preceding decodable keyframe.
