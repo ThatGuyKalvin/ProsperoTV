@@ -49,7 +49,9 @@ constexpr float kHeroText = 1120.0f; // the width the hero's words may take
 
 // The lists of Live TV, in the order of their chips. Favorites has a tab of
 // its own.
-constexpr Group kChips[] = {Group::all, Group::recent, Group::news, Group::sports, Group::kids};
+constexpr Group kChips[] = {Group::all,          Group::recent, Group::recently_added,
+                            Group::most_watched, Group::news,   Group::sports,
+                            Group::kids};
 constexpr int kChipCount = static_cast<int>(std::size(kChips));
 
 int chip_of(Group group)
@@ -293,6 +295,8 @@ void BrowseScreen::rebuild_chips()
     std::vector<ui::TabItem> chips;
     chips.push_back({tr(Model::group_name(Group::all))});
     chips.push_back({tr(Model::group_name(Group::recent))});
+    chips.push_back({tr(Model::group_name(Group::recently_added))});
+    chips.push_back({tr(Model::group_name(Group::most_watched))});
     if (chip_categories_.empty())
         for (const Group group : {Group::news, Group::sports, Group::kids})
             chips.push_back({tr(Model::group_name(group))});
@@ -314,8 +318,8 @@ int BrowseScreen::current_chip() const
         const auto at =
             std::find(chip_categories_.begin(), chip_categories_.end(), model.provider_category());
         if (at != chip_categories_.end())
-            return 2 + static_cast<int>(at - chip_categories_.begin());
-        return model.view.live_group == Group::recent ? 1 : 0;
+            return 4 + static_cast<int>(at - chip_categories_.begin());
+        return chip_of(model.view.live_group);
     }
     return chip_of(model.view.live_group);
 }
@@ -328,11 +332,11 @@ void BrowseScreen::apply_group(int chip)
     {
         // All and Recent are lists of the whole source; a provider's chip is
         // the whole source narrowed to that category and what is under it.
-        const Group group = chip == 1 ? Group::recent : Group::all;
+        const Group group = chip < 4 ? kChips[chip] : Group::all;
         model.view.live_group = group;
         model.set_group(group);
         model.set_provider_category(
-            chip >= 2 ? std::string_view(chip_categories_[static_cast<std::size_t>(chip - 2)])
+            chip >= 4 ? std::string_view(chip_categories_[static_cast<std::size_t>(chip - 4)])
                       : std::string_view());
         restart_list();
         return;
@@ -627,11 +631,14 @@ void BrowseScreen::update(float dt)
                                group_digits(model.channel_count());
         groups_.tab(1).label = std::string(tr(Model::group_name(Group::recent))) + "  " +
                                group_digits(model.group_size(Group::recent));
+        for (int i = 2; i < 4; ++i)
+            groups_.tab(i).label = std::string(tr(Model::group_name(kChips[i]))) + "  " +
+                                   group_digits(model.group_size(kChips[i]));
         std::size_t chip = 0;
         for (const auto &facet : model.provider_categories())
             if (chip < chip_categories_.size() && facet.value == chip_categories_[chip])
             {
-                groups_.tab(static_cast<int>(chip) + 2).label =
+                groups_.tab(static_cast<int>(chip) + 4).label =
                     label_text(category_leaf(facet.value)) + "  " + group_digits(facet.count);
                 ++chip;
             }
@@ -678,7 +685,8 @@ void BrowseScreen::update(float dt)
             empty_.body = tr("Press Square on any channel to keep it here.");
             empty_.action = tr("Browse Live TV");
         }
-        else if (model.parental().kids_only() && model.group() != Group::recent)
+        else if (model.parental().kids_only() && model.group() != Group::recent &&
+                 model.group() != Group::most_watched)
         {
             // Nothing the provider offers is marked for children, or approved
             // by a parent: an empty app is not a broken one.
@@ -690,9 +698,11 @@ void BrowseScreen::update(float dt)
         else
         {
             empty_.title = tr("Nothing here yet");
-            empty_.body = model.group() == Group::recent
-                              ? tr("Channels you watch are listed here.")
-                              : tr("This source has no channels of this kind.");
+            empty_.body =
+                model.group() == Group::recent ? tr("Channels you watch are listed here.")
+                : model.group() == Group::most_watched
+                    ? tr("Watch a live channel for at least ten seconds to begin this list.")
+                    : tr("This source has no channels of this kind.");
             empty_.action.clear();
         }
     }
@@ -860,6 +870,13 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
         }
         groups_.draw(canvas);
     }
+
+    if (model.group() == Group::recently_added || model.group() == Group::most_watched)
+        ui::text(list, fonts.regular,
+                 model.group() == Group::recently_added
+                     ? tr("First seen by this app, newest first")
+                     : tr("Successful viewing sessions, most first"),
+                 kMargin, kListY - 34.0f, 18.0f, theme.text_muted);
 
     // ---- at the right: where the focus is, and what narrows the list ----
     float right = kWidth - kMargin;

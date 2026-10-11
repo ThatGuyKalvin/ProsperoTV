@@ -515,7 +515,13 @@ TEST_F(AppTest, TheListsAreReachedFromTheTopRow)
     move(Direction::right); // Recent (empty)
     EXPECT_EQ(model_->group(), ptv::Group::recent);
     EXPECT_EQ(model_->visible_count(), 0u);
-    // The chips after Recent are the list's own categories, in its order.
+    move(Direction::right);
+    EXPECT_EQ(model_->group(), ptv::Group::recently_added);
+    EXPECT_EQ(model_->visible_count(), 60u);
+    move(Direction::right);
+    EXPECT_EQ(model_->group(), ptv::Group::most_watched);
+    EXPECT_EQ(model_->visible_count(), 0u);
+    // Provider categories follow the four built-in lists.
     ASSERT_FALSE(model_->provider_categories().empty());
     const std::string first = model_->provider_categories().front().value;
     const unsigned held = model_->provider_categories().front().count;
@@ -529,8 +535,10 @@ TEST_F(AppTest, TheListsAreReachedFromTheTopRow)
     ASSERT_TRUE(model_->take_play_request(&request));
     EXPECT_EQ(request.channel_id, model_->channel(model_->visible(0)).id);
     EXPECT_EQ(model_->view.live_group, ptv::Group::all);
-    // Left twice is All again, and the whole list.
+    // Left four times is All again, and the whole list.
     move(Direction::up);
+    move(Direction::left);
+    move(Direction::left);
     move(Direction::left);
     move(Direction::left);
     EXPECT_TRUE(model_->provider_category().empty());
@@ -541,6 +549,8 @@ TEST_F(AppTest, BackGoesToTheTopThenToTheFirstList)
 {
     move(Direction::up);
     move(Direction::right);
+    move(Direction::right); // Recently added
+    move(Direction::right); // Most watched
     move(Direction::right); // the list's first category
     ASSERT_FALSE(model_->provider_category().empty());
     ASSERT_GT(model_->visible_count(), 6u);

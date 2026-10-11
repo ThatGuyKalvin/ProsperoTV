@@ -230,8 +230,8 @@ const char *Model::builtin_url()
 
 const char *Model::group_name(Group group)
 {
-    static constexpr const char *names[kGroupCount] = {"All",  "Favorites", "Recent",
-                                                       "News", "Sports",    "Kids"};
+    static constexpr const char *names[kGroupCount] = {
+        "All", "Favorites", "Recent", "News", "Sports", "Kids", "Recently added", "Most watched"};
     return names[static_cast<unsigned>(group)];
 }
 
@@ -484,6 +484,9 @@ void Model::adopt_catalog()
     if (!channel_names_.empty())
         index_.build(catalog_, channel_names_);
     vod_.playlist_updated();
+    if (!catalog_.empty())
+        (void)library_.observe_channels(selected_source_id_, catalog_, platform::unix_time());
+    channel_history_ = library_.channel_history(selected_source_id_, catalog_);
     hidden_categories_ = library_.hidden_categories(source_id(active_source_));
     category_rules_ = library_.category_rules(source_id(active_source_));
     folder_channels_ = library_.folder_channels(folder_);
@@ -549,6 +552,13 @@ void Model::recount_groups()
         if ((mark & 4u) != 0)
             continue;
         ++shown;
+        if (index < channel_history_.size())
+        {
+            if (channel_history_[index].first_seen > 0)
+                ++group_sizes_[static_cast<unsigned>(Group::recently_added)];
+            if (channel_history_[index].watches > 0)
+                ++group_sizes_[static_cast<unsigned>(Group::most_watched)];
+        }
         favorites += (mark & kFavoriteMark) != 0 ? 1u : 0u;
         recent += (mark & kRecentMark) != 0 ? 1u : 0u;
         news += (trait & CatalogIndex::kNews) != 0 ? 1u : 0u;
@@ -637,7 +647,21 @@ void Model::rebuild_visible()
         visible_.push_back(index);
     }
     const auto &saved_order = group_ == Group::favorites ? favorite_order_ : channel_order_;
-    if (!saved_order.empty())
+    const bool ranked = group_ == Group::recently_added || group_ == Group::most_watched;
+    if (ranked)
+    {
+        const auto rank = [this](unsigned index)
+        {
+            if (index >= channel_history_.size())
+                return std::int64_t{0};
+            return group_ == Group::recently_added ? channel_history_[index].first_seen
+                                                   : channel_history_[index].watches;
+        };
+        std::erase_if(visible_, [&](unsigned index) { return rank(index) == 0; });
+        std::stable_sort(visible_.begin(), visible_.end(),
+                         [&](unsigned a, unsigned b) { return rank(a) > rank(b); });
+    }
+    else if (!saved_order.empty())
     {
         std::vector<std::size_t> ranks(catalog_.size(), saved_order.size());
         for (std::size_t i = 0; i < saved_order.size(); ++i)
@@ -645,10 +669,13 @@ void Model::rebuild_visible()
                 ranks[at] = i;
         std::stable_sort(visible_.begin(), visible_.end(),
                          [&](unsigned a, unsigned b) { return ranks[a] < ranks[b]; });
+    }
+    if (ranked || !saved_order.empty())
+    {
         letter_starts_.fill(-1);
         for (std::size_t i = 0; i < visible_.size(); ++i)
         {
-            auto &start = letter_starts_[index_.letters[visible_[i]]];
+            int &start = letter_starts_[index_.letters[visible_[i]]];
             if (start < 0)
                 start = static_cast<int>(i);
         }
@@ -691,7 +718,8 @@ int Model::position_of(std::string_view channel_id) const
     const std::size_t index = catalog_.Find(channel_id);
     if (index == iptv::Catalog::npos || index >= index_.ranks.size())
         return -1;
-    if (!(group_ == Group::favorites ? favorite_order_ : channel_order_).empty())
+    if (group_ == Group::recently_added || group_ == Group::most_watched ||
+        !(group_ == Group::favorites ? favorite_order_ : channel_order_).empty())
     {
         const auto found = std::find(visible_.begin(), visible_.end(), index);
         return found == visible_.end() ? -1 : static_cast<int>(found - visible_.begin());
@@ -981,6 +1009,19 @@ bool Model::take_play_request(PlayRequest *request)
     play_request_ = {};
     play_requested_ = false;
     return true;
+}
+
+void Model::report_watch(std::string_view channel_id)
+{
+    const auto index = catalog_.Find(channel_id);
+    if (index == iptv::Catalog::npos || catalog_[index].media_kind != iptv::MediaKind::live)
+        return;
+    if (library_.record_watch(selected_source_id_, channel_id))
+    {
+        channel_history_ = library_.channel_history(selected_source_id_, catalog_);
+        recount_groups();
+        rebuild_visible();
+    }
 }
 
 void Model::report_playback_failure(const char *channel_id, const char *channel_name, int result,
@@ -1362,7 +1403,8 @@ void Model::run_refresh()
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
         const iptv::http::RequestControl control{
-            [](void *context) {
+            [](void *context)
+            {
                 return static_cast<const Model *>(context)->stop_requested_.load(
                     std::memory_order_acquire);
             },

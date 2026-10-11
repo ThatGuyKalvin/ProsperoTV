@@ -1485,6 +1485,13 @@ int main()
             reason != nullptr && reason[0] != '\0' ? " reason=\"" : "",
             reason != nullptr && reason[0] != '\0' ? reason : "",
             reason != nullptr && reason[0] != '\0' ? "\"" : "");
+        if (outcome.result >= 0 && seconds >= 10 && request.record_channel_result)
+        {
+            std::string receipt;
+            if (save::read_file(kLatestReceiptPath, &receipt, 65536) &&
+                ptv::completed_watch(receipt, seconds, outcome.result))
+                model.report_watch(request.channel_id);
+        }
         if (ptv::diag::enabled())
             trace_playback(request, outcome, seconds);
         if (script.active())
