@@ -413,18 +413,21 @@ VodLibrary::~VodLibrary()
     stop();
 }
 void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
-                           RefreshSchedule schedule, std::string user_agent, std::string referrer)
+                           RefreshSchedule schedule, std::string user_agent, std::string referrer,
+                           std::string extra_headers)
 {
     schedule_ = schedule;
     if (!playlist_ && account.server_url == account_.server_url &&
         account.username == account_.username && account.password == account_.password &&
-        cache == cache_ && user_agent == user_agent_ && referrer == referrer_)
+        cache == cache_ && user_agent == user_agent_ && referrer == referrer_ &&
+        extra_headers == extra_headers_)
         return;
     stop();
     playlist_ = nullptr;
     account_ = std::move(account);
     user_agent_ = std::move(user_agent);
     referrer_ = std::move(referrer);
+    extra_headers_ = std::move(extra_headers);
     cache_ = std::move(cache);
     key_.clear();
     catalog_.Clear();
@@ -441,7 +444,7 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
 void VodLibrary::configure_like(const VodLibrary &source)
 {
     configure(source.account_, source.cache_, source.schedule_, source.user_agent_,
-              source.referrer_);
+              source.referrer_, source.extra_headers_);
     if (source.playlist_)
         configure_playlist(source.playlist_);
 }
@@ -655,7 +658,9 @@ void *VodLibrary::work(void *self)
         [](void *self) { return static_cast<VodLibrary *>(self)->stop_.load(); }, &v};
     if (platform::network_init() == iptv::http::Status::ok)
     {
-        const iptv::http::RequestHeaders headers{v.user_agent_.c_str(), v.referrer_.c_str()};
+        iptv::http::RequestHeaders headers{v.user_agent_.c_str(), v.referrer_.c_str()};
+        headers.extra_headers = v.extra_headers_.c_str();
+        headers.credential_origin = v.account_.server_url.c_str();
         if (!v.detail_id_.empty())
         {
             v.pending_metadata_ = v.metadata_;

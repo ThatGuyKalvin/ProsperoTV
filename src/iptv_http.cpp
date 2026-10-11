@@ -498,6 +498,80 @@ bool IsSupportedPlaylistUrl(const char *url)
     return IsSupportedUrl(url);
 }
 
+bool ParseExtraHeaders(std::string_view text, std::vector<NamedHeader> *fields)
+{
+    if (fields)
+        fields->clear();
+    if (text.size() > 4096)
+        return false;
+    std::vector<NamedHeader> parsed;
+    std::vector<std::string> names;
+    while (!text.empty())
+    {
+        const auto end = text.find('\n');
+        const auto line = text.substr(0, end);
+        const auto colon = line.find(':');
+        if (colon == std::string_view::npos || colon == 0 || colon > 64 || parsed.size() == 16)
+            return false;
+        std::string name(line.substr(0, colon)), lower;
+        for (unsigned char c : name)
+        {
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                  std::string_view("!#$%&'*+-.^_`|~").find(c) != std::string_view::npos))
+                return false;
+            lower += LowerAscii(c);
+        }
+        for (const auto forbidden : {"host", "content-length", "transfer-encoding", "connection",
+                                     "keep-alive", "proxy-connection", "proxy-authenticate",
+                                     "proxy-authorization", "te", "trailer", "upgrade", "range"})
+            if (lower == forbidden)
+                return false;
+        for (const auto &seen : names)
+            if (seen == lower)
+                return false;
+        auto value = line.substr(colon + 1);
+        while (!value.empty() && value.front() == ' ')
+            value.remove_prefix(1);
+        while (!value.empty() && value.back() == ' ')
+            value.remove_suffix(1);
+        if (value.empty() || value.size() > 1024)
+            return false;
+        for (unsigned char c : value)
+            if (c < 32 || c == 127)
+                return false;
+        names.push_back(std::move(lower));
+        parsed.push_back({std::move(name), std::string(value)});
+        if (end == std::string_view::npos)
+            break;
+        text.remove_prefix(end + 1);
+    }
+    if (fields)
+        *fields = std::move(parsed);
+    return true;
+}
+
+bool ExtraHeadersForRequest(const RequestHeaders &headers, std::vector<NamedHeader> *fields)
+{
+    if (!fields || !ParseExtraHeaders(headers.extra_headers ? headers.extra_headers : "", fields))
+        return false;
+    for (auto field = fields->begin(); field != fields->end();)
+    {
+        auto name = field->name;
+        for (char &c : name)
+            c = LowerAscii(c);
+        const bool builtin =
+            (name == "user-agent" && headers.user_agent && *headers.user_agent) ||
+            (name == "referer" && headers.referrer && *headers.referrer) ||
+            (name == "cookie" && headers.cookie && *headers.cookie) ||
+            (name == "authorization" && headers.authorization && *headers.authorization);
+        if (builtin)
+            field = fields->erase(field);
+        else
+            ++field;
+    }
+    return true;
+}
+
 RequestHeaders HeadersForUrl(const char *original, const char *target,
                              const RequestHeaders &headers)
 {
@@ -521,6 +595,7 @@ RequestHeaders HeadersForUrl(const char *original, const char *target,
     {
         result.cookie = nullptr;
         result.authorization = nullptr;
+        result.extra_headers = nullptr;
     }
     return result;
 }
@@ -928,6 +1003,19 @@ int ConfigureRequest(int request, const char *accept, std::uint32_t receive_time
         result = sceHttpSetSendTimeOut(request, kSendTimeoutUsec);
     if (result >= 0)
         result = sceHttpSetRecvTimeOut(request, receive_timeout);
+    if (result >= 0 && headers)
+    {
+        std::vector<NamedHeader> extra;
+        if (!ExtraHeadersForRequest(*headers, &extra))
+            return -1;
+        for (const auto &field : extra)
+        {
+            result = sceHttpAddRequestHeader(request, field.name.c_str(), field.value.c_str(),
+                                             kHeaderOverwrite);
+            if (result < 0)
+                return result;
+        }
+    }
     if (result >= 0 && accept && *accept)
     {
         result = sceHttpAddRequestHeader(request, "Accept", accept, kHeaderOverwrite);

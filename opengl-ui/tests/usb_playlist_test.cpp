@@ -129,4 +129,38 @@ TEST_F(UsbPlaylistTest, ControllerImportsMixedPlaylistAndRefreshRetainsCacheWith
     EXPECT_EQ(reopened.channel(0).name, "Changed");
     reopened.close();
 }
+TEST_F(UsbPlaylistTest, CustomHeadersUseInitialStreamOriginForLocalPlaylist)
+{
+    ptv::Model model(dir);
+    model.set_usb_root(mount);
+    ASSERT_TRUE(model.open());
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.import_usb_playlist("/mnt/usb0/list.m3u"));
+    ASSERT_TRUE(settle(model));
+    model.edit_source_http(model.selected_source_id());
+    model.poll();
+    host::set_keyboard_text("");
+    model.poll();
+    host::set_keyboard_text("");
+    model.poll();
+    host::set_keyboard_text("X-Key: local-secret");
+    model.poll();
+    host::set_keyboard_text("");
+    model.poll();
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play(0));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.extra_headers, "X-Key: local-secret");
+    EXPECT_TRUE(request.credential_origin.empty());
+    ASSERT_FALSE(request.urls.empty());
+    iptv::http::RequestHeaders headers;
+    headers.extra_headers = request.extra_headers.c_str();
+    auto own = iptv::http::HeadersForUrl(request.urls[0].c_str(), request.urls[0].c_str(), headers);
+    EXPECT_NE(own.extra_headers, nullptr);
+    auto foreign = iptv::http::HeadersForUrl(request.urls[0].c_str(),
+                                             "https://foreign.invalid/segment.ts", headers);
+    EXPECT_EQ(foreign.extra_headers, nullptr);
+    model.close();
+}
 } // namespace

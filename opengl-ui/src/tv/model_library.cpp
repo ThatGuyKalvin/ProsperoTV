@@ -78,11 +78,13 @@ void Model::select_source_record(const SavedSource &source)
     if (source.kind == 2)
         xtream_ = {source.url, source.username, source.password};
     if (source.kind == 3)
-        portal_ = {source.url, source.mac, source.user_agent, source.referrer};
+        portal_ = {source.url, source.mac, source.user_agent, source.referrer,
+                   source.extra_headers};
     if (source.kind >= 4)
         local_source_ = source;
     vod_.configure(source.kind == 2 ? xtream_ : iptv::XtreamCredentials{},
-                   cache_path(active_source_), schedule_, source.user_agent, source.referrer);
+                   cache_path(active_source_), schedule_, source.user_agent, source.referrer,
+                   source.extra_headers);
     if (source.kind == 1)
         vod_.configure_playlist(&catalog_);
     if (changed)
@@ -113,6 +115,11 @@ void Model::apply_source_http(PlayRequest &request) const
 {
     if (const auto *source = saved_source(selected_source_id_))
     {
+        request.extra_headers = source->extra_headers;
+        // USB lists have no HTTP origin; playback scopes to each initial stream URL.
+        if (!usb_playlist_path(source->url) && !request.extra_headers.empty() &&
+            request.credential_origin.empty())
+            request.credential_origin = source->url;
         if (request.user_agent.empty())
             request.user_agent = source->user_agent;
         if (request.referrer.empty())
@@ -167,6 +174,51 @@ void Model::on_http_referrer(const char *text, void *self)
         return;
     }
     model.http_form_.referrer = text;
+    model.account_step_ = AccountStep::http_extra;
+    model.account_prompt_pending_ = true;
+}
+
+void Model::on_http_extra(const char *text, void *self)
+{
+    if (!self)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    if (!text)
+    {
+        model.account_step_ = AccountStep::none;
+        model.http_form_ = {};
+        return;
+    }
+    const std::string line(text);
+    if (!line.empty())
+    {
+        std::vector<iptv::http::NamedHeader> incoming, existing;
+        bool valid = line == "-";
+        std::string updated;
+        if (!valid && line.find('\n') == line.npos &&
+            iptv::http::ParseExtraHeaders(line, &incoming) && incoming.size() == 1 &&
+            iptv::http::ParseExtraHeaders(model.http_form_.extra_headers, &existing))
+        {
+            const auto lower = [](std::string value)
+            {
+                for (char &c : value)
+                    if (c >= 'A' && c <= 'Z')
+                        c += 'a' - 'A';
+                return value;
+            };
+            for (const auto &field : existing)
+                if (lower(field.name) != lower(incoming[0].name))
+                    updated += field.name + ": " + field.value + "\n";
+            updated += incoming[0].name + ": " + incoming[0].value;
+            valid = iptv::http::ParseExtraHeaders(updated);
+        }
+        if (valid)
+            model.http_form_.extra_headers = std::move(updated);
+        else
+            model.notify(Level::warning, tr("Invalid HTTP header"));
+        model.account_prompt_pending_ = true;
+        return;
+    }
     model.account_step_ = AccountStep::none;
     model.commit_source(model.http_form_);
     model.http_form_ = {};
@@ -446,7 +498,8 @@ bool Model::set_schedule(std::int64_t id, RefreshSchedule schedule)
         schedule_ = schedule;
         vod_.configure(active_source_ == iptv::SourceKind::Xtream ? xtream_
                                                                   : iptv::XtreamCredentials{},
-                       cache_path(active_source_), schedule_);
+                       cache_path(active_source_), schedule_, next.user_agent, next.referrer,
+                       next.extra_headers);
         if (active_source_ == iptv::SourceKind::Custom)
             vod_.configure_playlist(&catalog_);
     }

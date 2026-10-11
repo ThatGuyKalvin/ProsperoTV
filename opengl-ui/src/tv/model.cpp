@@ -1257,12 +1257,17 @@ void Model::continue_account_form()
                                   IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_password, this);
         break;
     case AccountStep::http_user_agent:
-        iptv_ime_request_prompt(http_form_.user_agent.c_str(), tr("Source user agent (1 of 2)"),
+        iptv_ime_request_prompt(http_form_.user_agent.c_str(), tr("Source user agent (1 of 3)"),
                                 tr("Leave empty for the default"), IPTV_IME_BUFFER_CHARACTERS,
                                 &Model::on_http_user_agent, this);
         break;
+    case AccountStep::http_extra:
+        iptv_ime_request_prompt("", tr("Custom HTTP header"),
+                                tr("Name: value; empty to save; - to clear all"),
+                                IPTV_IME_BUFFER_CHARACTERS, &Model::on_http_extra, this);
+        break;
     case AccountStep::http_referrer:
-        iptv_ime_request_prompt(http_form_.referrer.c_str(), tr("Source referrer (2 of 2)"),
+        iptv_ime_request_prompt(http_form_.referrer.c_str(), tr("Source referrer (2 of 3)"),
                                 "https://provider.example/", IPTV_IME_BUFFER_CHARACTERS,
                                 &Model::on_http_referrer, this);
         break;
@@ -1441,8 +1446,10 @@ void Model::run_refresh()
     const bool usb = refresh_source_ == iptv::SourceKind::Custom && usb_playlist_path(refresh_url_);
     pending_network_ = usb ? iptv::http::Status::ok : platform::network_init();
 
-    const iptv::http::RequestHeaders headers{refresh_http_.user_agent.c_str(),
-                                             refresh_http_.referrer.c_str()};
+    iptv::http::RequestHeaders headers{refresh_http_.user_agent.c_str(),
+                                       refresh_http_.referrer.c_str()};
+    headers.extra_headers = refresh_http_.extra_headers.c_str();
+    headers.credential_origin = refresh_http_.url.c_str();
     const auto stopping = [this]() { return stop_requested_.load(std::memory_order_acquire); };
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {

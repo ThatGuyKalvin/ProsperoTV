@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/model.hpp"
+#include "tv/usb_playlist.hpp"
 #include "tv/platform.hpp"
 #include "tv/backup.hpp"
 #include "tv/local_tv.hpp"
@@ -197,6 +198,8 @@ void Model::poll_programme_jobs()
         const auto channel = (*channels)[index];
         RecordingInput input;
         input.url = channel.url;
+        input.extra_headers = source->extra_headers;
+        input.credential_origin = usb_playlist_path(source->url) ? std::string{} : source->url;
         input.user_agent = channel.http_user_agent.empty() ? source->user_agent
                                                            : std::string(channel.http_user_agent);
         input.referrer =

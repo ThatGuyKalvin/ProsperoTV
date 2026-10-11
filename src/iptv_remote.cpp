@@ -53,7 +53,7 @@ namespace
 constexpr char page[] =
 #include "iptv_remote_page.h"
     ;
-constexpr size_t max_request = 16384;
+constexpr size_t max_request = 32768;
 struct Client
 {
     int fd = -1;

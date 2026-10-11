@@ -44,6 +44,7 @@ struct Resource
         iptv::http::RequestHeaders headers{};
         headers.user_agent = owner.input.user_agent.c_str();
         headers.referrer = owner.input.referrer.c_str();
+        headers.extra_headers = owner.input.extra_headers.c_str();
         headers.authorization = owner.input.authorization.c_str();
         headers.credential_origin = owner.input.credential_origin.empty()
                                         ? owner.input.url.c_str()

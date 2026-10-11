@@ -18,7 +18,7 @@ struct Download
     std::size_t at = 0;
 };
 std::map<int, Download> downloads;
-std::vector<std::string> authorizations;
+std::vector<std::string> authorizations, custom_headers;
 int next_request = 1;
 std::string fixture_prefix = "build/media-tests/fixtures/";
 } // namespace
@@ -52,6 +52,7 @@ Status RecordingOpenStream(const char *url, const char *, StreamRequest *stream,
     std::strncpy(stream->effective_url, url, sizeof(stream->effective_url) - 1);
     downloads.emplace(stream->request, std::move(download));
     authorizations.emplace_back(headers && headers->authorization ? headers->authorization : "");
+    custom_headers.emplace_back(headers && headers->extra_headers ? headers->extra_headers : "");
     return Status::ok;
 }
 int RecordingReadStream(StreamRequest *stream, void *buffer, std::size_t count)
@@ -181,10 +182,12 @@ TEST(RecordingTransport, SinkFailureAndCancellationReleaseEveryRequest)
 TEST(RecordingTransport, CredentialsStayOnTheirConfiguredOrigin)
 {
     authorizations.clear();
+    custom_headers.clear();
     ptv::RecordingInput input;
     input.url = "https://fixture.test/two-audio.mp4";
     input.credential_origin = "https://provider.test";
     input.authorization = "Bearer private";
+    input.extra_headers = "X-Key: private";
     std::string error;
     const iptv::http::ListSink sink{[](void *, const char *, std::size_t) { return true; },
                                     nullptr};
@@ -192,6 +195,14 @@ TEST(RecordingTransport, CredentialsStayOnTheirConfiguredOrigin)
     ASSERT_FALSE(authorizations.empty());
     for (const auto &value : authorizations)
         EXPECT_TRUE(value.empty());
+    for (const auto &value : custom_headers)
+        EXPECT_TRUE(value.empty());
     EXPECT_TRUE(downloads.empty());
+    custom_headers.clear();
+    input.credential_origin = "https://fixture.test/account";
+    (void)ptv::platform::record_stream(input, sink, {}, error);
+    ASSERT_FALSE(custom_headers.empty());
+    for (const auto &value : custom_headers)
+        EXPECT_EQ(value, "X-Key: private");
 }
 } // namespace

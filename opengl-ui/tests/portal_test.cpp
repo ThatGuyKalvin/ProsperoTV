@@ -219,6 +219,7 @@ TEST_F(PortalTest, SourceHttpOverridesPortalDefaultsWithoutRemovingMacAuthentica
 {
     auto configured = credentials;
     configured.user_agent = "ProviderBox/3";
+    configured.extra_headers = "X-Device: box";
     configured.referrer = "https://provider.invalid/portal/";
     ptv::PortalClient client(configured, nullptr);
     ASSERT_TRUE(client.sign_in()) << client.error();
@@ -226,6 +227,7 @@ TEST_F(PortalTest, SourceHttpOverridesPortalDefaultsWithoutRemovingMacAuthentica
     ASSERT_FALSE(requests.empty());
     for (const auto &request : requests)
     {
+        EXPECT_EQ(request.extra_headers, configured.extra_headers);
         EXPECT_EQ(request.user_agent, configured.user_agent);
         EXPECT_EQ(request.referrer, configured.referrer);
         EXPECT_NE(request.cookie.find("mac="), std::string::npos);

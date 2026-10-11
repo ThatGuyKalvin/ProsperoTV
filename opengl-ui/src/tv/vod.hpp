@@ -38,7 +38,8 @@ class VodLibrary
   public:
     ~VodLibrary();
     void configure(iptv::XtreamCredentials account, std::string cache, RefreshSchedule schedule,
-                   std::string user_agent = {}, std::string referrer = {});
+                   std::string user_agent = {}, std::string referrer = {},
+                   std::string extra_headers = {});
     void configure_playlist(const iptv::Catalog *playlist);
     void configure_like(const VodLibrary &source);
     void playlist_updated();
@@ -98,7 +99,7 @@ class VodLibrary
     void note_scripts();
     iptv::XtreamCredentials account_;
     const iptv::Catalog *playlist_ = nullptr;
-    std::string cache_, series_, key_, status_, user_agent_, referrer_;
+    std::string cache_, series_, key_, status_, user_agent_, referrer_, extra_headers_;
     RefreshSchedule schedule_ = RefreshSchedule::daily;
     VodKind kind_ = VodKind::movies;
     iptv::Catalog catalog_, pending_;

@@ -128,6 +128,8 @@ iptv::http::FetchResult load_local_tv(const SavedSource &source, iptv::Catalog *
                                       const iptv::http::RequestControl *control)
 {
     iptv::http::RequestHeaders headers{source.user_agent.c_str(), source.referrer.c_str()};
+    headers.extra_headers = source.extra_headers.c_str();
+    headers.credential_origin = source.url.c_str();
     if (source.kind == 4)
     {
         auto body = iptv::http::AllocateListBuffer(4u * 1024u * 1024u);

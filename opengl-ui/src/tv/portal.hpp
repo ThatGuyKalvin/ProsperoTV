@@ -17,7 +17,7 @@ struct PortalCredentials
 {
     std::string url;
     std::string mac;
-    std::string user_agent{}, referrer{};
+    std::string user_agent{}, referrer{}, extra_headers{};
 };
 bool portal_endpoint(std::string_view address, std::string *endpoint);
 bool portal_mac(std::string_view input, std::string *mac);

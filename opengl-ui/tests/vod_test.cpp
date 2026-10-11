@@ -1026,6 +1026,7 @@ TEST_F(VodTest, SourceHttpDefaultsReachAccountCatalogGuideAndVodRequestsAndPlayb
         ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
         auto source = library.sources()[0];
         source.user_agent = "AccountPlayer/2";
+        source.extra_headers = "X-Key: account-secret";
         source.referrer = "https://provider.invalid/watch";
         ASSERT_TRUE(library.save_source(&source));
     }
@@ -1042,8 +1043,10 @@ TEST_F(VodTest, SourceHttpDefaultsReachAccountCatalogGuideAndVodRequestsAndPlayb
     ASSERT_TRUE(model.play(0));
     ptv::PlayRequest request;
     ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.extra_headers, "X-Key: account-secret");
     EXPECT_EQ(request.user_agent, "AccountPlayer/2");
     EXPECT_EQ(request.referrer, "https://provider.invalid/watch");
+    ASSERT_TRUE(model.set_schedule(model.selected_source_id(), ptv::RefreshSchedule::manual));
     model.vod().select(ptv::VodKind::movies);
     ASSERT_TRUE(settle(model));
     model.vod().request_details(0);
@@ -1051,6 +1054,7 @@ TEST_F(VodTest, SourceHttpDefaultsReachAccountCatalogGuideAndVodRequestsAndPlayb
     EXPECT_EQ(model.vod().details(model.vod().catalog()[0].id).plot, "Protected details");
     ASSERT_TRUE(model.play_vod(0));
     ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.extra_headers, "X-Key: account-secret");
     EXPECT_EQ(request.user_agent, "AccountPlayer/2");
     EXPECT_EQ(request.referrer, "https://provider.invalid/watch");
     model.vod().select(ptv::VodKind::episodes, "20");
@@ -1061,6 +1065,7 @@ TEST_F(VodTest, SourceHttpDefaultsReachAccountCatalogGuideAndVodRequestsAndPlayb
     bool guide = false, series = false, details = false;
     for (const auto &fetched : requests)
     {
+        EXPECT_EQ(fetched.extra_headers, "X-Key: account-secret");
         EXPECT_EQ(fetched.user_agent, "AccountPlayer/2") << fetched.url;
         EXPECT_EQ(fetched.referrer, "https://provider.invalid/watch") << fetched.url;
         guide = guide || fetched.url.find("xmltv.php") != std::string::npos;

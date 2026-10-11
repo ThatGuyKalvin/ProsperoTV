@@ -55,6 +55,7 @@ int Model::remote_sources(std::string_view input, std::string &output)
                 ",\"kind\":" + std::to_string(source.kind) + ",\"name\":" + quoted(source.name) +
                 ",\"url\":" + quoted(source.url) + ",\"username\":" + quoted(source.username) +
                 ",\"mac\":" + quoted(source.mac) + ",\"userAgent\":" + quoted(source.user_agent) +
+                ",\"extraHeadersSet\":" + (source.extra_headers.empty() ? "false" : "true") +
                 ",\"referrer\":" + quoted(source.referrer) +
                 ",\"schedule\":" + std::to_string(static_cast<int>(source.schedule)) +
                 ",\"selected\":" + (source.id == selected_source_id_ ? "true" : "false") +
@@ -74,7 +75,7 @@ int Model::remote_sources(std::string_view input, std::string &output)
         return 409;
     }
     output = "Check the source details and try again.";
-    if (input.size() > 12u * 1024u)
+    if (input.size() > 24u * 1024u)
         return 400;
     iptv::json::JsonReader json(input);
     std::map<std::string, std::string> fields;
@@ -83,8 +84,10 @@ int Model::remote_sources(std::string_view input, std::string &output)
     do
     {
         std::string key, value;
-        if (!json.String(&key, 32) || !json.Consume(':') || !json.StringOrScalar(&value, 4096) ||
-            fields.contains(key) || fields.size() >= 12)
+        if (!json.String(&key, 32) || !json.Consume(':') ||
+            !(key == "extraHeaders" ? json.String(&value, 4096, true)
+                                    : json.StringOrScalar(&value, 4096)) ||
+            fields.contains(key) || fields.size() >= 13)
             return 400;
         fields.emplace(std::move(key), std::move(value));
     } while (json.Consume(','));
@@ -93,7 +96,7 @@ int Model::remote_sources(std::string_view input, std::string &output)
     for (const auto &[key, value] : fields)
         if (key != "operation" && key != "id" && key != "kind" && key != "name" && key != "url" &&
             key != "username" && key != "password" && key != "mac" && key != "schedule" &&
-            key != "userAgent" && key != "referrer")
+            key != "userAgent" && key != "referrer" && key != "extraHeaders")
             return 400;
     std::int64_t id = 0;
     if (!integer(fields["id"], id))
@@ -135,6 +138,8 @@ int Model::remote_sources(std::string_view input, std::string &output)
     source.url = fields["url"];
     source.username = fields["username"];
     source.mac = fields["mac"];
+    if (fields.contains("extraHeaders"))
+        source.extra_headers = fields["extraHeaders"];
     if (fields.contains("userAgent"))
         source.user_agent = fields["userAgent"];
     if (fields.contains("referrer"))

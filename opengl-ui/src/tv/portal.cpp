@@ -163,7 +163,11 @@ iptv::http::RequestHeaders PortalClient::headers() const
                                               "Safari/533.3"
                                             : credentials_.user_agent.c_str(),
             credentials_.referrer.empty() ? referrer_.c_str() : credentials_.referrer.c_str(),
-            cookie_.c_str(), authorization_.c_str()};
+            cookie_.c_str(),
+            authorization_.c_str(),
+            -1,
+            credentials_.url.c_str(),
+            credentials_.extra_headers.c_str()};
 }
 std::string PortalClient::address(std::string_view type, std::string_view action,
                                   const Parameters &parameters) const

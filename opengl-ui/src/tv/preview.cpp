@@ -105,6 +105,7 @@ void LivePreview::update(std::optional<PlayRequest> request, float dt)
          (wanted_->channel_id != request->channel_id || wanted_->source_id != request->source_id ||
           wanted_->urls != request->urls || wanted_->user_agent != request->user_agent ||
           wanted_->referrer != request->referrer ||
+          wanted_->extra_headers != request->extra_headers ||
           wanted_->authorization != request->authorization ||
           wanted_->credential_origin != request->credential_origin ||
           wanted_->portal_command != request->portal_command));

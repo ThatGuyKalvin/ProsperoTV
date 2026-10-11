@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/i18n.hpp"
 #include "tv/model.hpp"
+#include "tv/usb_playlist.hpp"
 #include "tv/platform.hpp"
 #include "tv/local_tv.hpp"
 #include "iptv_ime.h"
@@ -159,8 +160,12 @@ void Model::run_guide()
                 { return static_cast<XmltvReader *>(reader)->feed({data, bytes}); }, &reader};
             iptv::http::RequestHeaders headers{guide_http_.user_agent.c_str(),
                                                guide_http_.referrer.c_str()};
+            headers.extra_headers = guide_http_.extra_headers.c_str();
             headers.authorization = guide_authorization_.c_str();
-            headers.credential_origin = guide_origin_.empty() ? nullptr : guide_origin_.c_str();
+            headers.credential_origin =
+                guide_origin_.empty()
+                    ? (usb_playlist_path(guide_http_.url) ? nullptr : guide_http_.url.c_str())
+                    : guide_origin_.c_str();
             const auto scoped =
                 iptv::http::HeadersForUrl(canonical.c_str(), canonical.c_str(), headers);
             const auto response = platform::fetch_list(canonical.c_str(), sink,
