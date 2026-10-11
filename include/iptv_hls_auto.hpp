@@ -1,3 +1,6 @@
+// ProsperoTV - Conservative automatic HLS quality reduction.
+// Copyright (C) 2026 BlackBearReloaded
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include "iptv_hls.h"
