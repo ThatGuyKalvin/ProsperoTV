@@ -81,7 +81,7 @@ int playback_action(const std::string &name)
     return -1;
 }
 
-const char *kTabNames[] = {"live", "vod", "favorites", "sources", "settings", "about"};
+const char *kTabNames[] = {"home", "live", "vod", "favorites", "sources", "settings", "about"};
 
 } // namespace
 
@@ -308,7 +308,10 @@ void Script::status_line(const ptv::Model &model, const ptv::App &app)
          app.settings().hide_failed ? 1 : 0, app.settings().live_preview ? 1 : 0);
     note("status tab=%s channels=%u visible=%u position=%d focused=\"%s\" letters=%d search=%d "
          "query=\"%s\" refreshing=%d level=%d frames=%d avg=%.2fms worst=%.2fms slow=%d",
-         tab >= 0 && tab < 6 ? kTabNames[tab] : "?", model.channel_count(), model.visible_count(),
+         tab >= 0 && tab < static_cast<int>(sizeof(kTabNames) / sizeof(kTabNames[0]))
+             ? kTabNames[tab]
+             : "?",
+         model.channel_count(), model.visible_count(),
          position + 1, focused.c_str(), app.on_letters() ? 1 : 0, app.searching() ? 1 : 0,
          model.query().c_str(), model.refreshing() ? 1 : 0, static_cast<int>(model.level()),
          frames_, frames_ > 0 ? static_cast<double>(frame_sum_ / frames_ * 1000.0f) : 0.0,
