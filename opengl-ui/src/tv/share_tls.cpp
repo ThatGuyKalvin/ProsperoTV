@@ -291,7 +291,9 @@ bool ShareTls::run()
     if (receiving_)
     {
         listener.fd = socket(AF_INET, SOCK_STREAM, 0);
+        const int reuse = 1;
         if (listener.fd < 0 || !nonblocking(listener.fd) ||
+            setsockopt(listener.fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0 ||
             bind(listener.fd, reinterpret_cast<sockaddr *>(&peer), sizeof(peer)) != 0 ||
             listen(listener.fd, 1) != 0)
             return false;

@@ -118,6 +118,30 @@ TEST(Sharing, PinnedTlsRequiresReceiverApprovalAndTransfersExactBytes)
     EXPECT_EQ(receiver.take_payload(), payload);
     EXPECT_TRUE(receiver.take_payload().empty());
 }
+TEST(Sharing, CompletedTransferCanImmediatelyReuseTheSameListeningPort)
+{
+    ptv::ShareTls receiver, sender;
+    unsigned port = 0;
+    for (unsigned attempt = 0; attempt < 3; ++attempt)
+    {
+        ASSERT_TRUE(receiver.receive(port));
+        ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::listening)) << attempt;
+        const auto ready = receiver.status();
+        if (port)
+            EXPECT_EQ(ready.port, port);
+        port = ready.port;
+        ASSERT_NE(port, 0u);
+        const auto payload = "library-" + std::to_string(attempt);
+        ASSERT_TRUE(sender.transmit("127.0.0.1", port, ready.fingerprint, payload));
+        ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::approval));
+        receiver.approve();
+        ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::ready));
+        ASSERT_TRUE(wait_for(sender, ptv::SharePhase::ready));
+        EXPECT_EQ(receiver.take_payload(), payload);
+        receiver.cancel();
+        sender.cancel();
+    }
+}
 TEST(Sharing, WrongPinSendsNoPayloadAndCancelEndsPendingReceiver)
 {
     ptv::ShareTls receiver, sender;
