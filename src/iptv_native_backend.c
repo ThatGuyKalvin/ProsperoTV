@@ -2497,6 +2497,8 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
 
     for (;;)
     {
+        if (state->config.poll_during_submit && state->config.poll_controls)
+            state->config.poll_controls(state->config.controls_context);
         if (atomic_load_explicit(&state->discard_input, memory_order_acquire))
             return 0;
         const int32_t worker_result =
@@ -3468,6 +3470,11 @@ int scePthreadJoin(void *thread, void **result)
     ++test_join_calls;
     return 0;
 }
+static void test_submission_controls(void *context)
+{
+    backend_state_t *state = context;
+    atomic_store(&state->stop_requested, 1);
+}
 static void test_drain_controls(void *context)
 {
     backend_state_t *state = context;
@@ -3574,6 +3581,15 @@ int main(void)
     assert(seek->video_queue[0].generation == 2);
     assert(seek->video_queue[0].pts_us == 100000);
     release_queued_video(seek);
+    // Foreground VP9 submission must still process controls with a full paused queue.
+    seek->config.poll_during_submit = 1;
+    seek->config.poll_controls = test_submission_controls;
+    seek->config.controls_context = seek;
+    atomic_store(&seek->video_queue_write, VIDEO_QUEUE_CAPACITY);
+    atomic_store(&seek->video_queue_read, 0);
+    assert(queue_coded_frame(seek, frame, sizeof(frame), 100000, 1) == 0);
+    assert(atomic_load(&seek->stop_requested));
+    assert(atomic_load(&seek->video_queue_write) == VIDEO_QUEUE_CAPACITY);
     free(seek->video_queue);
     backend_state_t draining = {0};
     draining.video_thread = &draining;
