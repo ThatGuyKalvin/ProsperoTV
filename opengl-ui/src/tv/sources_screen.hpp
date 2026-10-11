@@ -24,12 +24,18 @@ class SourcesScreen
     void draw(ui::Canvas &canvas) const;
     int hints(ui::Hint *out, int capacity) const;
     std::int64_t focused_id() const;
+    bool choosing_user_agent() const
+    {
+        return http_source_ != 0;
+    }
 
   private:
     void sync();
 
     Shared &shared_;
     ui::ListView list_;
+    ui::ListView user_agents_;
+    std::int64_t http_source_ = 0;
     unsigned seen_revision_ = 0;
     std::vector<std::int64_t> ids_;
     std::vector<std::string> usb_files_;

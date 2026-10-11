@@ -257,6 +257,7 @@ class Model
     }
     void edit_saved_source(std::int64_t id);
     void edit_source_http(std::int64_t id);
+    bool set_source_user_agent(std::int64_t id, const std::string &user_agent);
     bool remove_source(std::int64_t id);
     bool set_schedule(std::int64_t id, RefreshSchedule schedule);
     // Called on the menu thread by the authenticated phone remote.
@@ -699,7 +700,7 @@ class Model
     void save_account_receipt() const;
     void load_library();
     bool save_source_form(std::string_view url, const iptv::XtreamCredentials *account);
-    bool commit_source(SavedSource source);
+    bool commit_source(SavedSource source, bool activate = true);
     static void on_portal_address(const char *text, void *self);
     static void on_portal_mac(const char *text, void *self);
     static void on_local_address(const char *text, void *self);

@@ -795,6 +795,44 @@ TEST_F(AppTest, ASourceIsSetUpFromItsRow)
     EXPECT_EQ(model_->view.focused_source, 1);
 }
 
+TEST_F(AppTest, SourceUserAgentPickerCancelsSelectsPresetsAndRetainsCustomEntry)
+{
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    move(Direction::down);
+    const auto selected = model_->selected_source_id();
+    press(Action::jump_next);
+    press(Action::page_next); // The chooser owns input until selected or cancelled.
+    EXPECT_EQ(app_->tab(), 4);
+    press(Action::back);
+    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(host::keyboard_requests(), 0);
+    EXPECT_TRUE(model_->saved_source(2)->user_agent.empty());
+    press(Action::jump_next);
+    move(Direction::down);
+    move(Direction::down);
+    press(Action::confirm);
+    EXPECT_EQ(model_->saved_source(2)->user_agent, "IPTVSmartersPro");
+    EXPECT_EQ(model_->selected_source_id(), selected);
+    EXPECT_EQ(host::keyboard_requests(), 0);
+    press(Action::jump_next);
+    for (unsigned i = 0; i < 3; ++i)
+        move(Direction::down);
+    press(Action::confirm);
+    EXPECT_EQ(model_->saved_source(2)->user_agent, "VLC/3.0.21 LibVLC/3.0.21");
+    press(Action::jump_next);
+    move(Direction::down);
+    press(Action::confirm);
+    EXPECT_TRUE(model_->saved_source(2)->user_agent.empty());
+    press(Action::jump_next);
+    press(Action::confirm);
+    EXPECT_EQ(host::keyboard_title(), "Source user agent (1 of 3)");
+    host::cancel_keyboard();
+    idle();
+    EXPECT_TRUE(model_->saved_source(2)->user_agent.empty());
+}
+
 TEST_F(AppTest, SettingsAreChangedAndReported)
 {
     press(Action::page_prev); // Home precedes Live TV.
