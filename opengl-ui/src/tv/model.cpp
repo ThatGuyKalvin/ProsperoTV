@@ -1418,8 +1418,7 @@ void Model::run_refresh()
     pending_account_info_ = {};
     pending_account_stage_.clear();
     pending_account_message_.clear();
-    const bool usb = refresh_source_ == iptv::SourceKind::Custom &&
-                     usb_playlist_path(refresh_url_);
+    const bool usb = refresh_source_ == iptv::SourceKind::Custom && usb_playlist_path(refresh_url_);
     pending_network_ = usb ? iptv::http::Status::ok : platform::network_init();
 
     const auto stopping = [this]() { return stop_requested_.load(std::memory_order_acquire); };
