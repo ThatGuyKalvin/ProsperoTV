@@ -14,6 +14,12 @@ Triangle reveals elapsed/total time and progress; a non-default speed remains
 visible after the full controls hide. [PS5 VLC](https://github.com/ZiZc3/VLC)
 was reviewed for its seek and rate controls; no VLC code was copied.
 
+- 2026-10-11 | G1 | b18084b | host | pass: 33 tooling/native checks, 9 focused HUD/UI sanitizer tests, lint and native static analysis; PS5 build passed.
+- 2026-10-11 | G2 | b18084b | .40/PPSA88308 | pass: case97, five held/resumed frames, seek/speed through 2x, pause/resume, cleanup0; results/integration/console-97-40.
+
+The fixture was a ranged H.264/AAC MP4. HDR format changes, other containers
+and provider-specific network behavior were not exercised in this case.
+
 Baseline: `550a20b` (11 October 2026). Reported provider responses have not
 been supplied, so fixture compatibility checks must not be described as
 reproductions of those accounts.
