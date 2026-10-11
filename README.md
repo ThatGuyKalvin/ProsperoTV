@@ -132,6 +132,9 @@
 - See a banner with the channel's name and its programme when a channel opens
   or when asked for.
 - Choose among the audio tracks a channel carries, and show its subtitles.
+- Choose an HLS rendition manually, or enable
+  [Auto quality reduction](docs/AUTOMATIC_HLS_QUALITY.md) for buffering on a slow
+  connection. Auto only reduces quality and requires compatible renditions.
 - Pause live TV and go back a few minutes.
 - Set a sleep timer.
 - Record live TV to USB with Touchpad, or schedule a recording or reminder from
@@ -163,13 +166,17 @@
 
 - Lock adult categories behind a parental PIN, and switch to a mode that shows
   only the channels for children.
+- Set a daily viewing allowance and bedtime for the children's mode.
 - Keep favorites, recent channels, and sources separate for each person signed
   in on the console.
 - Use the interface in English, Spanish, French, German, Italian, Portuguese,
-  or Dutch, following the console's language. Provider content keeps its own
-  text.
+  Dutch, Arabic, or Hebrew, with right-to-left layouts where appropriate.
+  Follow the console language or choose an override in Settings and restart.
+  Provider content keeps its own text.
 - Back up sources, favorites, and settings to a USB drive, and restore them on
   this console or another.
+- [Share sources and favorites between consoles](docs/CONSOLE_SHARING.md) over
+  an encrypted local connection, verifying the receiver's fingerprint first.
 
 ### The app
 
@@ -181,6 +188,9 @@
   failed refresh leaves the last good catalog untouched.
 - Send a useful problem report: a diagnostic log switch in Settings (off by
   default, no account details), and a failure report saved to a USB drive.
+- Recover a minimal report after a caught fatal signal and skip automatic
+  playback on the next launch. Forced termination and power loss cannot be
+  recorded by the crash handler.
 - Use a full-screen OpenGL interface at up to 4K, built with the
   [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit,
   with fonts for Latin, Greek, Cyrillic, Chinese, Japanese, and Korean channel
