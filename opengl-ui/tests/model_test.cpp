@@ -1297,6 +1297,88 @@ TEST_F(ModelTest, SourceHttpControllerFormSavesBothFieldsTogether)
     model.close();
 }
 
+TEST_F(ModelTest, UserAgentPresetsPersistClearAndRejectInjectionWithoutSelectingInactiveSource)
+{
+    ptv::Model model(dir_);
+    load(model);
+    const auto selected = model.selected_source_id();
+    const auto before = *model.saved_source(2);
+    EXPECT_FALSE(model.set_source_user_agent(1, "IPTVSmartersPro"));
+    ASSERT_TRUE(model.set_source_user_agent(2, "IPTVSmartersPro"));
+    EXPECT_EQ(model.selected_source_id(), selected);
+    const auto &after = *model.saved_source(2);
+    EXPECT_EQ(after.id, before.id);
+    EXPECT_EQ(after.kind, before.kind);
+    EXPECT_EQ(after.name, before.name);
+    EXPECT_EQ(after.url, before.url);
+    EXPECT_EQ(after.username, before.username);
+    EXPECT_EQ(after.password, before.password);
+    EXPECT_EQ(after.mac, before.mac);
+    EXPECT_EQ(after.schedule, before.schedule);
+    EXPECT_EQ(after.referrer, before.referrer);
+    EXPECT_EQ(after.extra_headers, before.extra_headers);
+    EXPECT_EQ(host::keyboard_requests(), 0);
+    EXPECT_FALSE(model.set_source_user_agent(2, "bad\r\nAuthorization: injected"));
+    EXPECT_FALSE(model.set_source_user_agent(2, std::string(513, 'x')));
+    EXPECT_EQ(model.saved_source(2)->user_agent, "IPTVSmartersPro");
+    model.close();
+    ASSERT_TRUE(model.open());
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.saved_source(2)->user_agent, "IPTVSmartersPro");
+    ASSERT_TRUE(model.set_source_user_agent(2, "VLC/3.0.21 LibVLC/3.0.21"));
+    EXPECT_EQ(model.saved_source(2)->user_agent, "VLC/3.0.21 LibVLC/3.0.21");
+    ASSERT_TRUE(model.set_source_user_agent(2, ""));
+    EXPECT_TRUE(model.saved_source(2)->user_agent.empty());
+    model.close();
+}
+
+TEST_F(ModelTest, UserAgentPresetReachesDownloadsAndPlaybackWithoutReplacingOtherHeaders)
+{
+    std::ofstream(playlist_) << "#EXTM3U\n#EXTINF:-1,A\nhttps://stream.invalid/a.ts\n"
+                                "#EXTINF:-1,B\n#EXTVLCOPT:http-user-agent=ChannelPlayer/3\nhttps://"
+                                "stream.invalid/b.ts\n";
+    ptv::Model model(dir_);
+    load(model);
+    std::string response;
+    ASSERT_EQ(
+        model.remote_sources(
+            R"({"operation":"save","id":2,"kind":1,"name":"Headers","url":"https://source.invalid/list.m3u","schedule":2,"userAgent":"Original","referrer":"https://source.invalid/watch","extraHeaders":"X-Key: retained"})",
+            response),
+        200);
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.set_source_user_agent(2, "IPTVSmartersPro"));
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.saved_source(2)->referrer, "https://source.invalid/watch");
+    EXPECT_EQ(model.saved_source(2)->extra_headers, "X-Key: retained");
+    model.refresh();
+    ASSERT_TRUE(settle(model));
+    bool fetched = false;
+    for (const auto &request : host::requests())
+        if (request.url == "https://source.invalid/list.m3u" &&
+            request.user_agent == "IPTVSmartersPro")
+        {
+            fetched = true;
+            EXPECT_EQ(request.referrer, "https://source.invalid/watch");
+        }
+    EXPECT_TRUE(fetched);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.play(0));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.user_agent, "IPTVSmartersPro");
+    EXPECT_EQ(request.extra_headers, "X-Key: retained");
+    ASSERT_TRUE(model.play(1));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.user_agent, "ChannelPlayer/3");
+    ASSERT_TRUE(model.set_source_user_agent(2, ""));
+    ASSERT_TRUE(settle(model));
+    ASSERT_TRUE(model.play(0));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_TRUE(request.user_agent.empty());
+    EXPECT_EQ(request.referrer, "https://source.invalid/watch");
+    EXPECT_EQ(request.extra_headers, "X-Key: retained");
+    model.close();
+}
+
 TEST_F(ModelTest, PhoneCustomHeadersPreserveSecretsAndRejectEscapedInjection)
 {
     ptv::Model model(dir_);

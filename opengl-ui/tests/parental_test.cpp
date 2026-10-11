@@ -505,4 +505,17 @@ TEST_F(ParentalTest, LockedProfileCannotExportSharingCredentials)
     ASSERT_TRUE(model.parental().unlocked());
     EXPECT_TRUE(model.export_shared_library(library));
 }
+TEST_F(ParentalTest, LockedProfileCannotChangeSourceUserAgent)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.parental_action(ptv::Model::ParentalAction::set_pin);
+    answer(model, "836295");
+    answer(model, "836295");
+    ASSERT_TRUE(model.parental().enabled());
+    ASSERT_FALSE(model.parental().unlocked());
+    const auto before = model.saved_source(2)->user_agent;
+    EXPECT_FALSE(model.set_source_user_agent(2, "IPTVSmartersPro"));
+    EXPECT_EQ(model.saved_source(2)->user_agent, before);
+}
 } // namespace

@@ -573,6 +573,11 @@ void App::apply_settings()
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
 {
     Model &model = shared_.model;
+    if (tabs_.active() == kSources && sources_.choosing_user_agent())
+    {
+        sources_.handle(input, feedback);
+        return;
+    }
     if (multiview_.choosing() && (input.is_pressed(Action::back) || input.is_pressed(Action::l3)))
     {
         multiview_.cancel_choice();

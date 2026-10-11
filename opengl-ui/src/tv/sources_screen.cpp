@@ -18,6 +18,8 @@ namespace
 {
 constexpr Rect kList{kMargin, 250, 1010, 670};
 constexpr Rect kPanel{1144, 250, kWidth - kMargin - 1144, 640};
+// Compatibility strings, not a claim that this app runs either client.
+constexpr const char *kUserAgents[] = {"", "", "IPTVSmartersPro", "VLC/3.0.21 LibVLC/3.0.21"};
 
 std::string account_date(std::int64_t stamp)
 {
@@ -53,6 +55,8 @@ SourcesScreen::SourcesScreen(Shared &shared) : shared_(shared)
     list_.style.title_size = 28;
     list_.style.entrance_step = 0;
     list_.set_bounds(kList);
+    user_agents_.style = list_.style;
+    user_agents_.set_bounds(kList);
     sync();
     list_.set_focus(
         std::clamp(shared.model.view.focused_source, 0, static_cast<int>(ids_.size()) - 1), true);
@@ -144,6 +148,7 @@ std::int64_t SourcesScreen::focused_id() const
 
 void SourcesScreen::enter()
 {
+    http_source_ = 0;
     sync();
     list_.enter();
 }
@@ -151,10 +156,52 @@ void SourcesScreen::enter()
 void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
 {
     auto &model = shared_.model;
+    if (http_source_)
+    {
+        if (input.is_pressed(Action::back))
+        {
+            http_source_ = 0;
+            feedback.play(audio::Cue::back);
+        }
+        else if (user_agents_.handle(input, feedback) == ui::Event::activated)
+        {
+            const int choice = user_agents_.focus();
+            if (choice == 0)
+            {
+                model.edit_source_http(http_source_);
+                http_source_ = 0;
+            }
+            else if (choice > 0 && choice < 4 &&
+                     model.set_source_user_agent(http_source_, kUserAgents[choice]))
+                http_source_ = 0;
+        }
+        return;
+    }
     const auto id = focused_id();
     if (input.is_pressed(Action::jump_next) && id > 1)
     {
-        model.edit_source_http(id);
+        if (!model.require_parent() || model.refreshing())
+            return;
+        const auto *source = model.saved_source(id);
+        if (!source || source->kind == 0)
+            return;
+        http_source_ = id;
+        std::vector<ui::ListItem> choices;
+        const char *titles[] = {tr("Custom user agent"), tr("Default user agent"),
+                                "IPTVSmartersPro", "VLC"};
+        for (unsigned i = 0; i < 4; ++i)
+        {
+            ui::ListItem row;
+            row.title = titles[i];
+            row.subtitle = i > 1 ? kUserAgents[i] : i == 1 ? tr("Leave empty for the default") : "";
+            row.disabled = i == 0 && !model.keyboard_ready();
+            if (i && source->user_agent == kUserAgents[i])
+                row.badge = tr("In use");
+            choices.push_back(std::move(row));
+        }
+        user_agents_.set_items(std::move(choices));
+        user_agents_.set_focus(model.keyboard_ready() ? 0 : 1, true);
+        user_agents_.enter();
         return;
     }
     if (input.is_pressed(Action::jump_prev) && id > 0)
@@ -215,6 +262,8 @@ void SourcesScreen::update(float dt)
     shared_.model.view.focused_source = list_.focus();
     list_.style.reduced_motion = shared_.settings.reduced_motion;
     list_.update(dt);
+    user_agents_.style.reduced_motion = shared_.settings.reduced_motion;
+    user_agents_.update(dt);
 }
 
 void SourcesScreen::draw(ui::Canvas &canvas) const
@@ -223,6 +272,21 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     const auto &theme = shared_.theme;
     auto &draw = canvas.list;
     const auto &fonts = canvas.fonts;
+    if (http_source_)
+    {
+        ui::text(draw, fonts.display, tr("HTTP settings"), kMargin, 224, 60, theme.text);
+        user_agents_.draw(canvas);
+        const auto focus = user_agents_.row_rect(user_agents_.focus());
+        draw.push_clip(kList);
+        draw.rounded_rect({focus.x + 7, focus.y + 14, 5, focus.h - 28}, 2, tone::accent);
+        draw.pop_clip();
+        draw_glass(canvas, theme, kPanel, 26);
+        ui::paragraph(
+            draw, fonts.regular,
+            tr("Presets change only the user agent. Custom entry also edits other HTTP settings."),
+            kPanel.x + 36, 330, 26, kPanel.w - 72, 38, theme.text_muted, 8);
+        return;
+    }
     ui::text(draw, fonts.semibold, tr("WHERE THE CHANNELS COME FROM"), kMargin, 162, 18,
              tone::accent, gfx::Align::left, 4);
     ui::text(draw, fonts.display, tr("Sources"), kMargin - 3, 224, 60, theme.text);
@@ -334,6 +398,12 @@ int SourcesScreen::hints(ui::Hint *out, int capacity) const
         if (count < capacity)
             out[count++] = hint;
     };
+    if (http_source_)
+    {
+        add({ui::Button::cross, tr("Edit")});
+        add({ui::Button::circle, tr("Back")});
+        return count;
+    }
     add({ui::Button::cross,
          focused_id() == -7
              ? tr(shared_.model.checking_source() ? "Cancel source check" : "Check active source")

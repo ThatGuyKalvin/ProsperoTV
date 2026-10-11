@@ -169,6 +169,18 @@ void Model::edit_source_http(std::int64_t id)
     account_prompt_pending_ = true;
 }
 
+bool Model::set_source_user_agent(std::int64_t id, const std::string &user_agent)
+{
+    if (!require_parent() || refreshing() || iptv_ime_busy() || account_step_ != AccountStep::none)
+        return false;
+    const auto *source = saved_source(id);
+    if (!source || source->kind == 0)
+        return false;
+    auto updated = *source;
+    updated.user_agent = user_agent;
+    return commit_source(std::move(updated), false);
+}
+
 void Model::on_http_user_agent(const char *text, void *self)
 {
     if (!self)
@@ -431,7 +443,7 @@ bool Model::save_source_form(std::string_view url, const iptv::XtreamCredentials
     return commit_source(std::move(source));
 }
 
-bool Model::commit_source(SavedSource source)
+bool Model::commit_source(SavedSource source, bool activate)
 {
     if (!require_parent())
         return false;
@@ -447,7 +459,10 @@ bool Model::commit_source(SavedSource source)
         select_source_record(source);
         load_cache();
     }
-    use_saved_source(source.id);
+    if (activate || source.id == selected_source_id_)
+        use_saved_source(source.id);
+    else
+        ++revision_;
     return true;
 }
 
