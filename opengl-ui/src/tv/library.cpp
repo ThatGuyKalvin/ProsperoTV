@@ -148,9 +148,14 @@ bool Library::open(const std::string &path)
     }
     constexpr const char *schema =
         "PRAGMA foreign_keys=ON; BEGIN;"
+        "CREATE TABLE IF NOT EXISTS channel_history (source INTEGER NOT NULL, channel TEXT NOT "
+        "NULL, first_seen INTEGER NOT NULL, watches INTEGER NOT NULL DEFAULT 0, PRIMARY "
+        "KEY(source,channel));"
         "CREATE TABLE IF NOT EXISTS sources (id INTEGER PRIMARY KEY,kind INTEGER NOT NULL,"
         "name TEXT NOT NULL,url TEXT NOT NULL,username TEXT NOT NULL,password TEXT NOT NULL,"
         "mac TEXT NOT NULL,schedule INTEGER NOT NULL CHECK(schedule BETWEEN 0 AND 2));"
+        "CREATE TRIGGER IF NOT EXISTS history_source_removed AFTER DELETE ON sources BEGIN "
+        "DELETE FROM channel_history WHERE source=OLD.id; END;"
         "CREATE TABLE IF NOT EXISTS selection (singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
         "source INTEGER REFERENCES sources(id) ON DELETE SET NULL);"
         "CREATE TABLE IF NOT EXISTS last_channel (singleton INTEGER PRIMARY KEY CHECK(singleton=1),"

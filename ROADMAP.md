@@ -48,7 +48,7 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
   guide from the same box.
 - [ ] **Movie and show details.** Poster, plot, cast, year and rating from
   the provider, with sorting and filters by genre or year.
-- [ ] **Recently added and most watched.** Two more lists beside Favorites
+- [x] **Recently added and most watched.** Two more lists beside Favorites
   and Recent.
 - [ ] **A home screen.** What was being watched, the favorites, and what is
   on now on the usual channels, in one place.

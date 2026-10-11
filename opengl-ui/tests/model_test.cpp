@@ -1073,14 +1073,17 @@ TEST(ChannelText, MonogramsPlacesAndNumbers)
 
 TEST(ChannelText, DecorativeLettersReadAsPlainOnes)
 {
-    EXPECT_EQ(ptv::plain_text("4K| \xE1\xB5\x81\xE1\xB4\xB4\xE1\xB4\xB0 \xC2\xB3\xE2\x81\xB8\xE2\x81\xB4\xE2\x81\xB0\xE1\xB4\xBE"),
+    EXPECT_EQ(ptv::plain_text("4K| \xE1\xB5\x81\xE1\xB4\xB4\xE1\xB4\xB0 "
+                              "\xC2\xB3\xE2\x81\xB8\xE2\x81\xB4\xE2\x81\xB0\xE1\xB4\xBE"),
               "4K| UHD 3840P");
     // Raised small letters are a provider's capitals: "RAW 60FPS".
-    EXPECT_EQ(ptv::plain_text("\xE1\xB4\xBF\xE1\xB4\xAC\xE1\xB5\x82 \xE2\x81\xB6\xE2\x81\xB0\xE1\xB6\xA0\xE1\xB5\x96\xCB\xA2"),
+    EXPECT_EQ(ptv::plain_text("\xE1\xB4\xBF\xE1\xB4\xAC\xE1\xB5\x82 "
+                              "\xE2\x81\xB6\xE2\x81\xB0\xE1\xB6\xA0\xE1\xB5\x96\xCB\xA2"),
               "RAW 60FPS");
     // Full-width forms, and everything else as it came (accents, other scripts, broken bytes).
     EXPECT_EQ(ptv::plain_text("\xEF\xBC\xA8\xEF\xBC\xA4"), "HD");
-    EXPECT_EQ(ptv::plain_text("Caf\xC3\xA9 \xE4\xB8\xAD\xE6\x96\x87 \xD0\xA2\xD0\x92"), "Caf\xC3\xA9 \xE4\xB8\xAD\xE6\x96\x87 \xD0\xA2\xD0\x92");
+    EXPECT_EQ(ptv::plain_text("Caf\xC3\xA9 \xE4\xB8\xAD\xE6\x96\x87 \xD0\xA2\xD0\x92"),
+              "Caf\xC3\xA9 \xE4\xB8\xAD\xE6\x96\x87 \xD0\xA2\xD0\x92");
     EXPECT_EQ(ptv::plain_text("ok \xE1\xB5"), "ok \xE1\xB5");
     EXPECT_EQ(ptv::plain_text(""), "");
 }
@@ -1088,10 +1091,12 @@ TEST(ChannelText, DecorativeLettersReadAsPlainOnes)
 TEST(ChannelText, LabelsLeaveSignsOut)
 {
     EXPECT_EQ(ptv::label_text("RX| RELAX 4K \xE2\x98\xBC"), "RX| RELAX 4K");
-    EXPECT_EQ(ptv::label_text("\xE2\x98\x85 VIP \xE2\x98\x85  SPORTS \xF0\x9F\x8F\x86"), "VIP SPORTS");
+    EXPECT_EQ(ptv::label_text("\xE2\x98\x85 VIP \xE2\x98\x85  SPORTS \xF0\x9F\x8F\x86"),
+              "VIP SPORTS");
     // A label that is only signs is kept rather than emptied.
     EXPECT_EQ(ptv::label_text("\xE2\x98\x85\xE2\x98\x85"), "\xE2\x98\x85\xE2\x98\x85");
-    EXPECT_EQ(ptv::label_text("US| NETFLIX \xE1\xB4\xBF\xE1\xB4\xAC\xE1\xB5\x82"), "US| NETFLIX RAW");
+    EXPECT_EQ(ptv::label_text("US| NETFLIX \xE1\xB4\xBF\xE1\xB4\xAC\xE1\xB5\x82"),
+              "US| NETFLIX RAW");
 }
 
 TEST(CategoryPath, ASlashInsideAWordIsPartOfTheName)
@@ -1145,4 +1150,79 @@ TEST_F(ModelTest, PlaybackPictureModesDoNotSelectTracksOrChannels)
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 6), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 7), 0);
     model.close();
+}
+
+TEST_F(ModelTest, ChannelHistoryPersistsFirstObservationAndSourceScopedWatchCounts)
+{
+    const auto first = iptv::ParseExtendedM3u("#EXTM3U\n#EXTINF:-1,Alpha\nhttps://host/a.ts\n", 1);
+    const auto expanded = iptv::ParseExtendedM3u(
+        "#EXTM3U\n#EXTINF:-1,Alpha\nhttps://host/a.ts\n#EXTINF:-1,Beta\nhttps://host/b.ts\n", 1);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir_ + "/history.sqlite3"));
+        ASSERT_TRUE(library.observe_channels(1, first, 100));
+        ASSERT_TRUE(library.observe_channels(1, expanded, 200));
+        ASSERT_TRUE(library.record_watch(1, expanded[1].id));
+        ASSERT_TRUE(library.record_watch(1, expanded[1].id));
+        EXPECT_FALSE(library.record_watch(2, expanded[1].id));
+    }
+    ptv::Library library;
+    ASSERT_TRUE(library.open(dir_ + "/history.sqlite3"));
+    ASSERT_TRUE(library.observe_channels(1, expanded, 300));
+    const auto stats = library.channel_history(1, expanded);
+    ASSERT_EQ(stats.size(), 2u);
+    EXPECT_EQ(stats[0].first_seen, 100);
+    EXPECT_EQ(stats[1].first_seen, 200);
+    EXPECT_EQ(stats[0].watches, 0);
+    EXPECT_EQ(stats[1].watches, 2);
+    EXPECT_EQ(library.channel_history(2, expanded)[1].watches, 0);
+    ptv::SavedSource source;
+    source.id = 5;
+    source.kind = 1;
+    source.name = "Temporary playlist";
+    source.url = "https://host/list.m3u";
+    ASSERT_TRUE(library.save_source(&source));
+    ASSERT_TRUE(library.observe_channels(5, expanded, 400));
+    ASSERT_TRUE(library.record_watch(5, expanded[1].id));
+    ASSERT_TRUE(library.remove_source(5));
+    EXPECT_EQ(library.channel_history(5, expanded)[1].first_seen, 0);
+}
+TEST_F(ModelTest, HistoryListsRankPersistAndRespectFilters)
+{
+    std::string alpha, beta;
+    {
+        ptv::Model model(dir_);
+        load(model);
+        alpha = model.channel(0).id;
+        beta = model.channel(1).id;
+        model.report_watch(beta);
+        model.report_watch(beta);
+        model.report_watch(alpha);
+        model.set_group(ptv::Group::most_watched);
+        ASSERT_EQ(model.visible_count(), 2u);
+        EXPECT_EQ(model.channel(model.visible(0)).id, beta);
+        EXPECT_EQ(model.position_of(alpha), 1);
+        model.set_query("Alder");
+        ASSERT_EQ(model.visible_count(), 1u);
+        EXPECT_EQ(model.channel(model.visible(0)).id, alpha);
+        model.close();
+    }
+    ptv::Model reopened(dir_);
+    load(reopened);
+    reopened.set_group(ptv::Group::most_watched);
+    ASSERT_EQ(reopened.visible_count(), 2u);
+    EXPECT_EQ(reopened.channel(reopened.visible(0)).id, beta);
+    reopened.set_group(ptv::Group::recently_added);
+    EXPECT_EQ(reopened.visible_count(), 12u);
+    EXPECT_EQ(reopened.group_size(ptv::Group::most_watched), 2u);
+}
+
+TEST(ChannelHistory, CountsOnlySessionsThatActuallyPresentedVideo)
+{
+    EXPECT_TRUE(ptv::completed_watch("presented_frames=300\n", 10, 1));
+    EXPECT_FALSE(ptv::completed_watch("presented_frames=300\n", 9, 1));
+    EXPECT_FALSE(ptv::completed_watch("presented_frames=300\n", 20, -1));
+    EXPECT_FALSE(ptv::completed_watch("presented_frames=0\n", 20, 1));
+    EXPECT_FALSE(ptv::completed_watch("presented_frames=123garbage\n", 20, 1));
+    EXPECT_FALSE(ptv::completed_watch("", 20, 1));
 }

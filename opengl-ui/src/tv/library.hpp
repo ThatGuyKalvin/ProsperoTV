@@ -13,6 +13,10 @@
 #include <map>
 
 struct sqlite3;
+namespace iptv
+{
+class Catalog;
+}
 
 namespace ptv
 {
@@ -43,6 +47,14 @@ bool valid_source(const SavedSource &source);
 
 // All mutations are committed before callers update their in-memory state.
 // The original catalog and favorites files remain readable by older releases.
+bool completed_watch(std::string_view receipt, std::int64_t seconds, int result);
+
+struct ChannelHistory
+{
+    std::int64_t first_seen = 0;
+    std::int64_t watches = 0;
+};
+
 class Library
 {
   public:
@@ -61,6 +73,10 @@ class Library
     bool remove_source(std::int64_t id);
     std::int64_t selected_source() const;
     bool select_source(std::int64_t id);
+    bool observe_channels(std::int64_t source, const iptv::Catalog &catalog, std::int64_t now);
+    std::vector<ChannelHistory> channel_history(std::int64_t source,
+                                                const iptv::Catalog &catalog) const;
+    bool record_watch(std::int64_t source, std::string_view channel);
     bool remember_channel(std::int64_t source, std::string_view channel);
     std::pair<std::int64_t, std::string> last_channel() const;
     std::pair<std::uint64_t, std::uint64_t> playback_progress(std::string_view channel) const;

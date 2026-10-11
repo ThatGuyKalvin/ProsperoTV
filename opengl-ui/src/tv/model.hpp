@@ -64,6 +64,8 @@ enum class Group : std::uint8_t
     news,
     sports,
     kids,
+    recently_added,
+    most_watched,
     count,
 };
 inline constexpr unsigned kGroupCount = static_cast<unsigned>(Group::count);
@@ -419,6 +421,7 @@ class Model
     // The focused live channel without changing history or playback health.
     std::optional<PlayRequest> preview_request(std::string_view channel_id) const;
     // Called when the menu reopens after a channel that would not play.
+    void report_watch(std::string_view channel_id);
     void report_playback_failure(const char *channel_id, const char *channel_name, int result,
                                  unsigned attempts, const char *detail);
     const PlaybackFailure *failure() const
@@ -628,6 +631,7 @@ class Model
     bool playlist_cache_needs_refresh_ = false;
     std::uint64_t saved_unix_ = 0;
     iptv::UserState user_;
+    std::vector<ChannelHistory> channel_history_;
     std::vector<std::uint8_t> marks_; // by catalog index: a favorite, a recent channel
     std::vector<std::uint32_t> visible_;
     unsigned visible_count_ = 0;
