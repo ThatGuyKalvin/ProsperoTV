@@ -92,6 +92,46 @@ class VodTest : public ::testing::Test
     int number = 0;
 };
 
+TEST_F(VodTest, UnifiedSearchLoadsBothKindsWithoutChangingBrowseAndRoutesSafely)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    const auto browse_id = std::string(model.vod().catalog()[0].id);
+    model.begin_search();
+    for (int i = 0; i < 600 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading()) << model.search_status();
+    EXPECT_EQ(model.vod().catalog()[0].id, browse_id);
+    auto movies = model.search_results("movie");
+    ASSERT_EQ(movies.size(), 2u);
+    EXPECT_EQ(movies[0].kind, ptv::Model::SearchResult::Kind::movie);
+    auto shows = model.search_results("show");
+    ASSERT_EQ(shows.size(), 1u);
+    EXPECT_EQ(shows[0].kind, ptv::Model::SearchResult::Kind::show);
+    ASSERT_TRUE(model.activate_search_vod(movies[0]));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.urls[0], "https://provider.invalid/sub/movie/user%40home/p%26ss/10.mkv");
+    ASSERT_TRUE(model.hide_category("US / Movies", true));
+    EXPECT_TRUE(model.search_results("movie").empty());
+    EXPECT_FALSE(model.activate_search_vod(movies[0]));
+    auto stale = shows[0];
+    ++stale.source_id;
+    EXPECT_FALSE(model.activate_search_vod(stale));
+    ASSERT_TRUE(model.activate_search_vod(shows[0]));
+    EXPECT_EQ(model.view.vod_series, "20");
+    EXPECT_EQ(model.view.vod_kind, static_cast<int>(ptv::VodKind::episodes));
+    model.end_search();
+    EXPECT_TRUE(model.search_results("show").empty());
+    EXPECT_FALSE(model.activate_search_vod(shows[0]));
+    model.close();
+}
+
 TEST_F(VodTest, ParentalPolicyAppliesToProviderFlagsAndEpisodesOfTheSelectedShow)
 {
     response(
@@ -109,6 +149,16 @@ TEST_F(VodTest, ParentalPolicyAppliesToProviderFlagsAndEpisodesOfTheSelectedShow
     model.poll();
     host::set_keyboard_text("123456");
     model.poll();
+    model.begin_search();
+    for (int i = 0; i < 600 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading());
+    EXPECT_TRUE(model.search_results("Alpha").empty());
+    EXPECT_EQ(model.search_results("Beta").size(), 1u);
+    model.end_search();
     EXPECT_FALSE(model.vod_allowed(0));
     EXPECT_FALSE(model.play_vod(0));
     EXPECT_TRUE(model.vod_allowed(1));

@@ -256,6 +256,12 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
             : tr("Choose a playlist or Xtream account in Sources to browse on-demand titles.");
     ++revision_;
 }
+void VodLibrary::configure_like(const VodLibrary &source)
+{
+    configure(source.account_, source.cache_, source.schedule_);
+    if (source.playlist_)
+        configure_playlist(source.playlist_);
+}
 void VodLibrary::configure_playlist(const iptv::Catalog *playlist)
 {
     stop();

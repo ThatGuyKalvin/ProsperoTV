@@ -627,7 +627,10 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         sources_.handle(input, feedback);
         break;
     case kVod:
-        vod_.handle(input, feedback);
+        if (input.is_pressed(Action::north))
+            search_.open(feedback);
+        else
+            vod_.handle(input, feedback);
         break;
     case kSettings:
     {
@@ -880,6 +883,18 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     else if (search_.is_open())
     {
         search_.handle(input, feedback);
+        if (const auto navigation = search_.take_navigation())
+        {
+            search_.dismiss();
+            if (navigation->kind == Model::SearchResult::Kind::show)
+                show_tab(kVod, true);
+            else
+            {
+                model.clear_filters();
+                model.set_group(Group::all);
+                guide_sheet_.open(navigation->id, feedback, navigation->programme_start);
+            }
+        }
     }
     else if (library_sheet_.is_open())
     {

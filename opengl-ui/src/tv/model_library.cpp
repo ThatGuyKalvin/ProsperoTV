@@ -65,6 +65,7 @@ const SavedSource *Model::saved_source(std::int64_t id) const
 
 void Model::select_source_record(const SavedSource &source)
 {
+    end_search();
     const bool changed = selected_source_id_ != source.id;
     selected_source_id_ = source.id;
     active_source_ = static_cast<iptv::SourceKind>(source.kind);
@@ -378,6 +379,10 @@ bool Model::play_vod(unsigned index)
     if (vod_.kind() == VodKind::series || pin_prompt() || !vod_allowed(index))
         return false;
     const auto item = vod_.catalog()[index];
+    return queue_vod(item, vod_.kind() == VodKind::episodes ? vod_.series() : std::string());
+}
+bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series)
+{
     sleep_timer.wake();
     play_request_ = {};
     play_request_.channel_id = item.id;
@@ -392,7 +397,7 @@ bool Model::play_vod(unsigned index)
     play_request_.record_channel_result = false;
     play_request_.on_demand = true;
     play_request_.start_position_us = library_.playback_progress(item.id).first;
-    play_request_.series_id = vod_.kind() == VodKind::episodes ? vod_.series() : std::string();
+    play_request_.series_id = series;
     play_requested_ = true;
     return true;
 }

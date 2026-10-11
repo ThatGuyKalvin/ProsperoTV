@@ -383,6 +383,7 @@ bool Model::open()
 void Model::close()
 {
     clear_pin();
+    end_search();
     vod_.stop();
     stop_guide();
     stop_requested_.store(true, std::memory_order_release);
@@ -435,13 +436,17 @@ void Model::poll()
     poll_pin();
     continue_account_form();
     consume_refresh();
-    if (vod_.requested() && !refreshing())
+    if ((vod_.requested() || search_pending()) && !refreshing())
         stop_guide();
-    vod_.poll(!refreshing() && !guide_thread_);
-    if (!vod_.busy() && !vod_.requested())
+    vod_.poll(!refreshing() && !guide_thread_ && !search_busy());
+    search_movies_.poll(searching_ && !refreshing() && !guide_thread_ && !vod_.busy() &&
+                        !vod_.requested() && !search_shows_.busy());
+    search_shows_.poll(searching_ && !refreshing() && !guide_thread_ && !vod_.busy() &&
+                       !vod_.requested() && !search_movies_.busy() && !search_movies_.requested());
+    if (!vod_.busy() && !vod_.requested() && !search_busy() && !search_pending())
         poll_guide();
     const auto now = platform::unix_time();
-    if (catalog_loaded_ && !refreshing() && !vod_.busy() && now >= next_schedule_check_)
+    if (catalog_loaded_ && !refreshing() && !vod_.busy() && !searching_ && now >= next_schedule_check_)
     {
         // A failed scheduled refresh retries in an hour, not on every frame.
         next_schedule_check_ = now + 3600;
@@ -1314,6 +1319,7 @@ void Model::apply_account_password(const char *password)
 
 void Model::refresh()
 {
+    end_search();
     vod_.stop();
     stop_guide();
     next_schedule_check_ = platform::unix_time() + 3600;
@@ -1703,6 +1709,82 @@ void Model::consume_refresh()
         refresh_queued_ = false;
         refresh();
     }
+}
+
+std::vector<Model::SearchResult> Model::search_results(std::string_view query,
+                                                     bool *truncated) const
+{
+    std::vector<SearchResult> rows;
+    if (truncated)
+        *truncated = false;
+    if (query.empty())
+        return rows;
+    constexpr unsigned limit = 250;
+    const auto source = source_id(active_source_);
+    const auto append = [&](SearchResult row, unsigned &count)
+    {
+        if (count++ < limit)
+            rows.push_back(std::move(row));
+        else if (truncated)
+            *truncated = true;
+    };
+    unsigned count = 0;
+    for (unsigned at : index_.order)
+    {
+        if (!channel_visible(at))
+            continue;
+        const auto item = channel(at);
+        const unsigned quality = index_.traits[at] & CatalogIndex::kQualityMask;
+        if ((quality_ != kQualityAny && quality_ != quality) ||
+            !matches_filters(item, country_, category_, language_))
+            continue;
+        if (matches_query(item, query, quality))
+            append({SearchResult::Kind::channel, std::string(item.id), std::string(item.name),
+                    std::string(item.group_title), 0, source},
+                   count);
+        if (count > limit)
+            break;
+    }
+    for (const auto *library : {&search_movies_, &search_shows_})
+    {
+        if (!searching_)
+            break;
+        count = 0;
+        for (unsigned i = 0; i < library->catalog().size(); ++i)
+        {
+            const auto item = library->catalog()[i];
+            if (!search_vod_allowed(item) || !contains_nocase(item.name, query))
+                continue;
+            append(
+                {library == &search_movies_ ? SearchResult::Kind::movie : SearchResult::Kind::show,
+                 std::string(item.id), std::string(item.name), std::string(item.group_title), 0,
+                 source},
+                count);
+            if (count > limit)
+                break;
+        }
+    }
+    count = 0;
+    for (unsigned at : index_.order)
+    {
+        if (!channel_visible(at))
+            continue;
+        const auto item = channel(at);
+        for (const auto &programme : guide_.programmes(item.id))
+        {
+            if (!contains_nocase(programme.title, query))
+                continue;
+            append({SearchResult::Kind::programme, std::string(item.id), programme.title,
+                    std::string(item.name) + " / " + programme_time(programme.start, true),
+                    programme.start, source},
+                   count);
+            if (count > limit)
+                break;
+        }
+        if (count > limit)
+            break;
+    }
+    return rows;
 }
 
 } // namespace ptv

@@ -15,14 +15,14 @@ constexpr unsigned kRows = 7;
 constexpr std::int64_t kWindow = 2 * 3600;
 constexpr float kTimeX = 435, kTimeWidth = 1360, kRowY = 304, kRowHeight = 70;
 } // namespace
-void GuideSheet::open(std::string_view channel, ui::Feedback &feedback)
+void GuideSheet::open(std::string_view channel, ui::Feedback &feedback, std::int64_t time)
 {
     open_ = true;
     actions_ = jobs_ = false;
     channel_ = channel;
     row_ = static_cast<unsigned>(std::max(0, shared_.model.position_of(channel)));
     top_ = row_;
-    time_ = static_cast<std::int64_t>(platform::unix_time());
+    time_ = time ? time : static_cast<std::int64_t>(platform::unix_time());
     left_ = time_ / 1800 * 1800;
     revision_ = shared_.model.revision();
     keep_in_view();

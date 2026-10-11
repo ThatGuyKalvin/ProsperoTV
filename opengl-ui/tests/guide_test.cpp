@@ -85,6 +85,28 @@ class GuideTest : public ::testing::Test
     std::int64_t now = 0;
 };
 
+TEST_F(GuideTest, UnifiedSearchFindsFutureAndPastTitlesAndHonoursHiddenChannels)
+{
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    auto rows = model.search_results("match");
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_EQ(rows[0].kind, ptv::Model::SearchResult::Kind::programme);
+    EXPECT_NE(rows[0].programme_start, rows[1].programme_start);
+    EXPECT_FALSE(model.search_results("Sports One").empty());
+    ASSERT_TRUE(model.hide_category("US / Sports", true));
+    EXPECT_TRUE(model.search_results("match").empty());
+    EXPECT_TRUE(model.search_results("Sports One").empty());
+    EXPECT_EQ(model.search_results("Weather").size(), 1u);
+    model.close();
+}
+
 TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
 {
     const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";

@@ -77,7 +77,7 @@ void Model::poll_guide()
 
 void Model::refresh_guide()
 {
-    if (refreshing() || vod_.busy() || vod_.requested() || guide_thread_ || !has_catalog())
+    if (refreshing() || vod_.busy() || vod_.requested() || search_busy() || search_pending() || guide_thread_ || !has_catalog())
         return;
     guide_urls_ = catalog_.guide_urls;
     if (active_source_ == iptv::SourceKind::Xtream)

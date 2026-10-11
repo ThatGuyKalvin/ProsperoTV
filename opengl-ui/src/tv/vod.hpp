@@ -29,6 +29,7 @@ class VodLibrary
     ~VodLibrary();
     void configure(iptv::XtreamCredentials account, std::string cache, RefreshSchedule schedule);
     void configure_playlist(const iptv::Catalog *playlist);
+    void configure_like(const VodLibrary &source);
     void playlist_updated();
     void select(VodKind kind, std::string series = {}, bool force = false);
     void poll(bool can_download);
