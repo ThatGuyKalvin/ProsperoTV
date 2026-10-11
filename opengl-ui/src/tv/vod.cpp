@@ -45,11 +45,13 @@ bool fetch(const std::string &url, std::string *reply, const iptv::http::Request
     reply->assign(buffer.get(), result.bytes);
     return true;
 }
-bool detail_field(const std::string &key, JsonReader *value, VodDetails &details)
+bool detail_field(const std::string &key, JsonReader *value, VodDetails &details, unsigned depth = 0)
 {
+    if (depth > 8)
+        return false;
     if (key == "info" && value->Peek() == '{')
         return ReadObject(value, [&](const std::string &nested, JsonReader *item)
-                          { return detail_field(nested, item, details); });
+                          { return detail_field(nested, item, details, depth + 1); });
     std::string *target =
         key == "plot" || key == "description" ? &details.plot
         : key == "cast" || key == "actors"    ? &details.cast
@@ -69,8 +71,10 @@ bool detail_field(const std::string &key, JsonReader *value, VodDetails &details
                        [&](JsonReader *entry)
                        {
                            std::string part;
-                           if (!entry->StringOrScalar(&part, 256))
+                           if (entry->Peek() == '{' || entry->Peek() == '[')
                                return entry->SkipValue();
+                           if (!entry->StringOrScalar(&part, 256))
+                               return false;
                            if (part != "null" && text.size() + part.size() + 2 <= 1024)
                            {
                                if (!text.empty())
