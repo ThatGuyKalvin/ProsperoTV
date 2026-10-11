@@ -204,13 +204,16 @@ bool Library::open(const std::string &path)
         "WHEN OLD.kind!=NEW.kind OR OLD.url!=NEW.url OR OLD.username!=NEW.username OR "
         "OLD.password!=NEW.password "
         "BEGIN DELETE FROM account_info WHERE source=OLD.id; END;"
-        "CREATE TABLE IF NOT EXISTS source_guide (source INTEGER PRIMARY KEY REFERENCES sources(id) "
+        "CREATE TABLE IF NOT EXISTS source_guide (source INTEGER PRIMARY KEY REFERENCES "
+        "sources(id) "
         "ON DELETE CASCADE,url TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS guide_mapping (source INTEGER REFERENCES sources(id) ON DELETE "
         "CASCADE,channel TEXT NOT NULL,guide_id TEXT NOT NULL,PRIMARY KEY(source,channel));"
-        "CREATE TRIGGER IF NOT EXISTS guide_source_changed AFTER UPDATE OF kind,url,username,password,mac "
+        "CREATE TRIGGER IF NOT EXISTS guide_source_changed AFTER UPDATE OF "
+        "kind,url,username,password,mac "
         "ON sources WHEN OLD.kind!=NEW.kind OR OLD.url!=NEW.url OR OLD.username!=NEW.username OR "
-        "OLD.password!=NEW.password OR OLD.mac!=NEW.mac BEGIN DELETE FROM source_guide WHERE source=OLD.id; "
+        "OLD.password!=NEW.password OR OLD.mac!=NEW.mac BEGIN DELETE FROM source_guide WHERE "
+        "source=OLD.id; "
         "DELETE FROM guide_mapping WHERE source=OLD.id; END;"
         "CREATE TRIGGER IF NOT EXISTS history_source_removed AFTER DELETE ON sources BEGIN "
         "DELETE FROM channel_history WHERE source=OLD.id; END;"
@@ -681,10 +684,12 @@ std::string Library::guide_url(std::int64_t source) const
 std::map<std::string, std::string> Library::guide_mapping(std::int64_t source) const
 {
     std::map<std::string, std::string> result;
-    Statement query(db_, "SELECT channel,guide_id FROM guide_mapping WHERE source=?1 "
-                         "AND length(channel)<=256 AND length(guide_id)<=256 ORDER BY channel LIMIT 4096");
+    Statement query(
+        db_, "SELECT channel,guide_id FROM guide_mapping WHERE source=?1 "
+             "AND length(channel)<=256 AND length(guide_id)<=256 ORDER BY channel LIMIT 4096");
     if (query.integer(1, source))
-        while (query.row()) result.emplace(query.string(0), query.string(1));
+        while (query.row())
+            result.emplace(query.string(0), query.string(1));
     return result;
 }
 bool Library::set_guide_url(std::int64_t source, std::string_view url)
@@ -694,11 +699,14 @@ bool Library::set_guide_url(std::int64_t source, std::string_view url)
         return false;
     Statement change(db_, "INSERT INTO source_guide(source,url) VALUES(?1,?2) "
                           "ON CONFLICT(source) DO UPDATE SET url=excluded.url");
-    return change.integer(1, source) && change.text(2, url.empty() ? std::string_view("") : canonical) && change.done();
+    return change.integer(1, source) &&
+           change.text(2, url.empty() ? std::string_view("") : canonical) && change.done();
 }
-bool Library::set_guide_mapping(std::int64_t source, std::string_view channel, std::string_view guide_id)
+bool Library::set_guide_mapping(std::int64_t source, std::string_view channel,
+                                std::string_view guide_id)
 {
-    if (!valid_text(channel, 256) || (!guide_id.empty() && !valid_text(guide_id, 256))) return false;
+    if (!valid_text(channel, 256) || (!guide_id.empty() && !valid_text(guide_id, 256)))
+        return false;
     if (guide_id.empty())
     {
         Statement erase(db_, "DELETE FROM guide_mapping WHERE source=?1 AND channel=?2");
@@ -711,4 +719,4 @@ bool Library::set_guide_mapping(std::int64_t source, std::string_view channel, s
     return change.integer(1, source) && change.text(2, channel) && change.text(3, guide_id) &&
            change.done() && sqlite3_changes(db_) != 0;
 }
-}
+} // namespace ptv
