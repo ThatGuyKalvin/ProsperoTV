@@ -36,6 +36,7 @@ class PlaybackOsd
     // The control thread alone calls input and reads selected_channel. Drawing
     // can happen on the presentation worker, protected by the same mutex.
     int input(int action, std::uint64_t now);
+    std::optional<unsigned> take_picture_selection();
     void set_audio_state(const iptv_player_audio_state_t &state);
     std::optional<std::uint32_t> take_audio_selection();
     void set_subtitle_state(const iptv::SubtitleState &state);
@@ -65,7 +66,8 @@ class PlaybackOsd
     iptv_player_audio_state_t audio_{};
     std::optional<std::uint32_t> audio_selection_;
     iptv::SubtitleState subtitles_;
-    bool subtitle_tab_ = false;
+    unsigned tab_ = 0, picture_focus_ = 0, picture_mode_ = 0;
+    std::optional<unsigned> picture_selection_;
     unsigned subtitle_focus_ = 0;
     std::optional<std::uint32_t> subtitle_selection_;
     std::vector<std::shared_ptr<const iptv::SubtitleCue>> subtitle_cues_;

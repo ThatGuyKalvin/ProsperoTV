@@ -258,7 +258,7 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     if (action == IPTV_INPUT_OPTIONS)
     {
         audio_menu_ = !audio_menu_;
-        subtitle_tab_ = false;
+        tab_ = 0;
         list_ = false;
         audio_focus_ = 0;
         for (unsigned i = 0; i < audio_.count; ++i)
@@ -271,7 +271,7 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         if (action == IPTV_INPUT_L1 || action == IPTV_INPUT_R1)
         {
-            subtitle_tab_ = !subtitle_tab_;
+            tab_ = (tab_ + (action == IPTV_INPUT_R1 ? 1 : 2)) % 3;
             subtitle_focus_ = 0;
             for (unsigned i = 0; i < subtitles_.tracks.size(); ++i)
                 if (subtitles_.tracks[i].id == subtitles_.selected)
@@ -279,14 +279,27 @@ int PlaybackOsd::input(int action, std::uint64_t now)
             dirty_ = true;
             return 1;
         }
-        auto &focus = subtitle_tab_ ? subtitle_focus_ : audio_focus_;
+        if (tab_ == 2)
+        {
+            if (action == IPTV_INPUT_CIRCLE)
+                audio_menu_ = false;
+            else if (action == IPTV_INPUT_CROSS)
+                picture_selection_ = picture_mode_ = picture_focus_;
+            else if (action == IPTV_INPUT_UP || action == IPTV_INPUT_LEFT)
+                picture_focus_ = picture_focus_ ? picture_focus_ - 1 : 0;
+            else if (action == IPTV_INPUT_DOWN || action == IPTV_INPUT_RIGHT)
+                picture_focus_ = std::min(3u, picture_focus_ + 1);
+            dirty_ = true;
+            return 1;
+        }
+        auto &focus = (tab_ == 1) ? subtitle_focus_ : audio_focus_;
         const unsigned count =
-            subtitle_tab_ ? static_cast<unsigned>(subtitles_.tracks.size()) : audio_.count;
+            (tab_ == 1) ? static_cast<unsigned>(subtitles_.tracks.size()) : audio_.count;
         if (action == IPTV_INPUT_CIRCLE)
             audio_menu_ = false;
         else if (action == IPTV_INPUT_CROSS && count)
         {
-            if (subtitle_tab_)
+            if (tab_ == 1)
                 subtitle_selection_ = focus ? subtitles_.tracks[focus - 1].id : 0;
             else if (!audio_.pending)
                 audio_selection_ = focus ? audio_.tracks[focus - 1].pid : 0;
@@ -376,9 +389,36 @@ void PlaybackOsd::line(std::string_view value, float x, float y, float size, flo
         panel_.text(*face.font, readable(face, value), x, y, size, width);
 }
 
+std::optional<unsigned> PlaybackOsd::take_picture_selection()
+{
+    std::lock_guard lock(mutex_);
+    const auto selection = picture_selection_;
+    picture_selection_.reset();
+    return selection;
+}
+
 void PlaybackOsd::paint()
 {
-    if (audio_menu_ && subtitle_tab_)
+    if (audio_menu_ && tab_ == 2)
+    {
+        panel_.reset(80, 100, 820, 860);
+        line(tr("Picture"), 28, 54, 32, 760);
+        line(tr("Choose the shape of the picture"), 28, 88, 22, 760);
+        const char *labels[] = {"Fit original picture", "Stretch to screen", "Correct to 4:3",
+                                "Correct to 16:9"};
+        for (unsigned row = 0; row < 4; ++row)
+        {
+            const unsigned top = 110 + row * 72;
+            if (row == picture_focus_)
+                for (unsigned y = top; y < top + 66; ++y)
+                    std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
+            line(std::string(row == picture_mode_ ? "> " : "") + tr(labels[row]), 28, top + 43, 28,
+                 760);
+        }
+        line(tr("L1/R1 Audio / Subtitles / Picture"), 28, 764, 22, 760);
+        line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
+    }
+    else if (audio_menu_ && (tab_ == 1))
     {
         panel_.reset(80, 100, 820, 860);
         line(tr("Subtitles"), 28, 54, 32, 760);
@@ -412,7 +452,7 @@ void PlaybackOsd::paint()
             }
             line((id == subtitles_.selected ? "> " : "") + label, 28, top + 43, 28, 760);
         }
-        line(tr("L1/R1 Audio / Subtitles"), 28, 764, 22, 760);
+        line(tr("L1/R1 Audio / Subtitles / Picture"), 28, 764, 22, 760);
         line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 760);
         line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
     }
@@ -461,7 +501,7 @@ void PlaybackOsd::paint()
             }
             line((pid == audio_.selected_pid ? "> " : "") + label, 28, top + 43, 28, 760);
         }
-        line(tr("L1/R1 Audio / Subtitles"), 28, 764, 22, 760);
+        line(tr("L1/R1 Audio / Subtitles / Picture"), 28, 764, 22, 760);
         line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 760);
         line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
     }
@@ -511,10 +551,11 @@ void PlaybackOsd::paint()
             line(tr("L2 Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live"), 30, 231,
                  24, 1700);
         }
-        line(live_ ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
-                        "Info · "
-                        "Circle Back")
-                   : tr("Options Tracks · Triangle Info · Circle Back"),
+        line(live_
+                 ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
+                      "Info · "
+                      "Circle Back")
+                 : tr("Options Tracks · Triangle Info · Circle Back"),
              30, history_.available ? 281 : 204, 24, 1700);
     }
     dirty_ = false;

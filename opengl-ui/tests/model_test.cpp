@@ -1007,7 +1007,7 @@ TEST_F(ModelTest, SubtitleSelectionUsesItsOwnTabAndCaptionsOutliveTheBanner)
     EXPECT_GT(std::count(video.begin(), video.begin() + 1920 * 1080, 235), 100);
     EXPECT_FALSE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 11000000));
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 12000000), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 12000001), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 12000001), 1);
     state.tracks.clear();
     controls.set_subtitle_state(state);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 12000002), 1);
@@ -1108,4 +1108,31 @@ TEST(CategoryPath, ASlashInsideAWordIsPartOfTheName)
     EXPECT_EQ(ptv::category_leaf("US::Sports::Football"), "Football");
     EXPECT_TRUE(ptv::category_belongs("US| 24/7 SHOWS", "US"));
     EXPECT_FALSE(ptv::category_belongs("US| 24/7 SHOWS", "US| 24"));
+}
+
+TEST_F(ModelTest, PlaybackPictureModesDoNotSelectTracksOrChannels)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ptv::PlaybackOsd controls(model, request);
+    EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 2), 1);
+    for (unsigned mode = 0; mode < 4; ++mode)
+    {
+        EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
+        EXPECT_EQ(controls.take_picture_selection(), mode);
+        EXPECT_FALSE(controls.take_picture_selection());
+        EXPECT_FALSE(controls.take_audio_selection());
+        EXPECT_FALSE(controls.take_subtitle_selection());
+        EXPECT_FALSE(controls.selected_channel());
+        EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 4), 1);
+    }
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 5), 1);
+    EXPECT_EQ(controls.take_picture_selection(), 3u);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 6), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 7), 0);
+    model.close();
 }

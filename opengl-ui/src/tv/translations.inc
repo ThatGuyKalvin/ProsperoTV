@@ -513,3 +513,11 @@
 {"HOUSEHOLD", {"FAMILIA", "FOYER", "HAUSHALT", "FAMIGLIA", "FAMÍLIA", "HUISHOUDEN"}},
 {"PARENTAL CONTROLS", {"CONTROL PARENTAL", "CONTRÔLE PARENTAL", "KINDERSICHERUNG", "CONTROLLO GENITORI", "CONTROLE PARENTAL", "OUDERLIJK TOEZICHT"}},
 {"BACKUP AND RESTORE", {"COPIA DE SEGURIDAD Y RESTAURACIÓN", "SAUVEGARDE ET RESTAURATION", "SICHERN UND WIEDERHERSTELLEN", "BACKUP E RIPRISTINO", "BACKUP E RESTAURAÇÃO", "BACK-UP EN HERSTEL"}},
+
+{"Picture", {"Imagen", "Image", "Bild", "Immagine", "Imagem", "Beeld"}},
+{"Choose the shape of the picture", {"Elige el formato de imagen", "Choisir le format de l’image", "Bildformat wählen", "Scegli il formato dell’immagine", "Escolha o formato da imagem", "Kies de beeldverhouding"}},
+{"Fit original picture", {"Ajustar imagen original", "Adapter l’image originale", "Originalbild einpassen", "Adatta immagine originale", "Ajustar imagem original", "Origineel beeld passend"}},
+{"Stretch to screen", {"Estirar a pantalla", "Étirer à l’écran", "Auf Bildschirm strecken", "Estendi allo schermo", "Esticar para a tela", "Uitrekken tot scherm"}},
+{"Correct to 4:3", {"Corregir a 4:3", "Corriger en 4:3", "Auf 4:3 korrigieren", "Correggi a 4:3", "Corrigir para 4:3", "Corrigeren naar 4:3"}},
+{"Correct to 16:9", {"Corregir a 16:9", "Corriger en 16:9", "Auf 16:9 korrigieren", "Correggi a 16:9", "Corrigir para 16:9", "Corrigeren naar 16:9"}},
+{"L1/R1 Audio / Subtitles / Picture", {"L1/R1 Audio / Subtítulos / Imagen", "L1/R1 Audio / Sous-titres / Image", "L1/R1 Audio / Untertitel / Bild", "L1/R1 Audio / Sottotitoli / Immagine", "L1/R1 Áudio / Legendas / Imagem", "L1/R1 Audio / Ondertitels / Beeld"}},
