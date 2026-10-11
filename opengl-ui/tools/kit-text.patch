@@ -1,0 +1,216 @@
+diff --git a/src/gfx/draw_list.cpp b/src/gfx/draw_list.cpp
+index 6263fac..d461b9f 100644
+--- a/src/gfx/draw_list.cpp
++++ b/src/gfx/draw_list.cpp
+@@ -52,6 +52,7 @@ void DrawList::clear()
+     opacities_.clear();
+     transform_ = Transform{};
+     opacity_ = 1.0f;
++    rtl_width_ = 0;
+ }
+ 
+ Instance &DrawList::append(std::uint32_t texture)
+@@ -102,7 +103,7 @@ void DrawList::polygon(const float *xy, int count, Color fill)
+ 
+ Rect DrawList::apply(const Rect &r) const
+ {
+-    return {apply_x(r.x), apply_y(r.y), r.w * transform_.scale, r.h * transform_.scale};
++    return {apply_x(rtl_width_>0 ? r.x+r.w : r.x), apply_y(r.y), r.w * transform_.scale, r.h * transform_.scale};
+ }
+ 
+ void DrawList::set_color(float *out, Color c) const
+@@ -127,7 +128,7 @@ void DrawList::gradient_rect(const Rect &r, float radius, Color top, Color botto
+ 
+ void DrawList::gradient_rect_h(const Rect &r, float radius, Color left, Color right)
+ {
+-    gradient_rect(r, radius, left, right);
++    gradient_rect(r, radius, rtl_width_>0?right:left, rtl_width_>0?left:right);
+     instances_.back().extra[1] = 1.0f; // the shader blends along x instead of y
+ }
+ 
+@@ -146,7 +147,7 @@ void DrawList::chamfer_rect(const Rect &r, float cut, Color fill, float border,
+ void DrawList::rotated_rect(const Rect &r, float radius, float angle, Color fill)
+ {
+     gradient_rect(r, radius, fill, fill);
+-    instances_.back().extra[0] = angle;
++    instances_.back().extra[0] = rtl_width_>0?-angle:angle;
+ }
+ 
+ void DrawList::glow(const Rect &r, float radius, float spread, Color color)
+@@ -164,7 +165,7 @@ void DrawList::arc(float cx, float cy, float radius, float thickness, float star
+     set4(i.rect, t.x, t.y, t.w, t.h);
+     set_color(i.color_top, color);
+     set_color(i.color_bottom, color);
+-    set4(i.params, start, thickness * transform_.scale, 0.0f, static_cast<float>(Shape::arc));
++    set4(i.params, rtl_width_>0?-start-sweep:start, thickness * transform_.scale, 0.0f, static_cast<float>(Shape::arc));
+     set4(i.extra, std::min(sweep, 6.2831853f), round_caps ? 0.0f : 1.0f, 0.0f, 0.0f);
+ }
+ 
+@@ -239,7 +240,7 @@ void DrawList::triangle(const Rect &r, Color fill, float outline, float angle)
+     set_color(i.color_top, fill);
+     set_color(i.color_bottom, fill);
+     set4(i.params, 0.0f, outline * transform_.scale, 0.0f, static_cast<float>(Shape::triangle));
+-    i.extra[0] = angle;
++    i.extra[0] = rtl_width_>0?-angle:angle;
+ }
+ 
+ void DrawList::image_gradient(std::uint32_t texture, const Rect &r, const Rect &uv, Color top,
+@@ -276,6 +277,7 @@ float DrawList::text(const Font &font, std::uint32_t font_texture, std::string_v
+     glyph_scratch_.clear();
+     const float width = font.layout(text, x, baseline, size, align, glyph_scratch_, tracking);
+     const float range = font.sdf_range(size) * transform_.scale;
++    const float block_left=align==Align::left?x:align==Align::center?x-width*.5f:x-width;
+     // A font handle names a slot the shader samples by itself: such glyphs
+     // join the current run. Any other texture is bound per run, as images are.
+     const bool slotted = is_font_handle(font_texture);
+@@ -283,7 +285,7 @@ float DrawList::text(const Font &font, std::uint32_t font_texture, std::string_v
+     for (const GlyphQuad &q : glyph_scratch_)
+     {
+         Instance &i = append(slotted ? 0u : font_texture);
+-        const Rect t = apply({q.x0, q.y0, q.x1 - q.x0, q.y1 - q.y0});
++        const Rect t = apply({rtl_width_>0?2*block_left+width-q.x1:q.x0, q.y0, q.x1 - q.x0, q.y1 - q.y0});
+         set4(i.rect, t.x, t.y, t.w, t.h);
+         set_color(i.color_top, color);
+         set_color(i.color_bottom, color);
+diff --git a/src/gfx/draw_list.hpp b/src/gfx/draw_list.hpp
+index 5bd5a2b..7a119dd 100644
+--- a/src/gfx/draw_list.hpp
++++ b/src/gfx/draw_list.hpp
+@@ -129,6 +129,9 @@ class DrawList
+ {
+   public:
+     void clear();
++    // Logical UI direction; images retain their UV orientation. Zero restores LTR.
++    float rtl_width() const { return rtl_width_; }
++    void set_rtl_width(float width) { rtl_width_=width>0?width:0; }
+ 
+     // ---- shapes ----
+     void rounded_rect(const Rect &r, float radius, Color fill);
+@@ -218,7 +221,8 @@ class DrawList
+     Rect apply(const Rect &r) const;
+     float apply_x(float x) const
+     {
+-        return x * transform_.scale + transform_.dx;
++        const float value=x * transform_.scale + transform_.dx;
++        return rtl_width_>0 ? rtl_width_-value : value;
+     }
+     float apply_y(float y) const
+     {
+@@ -233,11 +237,25 @@ class DrawList
+     std::vector<float> opacities_;
+     Transform transform_;
+     float opacity_ = 1.0f;
++    float rtl_width_ = 0;
+     std::vector<GlyphQuad> glyph_scratch_;
+     std::vector<MeshVertex> mesh_;
+     std::vector<std::uint32_t> index_scratch_;
+ };
+ 
++// Scope direction to a UI layer; it must never leak into a video renderer.
++class ScopedRtl
++{
++  public:
++    ScopedRtl(DrawList &list,float width): list_(list),old_(list.rtl_width()) { list_.set_rtl_width(width); }
++    ~ScopedRtl() { list_.set_rtl_width(old_); }
++    ScopedRtl(const ScopedRtl &)=delete;
++    ScopedRtl &operator=(const ScopedRtl &)=delete;
++  private:
++    DrawList &list_;
++    float old_;
++};
++
+ // The whole texture, for images uploaded top row first.
+ constexpr Rect kFullUv{0.0f, 0.0f, 1.0f, 1.0f};
+ // The whole texture, for canvases (rendered bottom row first).
+diff --git a/src/gfx/font.cpp b/src/gfx/font.cpp
+index 645aee5..212f361 100644
+--- a/src/gfx/font.cpp
++++ b/src/gfx/font.cpp
+@@ -60,6 +60,7 @@ std::uint32_t next_codepoint(std::string_view text, std::size_t *index)
+ 
+ bool Font::load(std::string_view data)
+ {
++    shaping_.reset();
+     error_.clear();
+     if (data.size() < sizeof(ff::Header))
+     {
+@@ -67,6 +68,8 @@ bool Font::load(std::string_view data)
+         return false;
+     }
+     std::memcpy(&header_, data.data(), sizeof(header_));
++    if (header_.magic == ff::kMagic && header_.version == 2)
++        return load_shaped(data);
+     if (header_.magic != ff::kMagic || header_.version != ff::kVersion ||
+         header_.pixel_size <= 0.0f)
+     {
+@@ -125,6 +128,7 @@ float Font::kern(std::uint32_t first, std::uint32_t second) const
+ 
+ std::string Font::fit(std::string_view text, float size, float max_width, float tracking) const
+ {
++    if (shaping_) return shaped_fit(text,size,max_width,tracking);
+     if (measure(text, size, tracking) <= max_width)
+         return std::string(text);
+     constexpr std::string_view kEllipsis = "\xE2\x80\xA6";
+@@ -147,6 +151,7 @@ std::string Font::fit(std::string_view text, float size, float max_width, float
+ 
+ float Font::measure(std::string_view text, float size, float tracking) const
+ {
++    if (shaping_) return shaped_layout(text,0,0,size,Align::left,nullptr,tracking);
+     const float scale = size / header_.pixel_size;
+     float width = 0.0f;
+     std::uint32_t previous = 0;
+@@ -174,6 +179,7 @@ float Font::measure(std::string_view text, float size, float tracking) const
+ float Font::layout(std::string_view text, float x, float y, float size, Align align,
+                    std::vector<GlyphQuad> &quads, float tracking) const
+ {
++    if (shaping_) return shaped_layout(text,x,y,size,align,&quads,tracking);
+     const float scale = size / header_.pixel_size;
+     const float width = measure(text, size, tracking);
+     float pen = x;
+@@ -218,6 +224,7 @@ float Font::layout(std::string_view text, float x, float y, float size, Align al
+ 
+ std::vector<std::string> Font::wrap(std::string_view text, float size, float max_width) const
+ {
++    if (shaping_) return shaped_wrap(text,size,max_width);
+     std::vector<std::string> lines;
+     std::string line;
+     std::size_t index = 0;
+diff --git a/src/gfx/font.hpp b/src/gfx/font.hpp
+index 0c52b44..0c2d31c 100644
+--- a/src/gfx/font.hpp
++++ b/src/gfx/font.hpp
+@@ -7,6 +7,7 @@
+ #include "gfx/font_format.hpp"
+ 
+ #include <cstdint>
++#include <memory>
+ #include <string>
+ #include <string_view>
+ #include <vector>
+@@ -28,6 +29,7 @@ enum class Align : std::uint8_t
+     right,
+ };
+ 
++class FontShaper;
+ class Font
+ {
+   public:
+@@ -84,10 +86,17 @@ class Font
+     }
+     bool has_glyph(std::uint32_t codepoint) const
+     {
+-        return find(codepoint) != nullptr;
++        return shaping_ ? shaped_has_glyph(codepoint) : find(codepoint) != nullptr;
+     }
+ 
+   private:
++    bool load_shaped(std::string_view data);
++    bool shaped_has_glyph(std::uint32_t codepoint) const;
++    float shaped_layout(std::string_view text, float x, float y, float size, Align align,
++                        std::vector<GlyphQuad> *quads, float tracking) const;
++    std::string shaped_fit(std::string_view text, float size, float width, float tracking) const;
++    std::vector<std::string> shaped_wrap(std::string_view text, float size, float width) const;
++    std::shared_ptr<FontShaper> shaping_;
+     const font_format::Glyph *find(std::uint32_t codepoint) const;
+     float kern(std::uint32_t first, std::uint32_t second) const;
+ 

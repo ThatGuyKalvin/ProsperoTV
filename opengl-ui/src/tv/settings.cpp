@@ -34,6 +34,8 @@ Settings load_settings(const std::string &data_dir)
             settings.subtitle_size = value >= 0 && value <= 2 ? value : 1;
         else if (std::sscanf(line, "subtitle_color=%d", &value) == 1)
             settings.subtitle_color = value >= 0 && value <= 2 ? value : 0;
+        else if (std::sscanf(line, "interface_language=%d", &value) == 1)
+            settings.interface_language = value>=0 && value<=9 ? value : 0;
         else if (std::sscanf(line, "theme=%d", &value) == 1)
             settings.theme = value >= 0 && value <= 2 ? value : 0;
         else if (std::sscanf(line, "larger_text=%d", &value) == 1)
@@ -79,6 +81,7 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
                  settings.resume_last ? 1 : 0);
     std::fprintf(file, "live_preview=%d\n", settings.live_preview ? 1 : 0);
     std::fprintf(file, "audio_normalization=%d\n", settings.audio_normalization ? 1 : 0);
+    std::fprintf(file,"interface_language=%d\n",std::clamp(settings.interface_language,0,9));
     std::fprintf(file, "theme=%d\nlarger_text=%d\nhigh_contrast=%d\nscreensaver_minutes=%d\n",
                  std::clamp(settings.theme, 0, 2), settings.larger_text ? 1 : 0,
                  settings.high_contrast ? 1 : 0,

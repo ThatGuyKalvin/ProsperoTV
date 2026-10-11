@@ -19,11 +19,12 @@ cxx=$(command -v "${HOST_CXX:-clang++}")
 cache=$(command -v ccache || true)
 gtest=$(bash "$tv/tools/setup-test-dependencies.sh" | tail -1)
 expat=$(bash "$tv/tools/setup-guide-dependencies.sh" host | tail -1)
+text=$(bash "$root/tools/setup-text-dependencies.sh")
 build="$root/build/tests"
 mkdir -p "$build/obj"
 
 sanitize="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
-includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen -I$expat/include"
+includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen -I$expat/include -I$text/include/harfbuzz -I$text/include/fribidi"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O1 $sanitize \$flags $includes -MD -MF \$out.d -c \$in -o \$out"
@@ -31,7 +32,7 @@ includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party
     echo "  deps = gcc"
     echo "  description = CXX \$in"
     echo "rule link"
-    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a -lpng -ljpeg -lz -lsqlite3 -lssl -lcrypto -lpthread -lm -o \$out"
+    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a $text/lib/libharfbuzz.a $text/lib/libfribidi.a -lpng -ljpeg -lz -lsqlite3 -lssl -lcrypto -lpthread -lm -o \$out"
     echo "  description = LINK \$out"
     objects=()
     edge() {

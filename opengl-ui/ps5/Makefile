@@ -27,8 +27,8 @@ APP_IMPORT_STUBS := $(OPENGL_SDK)/lib/libSceAgc.so $(OPENGL_SDK)/lib/libSceAgcDr
 APP_RUNTIME_MODULES ?=
 # libcurl with OpenSSL: every request the app makes, and the update kit.
 PACBREW_PACKAGES ?= libcurl libpng libjpeg
-PACBREW_INCLUDE_PATHS := include
-PACBREW_STATIC_ARCHIVES := lib/libsqlite3.a
+PACBREW_INCLUDE_PATHS := include include/harfbuzz include/fribidi
+PACBREW_STATIC_ARCHIVES := lib/libsqlite3.a lib/libharfbuzz.a lib/libfribidi.a
 BUILD_JOBS ?= $(shell nproc 2>/dev/null || echo 2)
 USE_CCACHE ?= 1
 export BUILD_JOBS USE_CCACHE PS5_OPENGL_PREFIX

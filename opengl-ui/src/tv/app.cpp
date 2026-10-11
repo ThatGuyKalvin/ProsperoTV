@@ -76,6 +76,7 @@ enum FormRow : int
     kRowViewingRemaining,
     kRowViewingClock,
     kRowShare,
+    kRowLanguage,
 };
 
 constexpr unsigned kAllowances[] = {0, 15, 30, 60, 90, 120, 180};
@@ -264,6 +265,9 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_action(kRowRestore, tr("Restore from USB"));
     form_.add_action(kRowShare, tr("Share with another console"));
     form_.add_header(tr("APPEARANCE AND ACCESSIBILITY"));
+    form_.add_choice(kRowLanguage,tr("Interface language"),
+        {tr("System language"),"English","Español","Français","Deutsch","Italiano","Português","Nederlands","العربية","עברית"},settings.interface_language)
+        .description=tr("Restart to apply language");
     form_.add_choice(kRowTheme, tr("Theme"), {tr("Dusk"), tr("Ocean"), tr("Forest")},
                      settings.theme);
     form_.add_toggle(kRowLargeText, tr("Larger text"), settings.larger_text).description =
@@ -531,6 +535,7 @@ void App::apply_settings()
     Settings next = shared_.settings;
     next.reduced_motion = form_.toggle_value(kRowMotion);
     next.sounds = form_.toggle_value(kRowSounds);
+    next.interface_language = form_.choice_index(kRowLanguage);
     next.theme = form_.choice_index(kRowTheme);
     next.larger_text = form_.toggle_value(kRowLargeText);
     next.high_contrast = form_.toggle_value(kRowContrast);
@@ -812,8 +817,20 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
     step(none, dt, feedback);
 }
 
-void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
+void App::step(const InputFrame &physical, float dt, ui::Feedback &feedback)
 {
+    InputFrame input=physical;
+    if (interface_rtl())
+    {
+        if (input.nav==Direction::left) input.nav=Direction::right;
+        else if (input.nav==Direction::right) input.nav=Direction::left;
+        const auto swap=[](std::uint32_t bits) {
+            const auto left=1u<<static_cast<unsigned>(Action::left),right=1u<<static_cast<unsigned>(Action::right);
+            return (bits&~(left|right))|((bits&left)?right:0)|((bits&right)?left:0);
+        };
+        input.pressed=swap(input.pressed); input.released=swap(input.released); input.held=swap(input.held);
+        input.stick_x=-input.stick_x;
+    }
     if (storage_busy_)
     {
         shared_.clock += dt;
@@ -1459,6 +1476,8 @@ void App::draw_hints(ui::Canvas &canvas) const
 void App::draw(Frame &frame, bool themed) const
 {
     frame.reset();
+    gfx::ScopedRtl scene_direction(frame.scene,interface_rtl()?kWidth:0);
+    gfx::ScopedRtl overlay_direction(frame.overlay,interface_rtl()?kWidth:0);
     frame.glass_texture = glass_texture_;
     if (sleeping_)
     {
