@@ -183,4 +183,23 @@ for color in pq sdr full hlg unknown; do
         -x265-params "pools=1:frame-threads=1:log-level=error:repeat-headers=1:$vui" \
         "${signaling[@]}" -f hevc "$output/color-$color.hevc"
 done
+cat > "$output/chapters.txt" <<'CHAPTERS'
+;FFMETADATA1
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=2000
+title=Opening
+[CHAPTER]
+TIMEBASE=1/1000
+START=2000
+END=6000
+title=Second act
+CHAPTERS
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=25 \
+    -f lavfi -i sine=frequency=440:sample_rate=48000 -f ffmetadata -i "$output/chapters.txt" \
+    -t 6 -map 0:v -map 1:a -map_metadata 2 -c:v libx264 -threads 2 -g 25 \
+    -keyint_min 25 -sc_threshold 0 -c:a aac -b:a 64k "$output/chapters.mp4"
+ffmpeg -hide_banner -loglevel error -y -i "$output/chapters.mp4" -map 0:v -map 0:a \
+    -map_chapters 0 -c copy "$output/chapters.mkv"
 printf '%s\n' "$stamp" > "$output/.complete"

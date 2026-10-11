@@ -36,6 +36,17 @@ struct MediaAudioTrack
     std::string language, title;
     std::uint8_t audio_type = 0; // ISO 639 accessibility type, as in a TS descriptor.
 };
+struct MediaChapter
+{
+    std::int64_t position_us = 0;
+    std::string title;
+};
+struct MediaTimeline
+{
+    std::int64_t duration_us = 0; // Zero when unknown.
+    bool seekable = false;
+    std::vector<MediaChapter> chapters; // At most 128; titles at most 128 bytes.
+};
 struct MediaOutput
 {
     void *context = nullptr;
@@ -44,9 +55,13 @@ struct MediaOutput
     void (*subtitle_packet)(void *, std::uint32_t, const std::uint8_t *, std::size_t,
                             std::int64_t pts_us, std::int64_t duration_us) = nullptr;
     void (*audio_tracks)(void *, const std::vector<MediaAudioTrack> &) = nullptr;
+    void (*timeline)(void *, const MediaTimeline &) = nullptr;
 };
 // 0: complete, 1: cancelled, -1: error. Streaming I/O, no transcoding.
-int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *error);
+// start_us is relative to the beginning; seek to the preceding decodable keyframe.
+// Every call creates a fresh mux timeline; the caller must reset its decoder too.
+int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *error,
+              std::int64_t start_us = 0);
 bool LooksLikeMedia(const std::uint8_t *bytes, std::size_t count);
 // HLS WebVTT uses a local cue clock mapped to a wrapping 90 kHz transport clock.
 // Normalize before FFmpeg reads the segment (its WebVTT demuxer ignores the map).

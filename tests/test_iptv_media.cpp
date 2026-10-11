@@ -32,6 +32,7 @@ struct Memory
     Memory *owner = nullptr;
     std::vector<iptv::MediaAudioTrack> audio_tracks;
     std::vector<std::int64_t> subtitle_times;
+    iptv::MediaTimeline timeline;
     explicit Memory(const char *name)
     {
         std::ifstream file(std::string("build/media-tests/fixtures/") + name, std::ios::binary);
@@ -49,7 +50,7 @@ struct Memory
         m.at += count;
         return static_cast<int>(count);
     }
-    int run(std::string *error)
+    int run(std::string *error, std::int64_t start_us = 0)
     {
         iptv::MediaInput input{
             this, read,
@@ -135,8 +136,10 @@ struct Memory
                     EXPECT_TRUE(m.subtitles->push(id, bytes, count, pts, duration));
             },
             [](void *self, const std::vector<iptv::MediaAudioTrack> &tracks)
-            { static_cast<Memory *>(self)->audio_tracks = tracks; }};
-        return iptv::ReadMedia(input, output, error);
+            { static_cast<Memory *>(self)->audio_tracks = tracks; },
+            [](void *self, const iptv::MediaTimeline &timeline)
+            { static_cast<Memory *>(self)->timeline = timeline; }};
+        return iptv::ReadMedia(input, output, error, start_us);
     }
 };
 struct Frames
@@ -216,6 +219,32 @@ TEST(Media, ReadsMp4MoovAtEitherEndAndMatroskaWithAacSound)
             check_transport(memory, false);
         }
 }
+TEST(Media, SeeksToKeyframesAndReadsMovieChaptersOnTheRealDemuxPath)
+{
+    for (const auto *name : {"chapters.mp4", "chapters.mkv"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        ASSERT_FALSE(memory.bytes.empty());
+        std::string error;
+        ASSERT_EQ(memory.run(&error, 2400000), 0) << error;
+        EXPECT_TRUE(memory.timeline.seekable);
+        EXPECT_NEAR(memory.timeline.duration_us, 6000000, 30000);
+        ASSERT_EQ(memory.timeline.chapters.size(), 2u);
+        EXPECT_EQ(memory.timeline.chapters[0].title, "Opening");
+        EXPECT_EQ(memory.timeline.chapters[1].title, "Second act");
+        EXPECT_EQ(memory.timeline.chapters[1].position_us, 2000000);
+        Frames frames;
+        check_transport(memory, false, 100, &frames);
+        EXPECT_NEAR(frames.first_pts, 4000000, 30000); // Two-second transport lead-in.
+        EXPECT_NEAR(frames.last_pts, 7960000, 30000);
+    }
+    Memory invalid("chapters.mp4");
+    std::string error;
+    EXPECT_EQ(invalid.run(&error, -1), -1);
+    EXPECT_TRUE(invalid.transport.empty());
+}
+
 TEST(Media, ConvertsHevcLengthPrefixedPacketsForTheNativeDecoder)
 {
     Memory memory("hevc.mp4");
