@@ -321,7 +321,8 @@ struct StorageJob
             job.ok = ptv::backup_settings(tv::storage::config_dir(), archive, job.error);
         else if (job.request.action == ptv::StorageAction::restore)
             job.ok = ptv::restore_settings(tv::storage::config_dir(), archive, job.error);
-        else if (job.request.action == ptv::StorageAction::share_import && job.request.shared_library)
+        else if (job.request.action == ptv::StorageAction::share_import &&
+                 job.request.shared_library)
             job.ok = ptv::import_shared_library(tv::storage::config_dir(),
                                                 *job.request.shared_library, job.error);
         else

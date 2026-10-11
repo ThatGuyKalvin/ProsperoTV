@@ -903,6 +903,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         auto request = share_sheet_.take_request();
         if (request.action != StorageAction::none)
         {
+            storage_action_ = request.action;
             storage_request_ = std::move(request);
             storage_busy_ = true;
             stop_preview();
@@ -1038,11 +1039,10 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 
     tabs_.update(dt);
     browse_.update(dt);
-    const bool preview_allowed = !sleeping_ && !multiview_.active() && browsing() &&
-                                 shared_.settings.live_preview && intro_ < 0 &&
-                                 !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
-                                 !library_sheet_.is_open() && !guide_sheet_.is_open() &&
-                                 !pairing_open_ && !storage_open();
+    const bool preview_allowed =
+        !sleeping_ && !multiview_.active() && browsing() && shared_.settings.live_preview &&
+        intro_ < 0 && !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
+        !library_sheet_.is_open() && !guide_sheet_.is_open() && !pairing_open_ && !storage_open();
     model.block_source_check(preview_allowed || multiview_.active() || share_sheet_.is_open());
     const auto focused = preview_allowed ? browse_.focused() : std::nullopt;
     auto preview_request = focused ? model.preview_request(focused->id) : std::nullopt;
@@ -1514,9 +1514,15 @@ void App::draw(Frame &frame, bool themed) const
     if (storage_busy_)
     {
         over.list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.94f));
-        ui::text(over.list, over.fonts.semibold, tr("Working with the USB drive..."), kWidth / 2,
-                 490, 40, shared_.theme.text, gfx::Align::center);
-        ui::text(over.list, over.fonts.regular, tr("Keep the drive connected until this finishes."),
+        ui::text(over.list, over.fonts.semibold,
+                 storage_action_ == StorageAction::share_import
+                     ? tr("Importing shared sources and favorites...")
+                     : tr("Working with the USB drive..."),
+                 kWidth / 2, 490, 40, shared_.theme.text, gfx::Align::center);
+        ui::text(over.list, over.fonts.regular,
+                 storage_action_ == StorageAction::share_import
+                     ? tr("Keep ProsperoTV open until this finishes.")
+                     : tr("Keep the drive connected until this finishes."),
                  kWidth / 2, 555, 26, shared_.theme.text_muted, gfx::Align::center);
         over.list.arc(kWidth / 2, 635, 22, 4, shared_.clock * 4, 2.2f, tone::accent);
     }

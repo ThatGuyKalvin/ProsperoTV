@@ -40,7 +40,9 @@ using Files = std::array<File, kNames.size()>;
 
 bool regular(const std::string &path, std::size_t limit, bool &exists)
 {
-    struct stat status{};
+    struct stat status
+    {
+    };
     exists = false;
     if (lstat(path.c_str(), &status) != 0)
         return errno == ENOENT;
@@ -257,13 +259,17 @@ std::vector<std::string> usb_drives(const std::string &mount_root)
     // is plugged in. With nothing mounted a folder belongs to the same
     // filesystem as the one that holds it: offering it as a drive would put
     // a "backup" on the console's own storage and call it saved.
-    struct stat parent{};
+    struct stat parent
+    {
+    };
     const bool parent_known = stat(mount_root.empty() ? "/" : mount_root.c_str(), &parent) == 0;
 #endif
     for (unsigned i = 0; i < 8; ++i)
     {
         const auto path = mount_root + "/usb" + std::to_string(i);
-        struct stat status{};
+        struct stat status
+        {
+        };
         // The actual operation checks read/write access and reports failures.
         // access() is not a reliable availability probe in the console sandbox.
         if (lstat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
@@ -384,13 +390,14 @@ bool import_shared_library(const std::string &directory, const SharedLibrary &li
     auto existing = destination.sources();
     // IDs 1..4 are installation migration slots; imported sources always get new IDs.
     ok = ok && std::any_of(existing.begin(), existing.end(),
-                          [](const SavedSource &source) { return source.id == 4; });
+                           [](const SavedSource &source) { return source.id == 4; });
     for (const auto &item : library.sources)
     {
         if (!ok)
             break;
-        const auto duplicate = std::find_if(existing.begin(), existing.end(),
-            [&](const SavedSource &source) { return same_shared_source(source, item.source); });
+        const auto duplicate =
+            std::find_if(existing.begin(), existing.end(), [&](const SavedSource &source)
+                         { return same_shared_source(source, item.source); });
         // Existing accounts keep their destination HTTP/guide preferences.
         if (duplicate != existing.end())
             continue;

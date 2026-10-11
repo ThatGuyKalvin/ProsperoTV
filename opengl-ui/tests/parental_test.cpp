@@ -487,4 +487,22 @@ TEST_F(ParentalTest, RepeatedDstHourDoesNotReopenBedtimeAndOrderlyStopRefunds)
     EXPECT_TRUE(pin.viewing_allowed(wake));
     EXPECT_EQ(pin.remaining_seconds(wake), 60u);
 }
+TEST_F(ParentalTest, LockedProfileCannotExportSharingCredentials)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.parental_action(ptv::Model::ParentalAction::set_pin);
+    answer(model, "836295");
+    answer(model, "836295");
+    ASSERT_TRUE(model.parental().enabled());
+    ASSERT_FALSE(model.parental().unlocked());
+    ptv::SharedLibrary library;
+    EXPECT_FALSE(model.export_shared_library(library));
+    EXPECT_TRUE(library.sources.empty());
+    EXPECT_TRUE(library.favorites.empty());
+    model.parental_action(ptv::Model::ParentalAction::unlock);
+    answer(model, "836295");
+    ASSERT_TRUE(model.parental().unlocked());
+    EXPECT_TRUE(model.export_shared_library(library));
+}
 } // namespace

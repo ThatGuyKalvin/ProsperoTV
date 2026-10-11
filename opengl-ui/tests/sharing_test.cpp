@@ -4,7 +4,10 @@
 #include "tv/share_tls.hpp"
 #include "tv/platform.hpp"
 #include "iptv_user_state.h"
+#include "iptv_xtream.h"
+#include "host_platform.hpp"
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -68,6 +71,35 @@ TEST(Sharing, RequiresFullFingerprintAndRejectsPublicOrInvalidDestination)
     ptv::ShareTls sender;
     EXPECT_FALSE(sender.transmit("8.8.8.8", 18127, std::string(64, 'A'), "data"));
     EXPECT_FALSE(sender.transmit("127.0.0.1", 0, std::string(64, 'A'), "data"));
+}
+TEST(Sharing, BoundsSourcesMappingsAndWireBytes)
+{
+    auto library = sample();
+    std::string bytes;
+    library.sources.resize(129, library.sources.front());
+    EXPECT_FALSE(ptv::encode_shared_library(library, bytes));
+    library = sample();
+    for (unsigned i = 0; i < 4097; ++i)
+        library.sources[0].mapping[std::to_string(i)] = "guide-id";
+    EXPECT_FALSE(ptv::encode_shared_library(library, bytes));
+    EXPECT_FALSE(ptv::decode_shared_library(std::string(ptv::share_byte_limit + 1, 'x'), library));
+}
+TEST(Sharing, ListenerExpiresWithoutAConnection)
+{
+    struct ResetClock
+    {
+        ~ResetClock()
+        {
+            host::set_monotonic_us(0);
+        }
+    } reset;
+    host::set_monotonic_us(1000000);
+    ptv::ShareTls receiver;
+    ASSERT_TRUE(receiver.receive(0));
+    ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::listening));
+    host::set_monotonic_us(182000000);
+    ASSERT_TRUE(wait_for(receiver, ptv::SharePhase::failed));
+    EXPECT_TRUE(receiver.take_payload().empty());
 }
 TEST(Sharing, PinnedTlsRequiresReceiverApprovalAndTransfersExactBytes)
 {
@@ -133,6 +165,19 @@ TEST(Sharing, ImportRemapsIdsMergesFavoritesAndPreservesDestinationProfile)
     auto sources = library.sources();
     ASSERT_EQ(sources.size(), 2u);
     EXPECT_EQ(sources[1].id, 5);
+    const auto identity = [](const ptv::SavedSource &source)
+    {
+        const iptv::XtreamCredentials account{source.url, source.username, source.password};
+        iptv::Catalog catalog;
+        EXPECT_EQ(iptv::ParseXtreamLiveStreams(
+                      R"([{"stream_id":42,"name":"Family channel","category_id":1}])", account, {},
+                      iptv::XtreamSourceId(account), &catalog),
+                  iptv::XtreamStatus::ok);
+        return catalog.size() ? std::string(catalog[0].id) : std::string{};
+    };
+    const auto original_id = identity(sample().sources[0].source);
+    EXPECT_FALSE(original_id.empty());
+    EXPECT_EQ(identity(sources[1]), original_id);
     EXPECT_EQ(library.selected_source(), 4);
     EXPECT_EQ(library.guide_mapping(5).at("channel-id"), "guide-id");
     EXPECT_TRUE(library.folder_channels("Existing").contains("old-id"));
@@ -150,12 +195,28 @@ TEST(Sharing, ImportRemapsIdsMergesFavoritesAndPreservesDestinationProfile)
         EXPECT_EQ(content, "destination-private-data");
     }
     EXPECT_FALSE(std::filesystem::exists(root + "/prosperotv-restore-journal.sqlite3"));
+    ASSERT_TRUE(library.close());
+    auto favorite_bundle = sample();
+    favorite_bundle.favorites = {original_id};
+    ASSERT_TRUE(ptv::import_shared_library(root, favorite_bundle, error)) << error;
+    ASSERT_EQ(iptv::LoadFavorites(root + "/iptv-favorites-v1.bin", &favorites),
+              iptv::UserStateStatus::ok);
+    ASSERT_TRUE(library.open(database));
+    sources = library.sources();
+    EXPECT_NE(std::find(favorites.begin(), favorites.end(), identity(sources[1])), favorites.end());
 }
 TEST(Sharing, ImportRollsBackNewSourcesWhenFavoritesCannotBeMerged)
 {
     char pattern[] = "/tmp/ptv-share-rollback-XXXXXX";
     const std::string root = mkdtemp(pattern);
-    struct Cleanup { std::string path; ~Cleanup() { std::filesystem::remove_all(path); } } cleanup{root};
+    struct Cleanup
+    {
+        std::string path;
+        ~Cleanup()
+        {
+            std::filesystem::remove_all(path);
+        }
+    } cleanup{root};
     const auto database = root + "/prosperotv-library.sqlite3";
     {
         ptv::Library library;
