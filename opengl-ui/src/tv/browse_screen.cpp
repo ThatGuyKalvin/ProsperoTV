@@ -628,7 +628,7 @@ void BrowseScreen::update(float dt)
     else
     {
         groups_.tab(0).label = std::string(tr(Model::group_name(Group::all))) + "  " +
-                               group_digits(model.channel_count());
+                               group_digits(model.group_size(Group::all));
         groups_.tab(1).label = std::string(tr(Model::group_name(Group::recent))) + "  " +
                                group_digits(model.group_size(Group::recent));
         for (int i = 2; i < 4; ++i)
