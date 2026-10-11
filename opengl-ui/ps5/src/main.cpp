@@ -462,7 +462,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             }
         }
         app.configure_images(
-            [&renderer](const ptv::ImagePixels &pixels) {
+            [&renderer](const ptv::ImagePixels &pixels)
+            {
                 return renderer.batch().create_texture(pixels.width, pixels.height,
                                                        pixels.rgba.data());
             },
@@ -1368,19 +1369,37 @@ int main()
         // A scripted run plays each channel for a set time; the player stops it.
         tv::diag::flush();
         iptv_native_agc_set_picture_mode(settings.picture_mode);
+        auto phone = model.remote_browse_view();
+        if (request.live)
+            phone.current_channel = request.channel_id;
+        iptv_remote_set_browse_handler(
+            [](const char *data, size_t size, char *out, size_t capacity, void *context) -> int
+            {
+                std::string response;
+                const int status = static_cast<ptv::RemoteBrowseView *>(context)->handle(
+                    std::string_view(data, size), response);
+                if (response.size() >= capacity)
+                    return 500;
+                std::memcpy(out, response.c_str(), response.size() + 1);
+                return status;
+            },
+            &phone);
         ptv::PlaybackOsd controls(model, request, settings);
         const bool osd_ready = controls.load_fonts(tv::storage::app_file("assets/fonts"));
         struct PlaybackControlsContext
         {
             ptv::PlaybackOsd *osd;
             ptv::Settings *settings;
-        } input_context{&controls, &settings};
+            ptv::RemoteBrowseView *phone;
+        } input_context{&controls, &settings, &phone};
         if (osd_ready)
         {
             iptv_player_set_controls(
                 [](void *context, int action) -> int
                 {
                     auto &input = *static_cast<PlaybackControlsContext *>(context);
+                    if (!input.phone->selected.empty())
+                        return 2;
                     auto &osd = *input.osd;
                     iptv_player_audio_state_t audio{};
                     iptv_player_audio_state(&audio);
@@ -1476,11 +1495,18 @@ int main()
                 &controls);
         }
         else
+        {
             say("[TV] playback controls font could not be loaded");
+            iptv_player_set_controls(
+                [](void *context, int) -> int
+                { return static_cast<ptv::RemoteBrowseView *>(context)->selected.empty() ? 0 : 2; },
+                &phone);
+        }
         iptv_player_set_sleep_deadline(model.sleep_timer.deadline());
         if (script.active())
             iptv_input_schedule_start(); // "during" steps count from here
         const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
+        iptv_remote_set_browse_handler(nullptr, nullptr);
         iptv_player_set_controls(nullptr, nullptr);
         iptv_native_agc_set_osd(nullptr, nullptr);
         if (controls.copy_picture_settings(settings))
@@ -1560,7 +1586,8 @@ int main()
         iptv_player_media_state_t media{};
         iptv_player_media_state(&media);
         if ((media.presented || outcome.result == 0) &&
-            model.finish_vod(request, media.position_us, media.duration_us, outcome.result == 0))
+            model.finish_vod(request, media.position_us, media.duration_us,
+                             outcome.result == 0 && phone.selected.empty()))
         {
             ptv::PlayRequest next;
             if (model.take_play_request(&next))
@@ -1573,6 +1600,16 @@ int main()
             ptv::PlayRequest next;
             if (model.take_play_request(&next))
                 next_channel = std::move(next);
+        }
+        if (!phone.selected.empty() && outcome.result >= 0 && !model.sleep_timer.sleeping())
+        {
+            std::string response;
+            if (model.remote_browse(phone.selection_request(), response) == 200)
+            {
+                ptv::PlayRequest next;
+                if (model.take_play_request(&next))
+                    next_channel = std::move(next);
+            }
         }
         sceKernelUsleep(100000);
     }

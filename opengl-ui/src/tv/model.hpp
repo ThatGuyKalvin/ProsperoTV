@@ -35,6 +35,20 @@
 namespace ptv
 {
 
+// Read-only playback view. The owner must detach the remote handler before
+// changing or destroying the borrowed catalogue and guide.
+struct RemoteBrowseView
+{
+    const iptv::Catalog *catalog = nullptr;
+    const Guide *guide = nullptr;
+    std::vector<unsigned> order;
+    std::vector<bool> allowed;
+    std::map<std::string, std::string, std::less<>> names;
+    std::string source, current_channel, selected;
+    int handle(std::string_view input, std::string &output);
+    std::string selection_request() const;
+};
+
 // What the player is asked to open: the channel's addresses, best first.
 struct PlayRequest
 {
@@ -230,6 +244,7 @@ class Model
     // Called on the menu thread by the authenticated phone remote.
     int remote_sources(std::string_view input, std::string &output);
     int remote_browse(std::string_view input, std::string &output);
+    RemoteBrowseView remote_browse_view() const;
     VodLibrary &vod()
     {
         return vod_;

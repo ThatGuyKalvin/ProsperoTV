@@ -198,7 +198,7 @@ its previous selection. Also verify saved-cache playback offline, Circle/source
 change during a missing-list request, and fallback to the saved stream when that
 request fails. Host tests cover these model transitions and the ten-second bound;
 they do not establish console playback or controller behavior.
-### Phone channel and guide pages (menu milestone; playback continuation pending)
+### Phone channel and guide pages (host implemented; native acceptance pending)
 
 A paired phone can open Channels and guide, search channel names/categories and programmes
 on now, page through up to 40 live channels, see now/next, read up to 48 upcoming programmes
@@ -209,6 +209,12 @@ content. Existing TV keyboard-search and remote controls remain available.
 The authenticated `/api/browse` POST endpoint applies the existing pairing cookie and custom
 header requirements. It limits request size and page output, validates source identity on guide,
 paging and tuning requests, and rechecks parental/hidden/failed-channel policy before returning
-channel data or playing. The initial handler belongs to the menu and detaches before playback
-or storage work; the phone explicitly asks the user to return with Back. Playback browsing is
-not yet complete at this milestone. Native acceptance remains pending; roadmap stays unchecked.
+channel data or playing. During playback a read-only view borrows the stopped Model's catalogue
+and guide and copies allowed-channel bits, order and renamed labels. The synchronous polling
+handler records a selection without mutating the Model. Idle player polling honors the normal
+stop-for-switch result; the handler detaches immediately after playback, before its view can
+expire. The Model then rechecks source and content policy before queuing the channel. Tapping
+the current channel does not restart it. A phone switch saves VOD progress without advancing
+to the next episode. Source editing still requires the menu. Host tests cover stopped-Model
+browsing/search/guide, deferred tuning, blocked selection and final policy/source revalidation.
+Native acceptance remains pending; roadmap stays unchecked.

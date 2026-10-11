@@ -195,7 +195,7 @@ class RemoteTest(unittest.TestCase):
         self.start(playback=True)
         self.request('/api/sources', code=409)
         self.request('/api/sources', '{"id":0}', code=409)
-    def test_channel_browse_requires_pairing_header_and_menu(self):
+    def test_channel_browse_requires_pairing_header_and_live_handler(self):
         self.request('/api/browse', '{"operation":"list"}', code=401)
         self.pair()
         self.request('/api/browse', '{"operation":"list"}', code=403, header=False)
@@ -205,6 +205,8 @@ class RemoteTest(unittest.TestCase):
         self.request('/api/browse', 'x' * 2049, code=400)
         self.stop()
         self.start(playback=True)
+        self.assertEqual(self.request('/api/browse', '{"operation":"list"}'), '{"channels":[]}')
+        self.assertEqual(self.control('detach-browse'), 'detached')
         self.request('/api/browse', '{"operation":"list"}', code=409)
     def test_playback_favorite_and_volume(self):
         self.stop()

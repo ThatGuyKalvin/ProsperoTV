@@ -27,7 +27,8 @@ extern "C"
     void iptv_remote_set_sources_handler(int (*handle)(const char *, size_t, char *, size_t,
                                                        void *),
                                          void *context);
-    /* Paired phone channel/guide pages. Same menu-thread lifetime as sources. */
+    /* Paired phone channel/guide pages. Called synchronously by the polling thread; clear before
+     * context expires. */
     void iptv_remote_set_browse_handler(int (*handle)(const char *, size_t, char *, size_t, void *),
                                         void *context);
     void iptv_remote_set_icon(const char *path);
