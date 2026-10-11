@@ -35,7 +35,8 @@ int main(int argc, char **argv)
             {
                 std::snprintf(out, capacity, "%s", "{\"channels\":[]}");
                 return 200;
-            }, nullptr);
+            },
+            nullptr);
     if (argc == 4)
         iptv_remote_set_playback_favorite(
             [](void *context) -> int

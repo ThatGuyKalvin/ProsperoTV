@@ -396,10 +396,12 @@ void Request(Client &client)
         else
         {
             std::string output(128u * 1024u, '\0');
-            const int code = browse_handler(body.data(), body.size(), output.data(), output.size(), browse_context);
+            const int code = browse_handler(body.data(), body.size(), output.data(), output.size(),
+                                            browse_context);
             output.back() = '\0';
             output.resize(std::strlen(output.c_str()));
-            Reply(client, code, output, code == 200 ? "application/json" : "text/plain; charset=utf-8");
+            Reply(client, code, output,
+                  code == 200 ? "application/json" : "text/plain; charset=utf-8");
         }
         return;
     }
@@ -626,7 +628,8 @@ void iptv_remote_set_sources_handler(int (*handle)(const char *, size_t, char *,
     sources_handler = handle;
     sources_context = context;
 }
-void iptv_remote_set_browse_handler(int (*handle)(const char *, size_t, char *, size_t, void *), void *context)
+void iptv_remote_set_browse_handler(int (*handle)(const char *, size_t, char *, size_t, void *),
+                                    void *context)
 {
     browse_handler = handle;
     browse_context = context;

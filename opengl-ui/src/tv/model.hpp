@@ -479,7 +479,10 @@ class Model
     void edit_guide_mapping(unsigned channel);
     bool set_guide_url(std::int64_t source, std::string_view url);
     bool set_guide_mapping(std::string_view channel, std::string_view guide_id);
-    std::string guide_url_override(std::int64_t source) const { return library_.guide_url(source); }
+    std::string guide_url_override(std::int64_t source) const
+    {
+        return library_.guide_url(source);
+    }
     std::string guide_match(std::string_view channel) const;
     bool take_play_request(PlayRequest *request);
     // The focused live channel without changing history or playback health.
