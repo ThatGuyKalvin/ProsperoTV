@@ -692,3 +692,6 @@
 
 {"Auto (reduce on buffering)", {"Auto (reducir al cargar)", "Auto (réduire si attente)", "Auto (bei Puffern reduzieren)", "Auto (riduci se in attesa)", "Auto (reduzir ao carregar)", "Auto (verlagen bij bufferen)"}},
 {"Auto unavailable (missing bitrate)", {"Auto no disponible (sin tasa)", "Auto indisponible (débit absent)", "Auto nicht verfügbar (Bitrate fehlt)", "Auto non disponibile (bitrate assente)", "Auto indisponível (taxa ausente)", "Auto niet beschikbaar (bitrate ontbreekt)"}},
+    {"Interface language", {"Idioma de la interfaz", "Langue de l’interface", "Sprache der Oberfläche", "Lingua dell’interfaccia", "Idioma da interface", "Interfacetaal"}},
+    {"System language", {"Idioma del sistema", "Langue du système", "Systemsprache", "Lingua di sistema", "Idioma do sistema", "Systeemtaal"}},
+    {"Restart to apply language", {"Reinicia para aplicar el idioma", "Redémarrez pour appliquer la langue", "Neustarten, um die Sprache anzuwenden", "Riavvia per applicare la lingua", "Reinicie para aplicar o idioma", "Herstart om de taal toe te passen"}},
