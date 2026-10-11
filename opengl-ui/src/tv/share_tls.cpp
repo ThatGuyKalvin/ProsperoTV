@@ -103,7 +103,7 @@ int bio_read(BIO *bio, char *data, int size)
 int bio_write(BIO *bio, const char *data, int size)
 {
     BIO_clear_retry_flags(bio);
-#ifdef MSG_NOSIGNAL
+#if defined(MSG_NOSIGNAL) && !defined(__PROSPERO__)
     constexpr int flags = MSG_NOSIGNAL;
 #else
     constexpr int flags = 0;

@@ -183,6 +183,7 @@ void ShareSheet::draw(ui::Canvas &canvas) const
     auto &list = canvas.list;
     const auto &fonts = canvas.fonts;
     const auto &theme = shared_.theme;
+    list.push_clip({0, 0, kWidth, kHeight});
     list.rounded_rect({0, 0, kWidth, kHeight}, 0, Color{0, 0, 0, 0.85f});
     draw_glass(canvas, theme, {220, 110, 1480, 860}, 24);
     ui::text(list, fonts.semibold, tr("Share with another console"), 280, 184, 38, theme.text);
@@ -247,5 +248,6 @@ void ShareSheet::draw(ui::Canvas &canvas) const
         line(message_, 22);
     ui::text(list, fonts.regular, tr("Cross: continue    Circle: cancel"), 280, 920, 22,
              theme.text);
+    list.pop_clip();
 }
 } // namespace ptv

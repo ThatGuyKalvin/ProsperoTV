@@ -230,6 +230,7 @@ TEST_F(AppTest, TranslatedMenusUseBakedGlyphsAndPreserveProviderNames)
     };
     const Entry entries[] = {
 #include "tv/translations.inc"
+#include "tv/translations_share.inc"
     };
     use_playlist("#EXTM3U\n#EXTINF:-1 group-title=\"News\",Settings\n"
                  "https://streams.example.invalid/one.m3u8\n");

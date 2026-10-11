@@ -195,13 +195,15 @@ const Step kWalk[] = {
     press(Action::confirm, 0.6f),
     press(Action::back, 0.9f, "15-no-match"),
     press(Action::back, 1.0f, "16-search-cleared"),
-    change([]() {
-        const auto at = g_model->visible(0);
-        g_model->report_watch(g_model->channel(at).id);
-        (void)g_model->play(at);
-        ptv::PlayRequest ignored;
-        (void)g_model->take_play_request(&ignored);
-    }),
+    change(
+        []()
+        {
+            const auto at = g_model->visible(0);
+            g_model->report_watch(g_model->channel(at).id);
+            (void)g_model->play(at);
+            ptv::PlayRequest ignored;
+            (void)g_model->take_play_request(&ignored);
+        }),
     press(Action::page_prev, 0.7f, "65-home-lists"),
     press(Action::page_next),
     // ---- Favorites ----
@@ -498,8 +500,7 @@ int main(int argc, char **argv)
     appearance.high_contrast = std::getenv("TV_HIGH_CONTRAST") != nullptr;
     ptv::App app(model, fonts, renderer.glass_texture(), appearance, "host build");
     app.configure_images(
-        [&renderer](const ptv::ImagePixels &pixels)
-        {
+        [&renderer](const ptv::ImagePixels &pixels) {
             return renderer.batch().create_texture(pixels.width, pixels.height, pixels.rgba.data());
         },
         [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
@@ -550,6 +551,40 @@ int main(int argc, char **argv)
 
     constexpr float kDt = 1.0f / 60.0f;
     hui::ui::Feedback feedback;
+    if (std::getenv("TV_SHARING_REVIEW"))
+    {
+        const auto tick = [&](hui::Action action, hui::Direction direction = hui::Direction::none)
+        {
+            hui::InputFrame input;
+            input.pressed = direction == hui::Direction::none ? hui::action_bit(action) : 0;
+            input.nav = direction;
+            app.update(input, kDt, feedback);
+            for (unsigned i = 0; i < 20; ++i)
+                app.update({}, kDt, feedback);
+        };
+        for (unsigned i = 0; app.tab() != 5 && i < 7; ++i)
+            tick(Action::page_next);
+        for (unsigned i = 0; app.settings_row() != ptv::tr("Share with another console") && i < 60;
+             ++i)
+            tick(Action::down, Direction::down);
+        app.set_pairing_info("http://192.168.4.30:8080", "", 0, 0);
+        tick(Action::confirm);
+        render("sharing-choose");
+        tick(Action::confirm);
+        render("sharing-send-preview");
+        tick(Action::back);
+        tick(Action::confirm);
+        tick(Action::down, Direction::down);
+        tick(Action::confirm);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        app.update({}, kDt, feedback);
+        render("sharing-receive");
+        tick(Action::back);
+        app.stop_preview();
+        app.release_images();
+        model.close();
+        return ok ? 0 : 1;
+    }
     long frames = 0;
     for (const Step &step : kWalk)
     {

@@ -63,6 +63,7 @@ const char *tr(const char *english)
         return english;
     static const std::map<std::string_view, std::array<const char *, 6>, std::less<>> entries = {
 #include "tv/translations.inc"
+#include "tv/translations_share.inc"
     };
     const auto found = entries.find(english);
     if (found == entries.end())
