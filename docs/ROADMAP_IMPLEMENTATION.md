@@ -252,3 +252,26 @@ and up while paused and while playing, verify position/tracks/speed/delay and un
 then reorder/remove the selected variant and fail its segment requests to check bounded fallback.
 Check direct MP4 and single-quality HLS, encrypted rejection, Circle cancellation, simultaneous
 phone selection, and long translated Quality panels. This change has no hardware verification.
+
+
+### Surround sound feasibility (not implemented)
+
+The current FFmpeg build can decode multichannel AAC/AC-3/E-AC-3, but the decoder,
+limiter, native sink, tempo wrapper and loudness normalizer deliberately produce or assume
+stereo. A 5.1 implementation needs explicit layout propagation, larger bounded PCM buffers,
+channel-aware processing and a verified mapping into an eight-slot native output port.
+
+The installed SDK v0.42 exports the AudioOut Ex configuration and HDMI monitor-query
+functions, without typed headers. Public [PS5 Audio Passthrough Research](https://github.com/sainsaji/PS5-Audio-Passthrough-Research/tree/c3be9c2afcb8f7838784ead0fe1c12a2ceea965a)
+reports sandboxed 5.1 PCM on PS5 Pro firmware 12.70. Its [output implementation](https://github.com/sainsaji/PS5-Audio-Passthrough-Research/blob/c3be9c2afcb8f7838784ead0fe1c12a2ceea965a/sample-app/src/platform/ps5/bitstream_out.cpp)
+uses standard AudioOut format 2 and HDMI mode 6. However, its capability-buffer offsets
+come from one firmware dump, and HDMI capabilities do not establish the active headphone,
+USB or HDMI route. These are not sufficient evidence for an automatic surround switch.
+Keep stereo until the target firmware's capability structure, active route, speaker order,
+stereo-only fallback, hotplug and repeated switching are verified on hardware.
+
+Encoded passthrough is a separate larger change: bounded IEC61937 packing, receiver delay,
+exclusive output ownership and defined volume/normalization/speed behavior. The upstream
+[findings](https://github.com/sainsaji/PS5-Audio-Passthrough-Research/blob/c3be9c2afcb8f7838784ead0fe1c12a2ceea965a/docs/FINDINGS.md)
+also report unresolved receiver lockups after repeated format changes. No surround setting,
+new dependency or console probe was added for this investigation.
