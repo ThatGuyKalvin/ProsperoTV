@@ -15,6 +15,7 @@
 #include "tv/home_screen.hpp"
 #include "tv/backup.hpp"
 #include "tv/multiview.hpp"
+#include "tv/share_sheet.hpp"
 #include "ui/components/dialog.hpp"
 #include "ui/components/form.hpp"
 #include "ui/components/tabs.hpp"
@@ -93,7 +94,7 @@ class App
     }
     bool storage_open() const
     {
-        return storage_dialog_.is_open();
+        return storage_dialog_.is_open() || share_sheet_.is_open();
     }
     // A sandboxed test title can supply its own fixture mount directory.
     void set_usb_root(std::string root)
@@ -224,6 +225,7 @@ class App
     SearchSheet search_;
     LibrarySheet library_sheet_;
     GuideSheet guide_sheet_;
+    ShareSheet share_sheet_;
     ui::TabBar tabs_;
     ui::Form form_;
     ui::Dialog failure_;

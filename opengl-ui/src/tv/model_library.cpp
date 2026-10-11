@@ -15,6 +15,28 @@
 
 namespace ptv
 {
+bool Model::export_shared_library(SharedLibrary &out)
+{
+    out = {};
+    if (!require_parent() || !library_.ready())
+        return false;
+    for (const auto &source : library_.sources())
+    {
+        if (source.kind == 1 && usb_playlist_path(source.url))
+            ++out.skipped_local;
+        else if (portable_source(source))
+            out.sources.push_back({source, library_.guide_url(source.id),
+                                   library_.guide_mapping(source.id)});
+    }
+    out.favorites = user_.favorite_ids;
+    for (const auto &folder : library_.folders())
+    {
+        const auto ids = library_.folder_channels(folder);
+        out.folders[folder] = {ids.begin(), ids.end()};
+    }
+    std::string checked;
+    return encode_shared_library(out, checked);
+}
 void Model::load_library()
 {
     selected_source_id_ = static_cast<int>(active_source_) + 1;

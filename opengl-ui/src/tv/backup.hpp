@@ -6,20 +6,24 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <memory>
 
 namespace ptv
 {
+struct SharedLibrary;
 enum class StorageAction
 {
     none,
     backup,
     restore,
-    report
+    report,
+    share_import
 };
 struct StorageRequest
 {
     StorageAction action = StorageAction::none;
     std::string drive;
+    std::shared_ptr<SharedLibrary> shared_library{};
 };
 std::vector<std::string> usb_drives(const std::string &mount_root = "/mnt");
 // The caller closes its model and database before either operation. A rollback journal

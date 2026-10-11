@@ -321,6 +321,9 @@ struct StorageJob
             job.ok = ptv::backup_settings(tv::storage::config_dir(), archive, job.error);
         else if (job.request.action == ptv::StorageAction::restore)
             job.ok = ptv::restore_settings(tv::storage::config_dir(), archive, job.error);
+        else if (job.request.action == ptv::StorageAction::share_import && job.request.shared_library)
+            job.ok = ptv::import_shared_library(tv::storage::config_dir(),
+                                                *job.request.shared_library, job.error);
         else
             job.ok = ptv::export_failure_report(
                 tv::storage::logs_dir(), job.request.drive + "/ProsperoTV-failure.txt", job.error);
@@ -525,7 +528,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                               static_cast<std::uint64_t>(now));
             iptv_remote_enable_search(!resolving_portal && app.accepts_remote_search());
             iptv_remote_set_sources_handler(
-                resolving_portal || app.storage_busy()
+                resolving_portal || app.storage_busy() || app.storage_open()
                     ? nullptr
                     : +[](const char *input, size_t bytes, char *out, size_t capacity,
                           void *context) -> int
@@ -543,7 +546,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 },
                 &model);
             iptv_remote_set_browse_handler(
-                resolving_portal || app.storage_busy()
+                resolving_portal || app.storage_busy() || app.storage_open()
                     ? nullptr
                     : +[](const char *input, size_t bytes, char *out, size_t capacity,
                           void *context) -> int
@@ -777,6 +780,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                             ? "Backup restored."
                                         : storage.request.action == ptv::StorageAction::backup
                                             ? "Backup saved to USB."
+                                        : storage.request.action == ptv::StorageAction::share_import
+                                            ? "Sources and favorites imported."
                                             : "Failure report saved to USB."
                                       : storage.error;
                 break;

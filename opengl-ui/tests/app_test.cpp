@@ -832,6 +832,28 @@ TEST_F(AppTest, UsbRestoreRequiresConfirmationAndCanChooseAnotherDrive)
     EXPECT_FALSE(frame_.overlay.empty());
 }
 
+TEST_F(AppTest, SharingCanBeCancelledAndKeyboardStepsAreSequential)
+{
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Share with another console");
+    press(Action::confirm);
+    ASSERT_TRUE(app_->storage_open());
+    EXPECT_FALSE(app_->accepts_remote_search());
+    press(Action::confirm); // Prepare sender preview without opening a connection.
+    press(Action::confirm); // Address keyboard.
+    EXPECT_EQ(host::keyboard_title(), "Receiving console's IPv4 address");
+    host::set_keyboard_text("127.0.0.1");
+    idle();
+    EXPECT_EQ(host::keyboard_title(), "Receiver's full SHA-256 fingerprint");
+    host::set_keyboard_text("123456");
+    idle();
+    EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
+    press(Action::back);
+    EXPECT_FALSE(app_->storage_open());
+    EXPECT_FALSE(app_->storage_busy());
+}
+
 TEST_F(AppTest, SleepTimerSurvivesMenuReopenExpiresOnceAndKeepsPreviewAsleep)
 {
     host::set_monotonic_us(1000000);
