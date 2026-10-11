@@ -534,3 +534,8 @@ channels to appear.
 saved order; Favorites and its folders share a separate order. Both survive
 refreshes and restarts; new channels are appended alphabetically. **Reset list
 order** restores alphabetical order for the current kind of list.
+During playback, Options opens the tracks and picture controls. The Picture
+tab offers Fit, Stretch, corrected 4:3 or 16:9, Fill (crop), and 125% or 150%
+zoom. Controls and captions stay within the visible crop. Text subtitles
+have Small/Medium/Large sizes and White/Yellow/Cyan colors; image subtitles
+retain the provider's artwork. These choices are saved for the next video.

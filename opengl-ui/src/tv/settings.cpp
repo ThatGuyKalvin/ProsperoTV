@@ -28,7 +28,13 @@ Settings load_settings(const std::string &data_dir)
     while (std::fgets(line, sizeof(line), file) != nullptr)
     {
         int value = 0;
-        if (std::sscanf(line, "theme=%d", &value) == 1)
+        if (std::sscanf(line, "picture_mode=%d", &value) == 1)
+            settings.picture_mode = value >= 0 && value <= 6 ? value : 0;
+        else if (std::sscanf(line, "subtitle_size=%d", &value) == 1)
+            settings.subtitle_size = value >= 0 && value <= 2 ? value : 1;
+        else if (std::sscanf(line, "subtitle_color=%d", &value) == 1)
+            settings.subtitle_color = value >= 0 && value <= 2 ? value : 0;
+        else if (std::sscanf(line, "theme=%d", &value) == 1)
             settings.theme = value >= 0 && value <= 2 ? value : 0;
         else if (std::sscanf(line, "larger_text=%d", &value) == 1)
             settings.larger_text = value != 0;
@@ -80,6 +86,9 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
                          settings.screensaver_minutes == 10
                      ? settings.screensaver_minutes
                      : 5);
+    std::fprintf(file, "picture_mode=%d\nsubtitle_size=%d\nsubtitle_color=%d\n",
+                 std::clamp(settings.picture_mode, 0, 6), std::clamp(settings.subtitle_size, 0, 2),
+                 std::clamp(settings.subtitle_color, 0, 2));
     const bool written = std::ferror(file) == 0 && std::fflush(file) == 0;
     const bool closed = std::fclose(file) == 0;
     if (!written || !closed)

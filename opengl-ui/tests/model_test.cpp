@@ -1120,7 +1120,7 @@ TEST_F(ModelTest, PlaybackPictureModesDoNotSelectTracksOrChannels)
     ptv::PlaybackOsd controls(model, request);
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_L1, 2), 1);
-    for (unsigned mode = 0; mode < 4; ++mode)
+    for (unsigned mode = 0; mode < 7; ++mode)
     {
         EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
         EXPECT_EQ(controls.take_picture_selection(), mode);
@@ -1131,7 +1131,17 @@ TEST_F(ModelTest, PlaybackPictureModesDoNotSelectTracksOrChannels)
         EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 4), 1);
     }
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 5), 1);
-    EXPECT_EQ(controls.take_picture_selection(), 3u);
+    EXPECT_FALSE(controls.take_picture_selection());
+    ptv::Settings picture;
+    ASSERT_TRUE(controls.copy_picture_settings(picture));
+    EXPECT_EQ(picture.picture_mode, 6);
+    EXPECT_EQ(picture.subtitle_size, 2);
+    controls.input(IPTV_INPUT_DOWN, 5);
+    controls.input(IPTV_INPUT_RIGHT, 5);
+    ASSERT_TRUE(controls.copy_picture_settings(picture));
+    EXPECT_EQ(picture.subtitle_color, 1);
+    ASSERT_TRUE(ptv::save_settings(dir_, picture));
+    EXPECT_EQ(ptv::load_settings(dir_), picture);
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 6), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 7), 0);
     model.close();

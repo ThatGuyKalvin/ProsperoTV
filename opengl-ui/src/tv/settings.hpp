@@ -18,7 +18,10 @@ struct Settings
         kFullHd = 1, // always 1080p
     };
 
-    int theme = 0; // 0 Dusk, 1 Ocean, 2 Forest
+    int picture_mode = 0;   // Fit, stretch, 4:3, 16:9, fill, 125%, 150%.
+    int subtitle_size = 1;  // Small, medium, large.
+    int subtitle_color = 0; // White, yellow, cyan.
+    int theme = 0;          // 0 Dusk, 1 Ocean, 2 Forest
     bool larger_text = false;
     bool high_contrast = false;
     int screensaver_minutes = 5; // 0 disables; supported delays 1, 5, 10

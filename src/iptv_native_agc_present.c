@@ -200,7 +200,7 @@ static _Atomic unsigned picture_mode;
 
 void iptv_native_agc_set_picture_mode(unsigned mode)
 {
-    atomic_store(&picture_mode, mode <= IPTV_PICTURE_16_9 ? mode : IPTV_PICTURE_FIT);
+    atomic_store(&picture_mode, mode <= IPTV_PICTURE_ZOOM_150 ? mode : IPTV_PICTURE_FIT);
 }
 
 static void picture_size(unsigned width, unsigned height, unsigned output_width,
@@ -213,10 +213,15 @@ static void picture_size(unsigned width, unsigned height, unsigned output_width,
     const double aspect = mode == IPTV_PICTURE_4_3    ? 4.0 / 3.0
                           : mode == IPTV_PICTURE_16_9 ? 16.0 / 9.0
                                                       : (double)width / height;
-    if (aspect > (double)output_width / output_height)
+    if ((aspect > (double)output_width / output_height) != (mode == IPTV_PICTURE_FILL))
         *h = (float)(output_width / aspect);
     else
         *w = (float)(output_height * aspect);
+    const float zoom = mode == IPTV_PICTURE_ZOOM_125   ? 1.25f
+                       : mode == IPTV_PICTURE_ZOOM_150 ? 1.5f
+                                                       : 1;
+    *w *= zoom;
+    *h *= zoom;
 }
 
 static _Atomic int force_sdr_output;
@@ -847,8 +852,11 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     picture_size(visible_width, visible_height, output_width, output_height, mode, &picture_width,
                  &picture_height);
     // Erase bars left by earlier frames when the viewer changes picture shape.
-    const unsigned left = (unsigned)((output_width - picture_width) * .5f + .999f);
-    const unsigned top = (unsigned)((output_height - picture_height) * .5f + .999f);
+    const unsigned left =
+        (unsigned)((picture_width < output_width ? output_width - picture_width : 0) * .5f + .999f);
+    const unsigned top =
+        (unsigned)((picture_height < output_height ? output_height - picture_height : 0) * .5f +
+                   .999f);
     if ((left || top) && (presenter.picture_width[buffer_index] != picture_width ||
                           presenter.picture_height[buffer_index] != picture_height))
     {
@@ -1458,7 +1466,7 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
                 info.show_controls = 0;
             draw_video_overlay(presenter.overlay_surface, source_bytes, pitch, surface_height,
                                visible_width, visible_height, &info, bit_depth == 10u ? 2u : 1u);
-            if (osd_visible)
+            if (osd_visible && draw_osd)
                 (void)draw_osd(osd_context, presenter.overlay_surface, source_bytes, pitch,
                                surface_height, visible_width, visible_height, bit_depth,
                                overlay->pts_us, presenter.source_transfer);
@@ -1569,6 +1577,14 @@ int main(void)
     assert(w == 1440 && h == 1080);
     picture_size(640, 480, 1920, 1080, IPTV_PICTURE_STRETCH, &w, &h);
     assert(w == 1920 && h == 1080);
+    picture_size(640, 480, 1920, 1080, IPTV_PICTURE_FILL, &w, &h);
+    assert(w == 1920 && h == 1440);
+    picture_size(1920, 800, 1920, 1080, IPTV_PICTURE_FILL, &w, &h);
+    assert(w == 2592 && h == 1080);
+    picture_size(640, 480, 1920, 1080, IPTV_PICTURE_ZOOM_125, &w, &h);
+    assert(w == 1800 && h == 1350);
+    picture_size(640, 480, 1920, 1080, IPTV_PICTURE_ZOOM_150, &w, &h);
+    assert(w == 2160 && h == 1620);
     iptv_native_agc_set_picture_mode(99);
     assert(atomic_load(&picture_mode) == IPTV_PICTURE_FIT);
     test_output_result = -99;
