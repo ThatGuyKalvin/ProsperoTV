@@ -456,7 +456,8 @@ bool LooksLikeMedia(const std::uint8_t *bytes, std::size_t count)
             return true;
     return false;
 }
-int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *error)
+int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *error,
+              std::int64_t start_us)
 {
     const auto fail = [&](const char *message)
     {
@@ -466,7 +467,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     };
     if (error)
         error->clear();
-    if (!input.read || !output.write)
+    if (!input.read || !output.write || start_us < 0 || start_us > INT64_MAX / 4)
         return fail("The media reader could not start.");
     const bool hls = input.url && input.open_resource;
     // Library diagnostics can include complete provider URLs. The application
@@ -601,6 +602,37 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     const auto origin = r.demux->start_time == AV_NOPTS_VALUE ? INT64_C(0) : r.demux->start_time;
     if (origin < -INT64_MAX / 4 || origin > INT64_MAX / 4)
         return fail("This video's timestamps are not supported.");
+    MediaTimeline timeline;
+    if (r.demux->duration > 0 && r.demux->duration < INT64_MAX / 4)
+        timeline.duration_us = r.demux->duration;
+    timeline.seekable = timeline.duration_us > 0 && (input.seek || hls);
+    for (unsigned i = 0; i < r.demux->nb_chapters && timeline.chapters.size() < 128; ++i)
+    {
+        const auto *chapter = r.demux->chapters[i];
+        if (!chapter || chapter->time_base.num <= 0 || chapter->time_base.den <= 0)
+            continue;
+        const auto position =
+            av_rescale_q(chapter->start, chapter->time_base, AVRational{1, AV_TIME_BASE});
+        if (position < 0 || position > INT64_MAX / 4 ||
+            (timeline.duration_us && position >= timeline.duration_us))
+            continue;
+        MediaChapter item{position, {}};
+        if (const auto *title = av_dict_get(chapter->metadata, "title", nullptr, 0))
+            item.title.assign(title->value, strnlen(title->value, 128));
+        timeline.chapters.push_back(std::move(item));
+    }
+    std::stable_sort(timeline.chapters.begin(), timeline.chapters.end(),
+                     [](const auto &a, const auto &b) { return a.position_us < b.position_us; });
+    if (output.timeline)
+        output.timeline(output.context, timeline);
+    if (start_us)
+    {
+        if (!timeline.seekable)
+            return fail("This video does not support seeking.");
+        const auto target = origin + std::min(start_us, timeline.duration_us - 1);
+        if (avformat_seek_file(r.demux, -1, INT64_MIN, target, target, AVSEEK_FLAG_BACKWARD) < 0)
+            return r.cancelled() ? 1 : fail("The video could not seek to that position.");
+    }
     const auto timestamp_offset = INT64_C(2000000) - origin;
     r.mux->output_ts_offset = timestamp_offset;
     r.mux->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
