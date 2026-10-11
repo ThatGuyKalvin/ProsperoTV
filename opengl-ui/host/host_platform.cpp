@@ -309,7 +309,8 @@ std::uint64_t unix_time()
 std::uint64_t monotonic_us()
 {
     const auto set = g_monotonic_us.load();
-    if (set != 0) return set;
+    if (set != 0)
+        return set;
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
                                           .count());
@@ -513,4 +514,24 @@ void update_finish()
     g_update.begun = false;
 }
 
+} // namespace ptv::platform
+
+#include "tv/recording.hpp"
+namespace ptv::platform
+{
+int record_stream(const RecordingInput &input, const iptv::http::ListSink &sink,
+                  const iptv::http::RequestControl &control, std::string &error)
+{
+    iptv::http::RequestHeaders headers{};
+    headers.user_agent = input.user_agent.c_str();
+    headers.referrer = input.referrer.c_str();
+    headers.authorization = input.authorization.c_str();
+    headers.credential_origin = input.credential_origin.c_str();
+    const auto result =
+        fetch_list(input.url.c_str(), sink, iptv::http::kMaxListBytes, &control, &headers);
+    if (result.status == iptv::http::Status::ok || result.status == iptv::http::Status::cancelled)
+        return 0;
+    error = "Recording stream failed";
+    return -1;
+}
 } // namespace ptv::platform

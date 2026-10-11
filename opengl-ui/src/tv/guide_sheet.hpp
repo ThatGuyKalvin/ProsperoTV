@@ -38,6 +38,8 @@ class GuideSheet
     void keep_in_view();
     Shared &shared_;
     bool open_ = false;
+    bool actions_ = false, jobs_ = false;
+    unsigned action_row_ = 0;
     unsigned row_ = 0, top_ = 0, revision_ = 0;
     std::string channel_;
     std::int64_t time_ = 0, left_ = 0;
