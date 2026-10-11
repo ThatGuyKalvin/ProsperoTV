@@ -44,11 +44,14 @@ extern "C"
     {
         iptv_hls_quality_t variants[IPTV_HLS_MAX_VARIANTS];
         iptv_hls_quality_t preference;
-        uint32_t count, selected;
+        uint32_t count, selected, automatic;
     } iptv_player_quality_state_t;
     void iptv_player_quality_state(iptv_player_quality_state_t *state);
     /* Set between sessions; descriptor is revalidated against each fresh master. */
     void iptv_player_set_quality(const iptv_hls_quality_t *quality);
+    /* Session-scoped, reduce-only mode. Repeated true preserves cooldown/failures. */
+    void iptv_player_set_auto_quality(int enabled);
+    int iptv_player_take_auto_quality(iptv_hls_quality_t *quality);
     typedef struct iptv_player_audio_state
     {
         iptv_stream_audio_track_t tracks[IPTV_STREAM_MAX_AUDIO_TRACKS];

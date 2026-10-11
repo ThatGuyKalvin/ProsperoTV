@@ -1415,3 +1415,29 @@ TEST_F(ModelTest, QualityPickerReopensOnlyPlayableChoicesAndKeepsTracksAcrossIds
     EXPECT_FALSE(live.quality_selection());
     model.close();
 }
+
+TEST_F(ModelTest, AutomaticQualityIsExplicitAndNeedsTwoKnownBitrates)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    request.live = false;
+    ptv::PlaybackOsd controls(model, request);
+    iptv_player_quality_state_t quality{};
+    quality.count = 2;
+    quality.variants[0].bandwidth = 2000000;
+    controls.set_quality_state(quality);
+    controls.input(IPTV_INPUT_OPTIONS, 1);
+    controls.input(IPTV_INPUT_L1, 2);
+    for (unsigned i = 0; i < 3; ++i)
+        controls.input(IPTV_INPUT_DOWN, 3 + i);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 6), 1);
+    EXPECT_FALSE(controls.quality_selection());
+    quality.variants[1].bandwidth = 1000000;
+    quality.selected = 1;
+    controls.set_quality_state(quality);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 7), 2);
+    ASSERT_TRUE(controls.quality_selection());
+    EXPECT_EQ(controls.quality_selection()->bandwidth, 1000000u);
+    EXPECT_TRUE(controls.auto_quality_selection());
+}
