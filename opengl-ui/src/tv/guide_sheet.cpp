@@ -294,7 +294,7 @@ void GuideSheet::draw(ui::Canvas &canvas) const
                         state[std::clamp(job.state, 0, 4)] + "]";
             }
             else
-                label = actions[i];
+                label = tr(actions[i]);
             const auto &face = face_for(fonts, fonts.regular, label);
             ui::text(list, face, face.font->fit(label, 24, 1040), 465, y, 24, theme.text);
         }
