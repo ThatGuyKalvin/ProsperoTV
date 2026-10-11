@@ -42,3 +42,11 @@ rollback. Native SceNet sockets use OpenSSL BIO callbacks rather than assuming
 that SceNet IDs are POSIX file descriptors. Actual two-console TLS, keyboard,
 profile-switch and interrupted-import behavior still require native verification;
 the roadmap remains unchecked until that acceptance is complete.
+
+The integrated branch passes all 262 UI tests under ASan/UBSan, including sharing,
+crash-report export, source checks and viewing limits. Actual SDK compilation caught
+the need for an explicit `netinet/in.h` include and native `sockaddr_in.sin_len`;
+both are fixed. Native candidate `b68d44a` links successfully (40,357,796 bytes,
+SHA-256 `181b1103cebc0e6a0ae649d8778f88e59209b7cd7086a2336440215a30b1a5ec`),
+with evidence in `results/integration/console-83`. This confirms compilation and
+linking only. The console remained occupied, so no transfer was attempted there.
