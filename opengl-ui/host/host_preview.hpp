@@ -5,6 +5,7 @@
 namespace host
 {
 void set_preview(bool enabled);
+void set_preview_probe(int outcome, int http = 0, unsigned delay_ms = 0);
 unsigned preview_starts();
 unsigned preview_stops();
 } // namespace host

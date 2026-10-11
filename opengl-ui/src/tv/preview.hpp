@@ -91,5 +91,5 @@ namespace ptv::platform
 // ordinary menu previews pass null and never open an audio port.
 void preview(const PlayRequest &request, const iptv::http::RequestControl &control,
              void (*picture)(void *, const iptv_native_picture_t *), void *context,
-             PreviewAudio *audio = nullptr);
+             PreviewAudio *audio = nullptr, ProbeResult *probe = nullptr);
 } // namespace ptv::platform

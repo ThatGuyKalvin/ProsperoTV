@@ -68,7 +68,8 @@ int progress(void *self, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 bool download(const std::string &original, const iptv::http::RequestHeaders &headers,
               const iptv::http::RequestControl &control,
               const std::function<bool(const char *, std::size_t)> &sink, std::string *effective,
-              long timeout_ms = 0, const std::function<void()> &poll = {})
+              long timeout_ms = 0, const std::function<void()> &poll = {},
+              ProbeResult *probe = nullptr, bool entry = false)
 {
     if (tv_http_init(0, 0, 0) < 0)
         return false;
@@ -124,6 +125,10 @@ bool download(const std::string &original, const iptv::http::RequestHeaders &hea
         const std::string next = redirect ? redirect : "";
         curl_easy_cleanup(curl);
         curl_slist_free_all(fields);
+        if (probe && (transfer.status != 200 ||
+                      (result != CURLE_OK && probe->outcome == ProbeOutcome::unknown)))
+            *probe = probe_http(static_cast<int>(transfer.status), entry,
+                                result == CURLE_OPERATION_TIMEDOUT);
         if (result != CURLE_OK || cancelled(control))
             return false;
         if (transfer.status == 200)
@@ -170,6 +175,7 @@ struct Decoder
     const std::string &channel;
     uint32_t audio_type = 0, selected_audio = 0;
     bool opened = false;
+    ProbeResult *probe = nullptr;
     Decoder(const iptv::http::RequestControl &c, void (*p)(void *, const iptv_native_picture_t *),
             void *ctx, PreviewAudio *a, const std::string &id)
         : control(c), picture(p), context(ctx), audio(a), channel(id)
@@ -182,9 +188,15 @@ struct Decoder
         {
             auto &d = *static_cast<Decoder *>(self);
             d.audio_type = f->audio_stream_type;
-            if (cancelled(d.control) || (f->video_codec != IPTV_STREAM_VIDEO_H264 &&
-                                         f->video_codec != IPTV_STREAM_VIDEO_HEVC))
+            if (cancelled(d.control))
                 return -1;
+            if (f->video_codec != IPTV_STREAM_VIDEO_H264 &&
+                f->video_codec != IPTV_STREAM_VIDEO_HEVC)
+            {
+                if (d.probe)
+                    *d.probe = {ProbeOutcome::unsupported, 0};
+                return -1;
+            }
             iptv_native_open_config_t config{};
             config.codec = f->video_codec == IPTV_STREAM_VIDEO_H264 ? IPTV_NATIVE_CODEC_H264
                                                                     : IPTV_NATIVE_CODEC_HEVC;
@@ -303,9 +315,10 @@ struct Decoder
 
 void watch(std::string url, const PlayRequest &request, const iptv::http::RequestControl &control,
            void (*picture)(void *, const iptv_native_picture_t *), void *context,
-           PreviewAudio *audio)
+           PreviewAudio *audio, ProbeResult *probe)
 {
     auto decoder = std::make_unique<Decoder>(control, picture, context, audio, request.channel_id);
+    decoder->probe = probe;
     const auto poll = [&] { decoder->sync_audio(); };
     iptv::http::RequestHeaders headers{request.user_agent.c_str(), request.referrer.c_str()};
     headers.extra_headers = request.extra_headers.c_str();
@@ -317,7 +330,7 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
     unsigned masters = 0;
     while (!cancelled(control))
     {
-        std::string probe, effective;
+        std::string manifest, effective;
         bool transport = false;
         const bool ok = download(
             url, headers, control,
@@ -325,19 +338,19 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
             {
                 if (transport)
                     return decoder->push(bytes, count);
-                if (count > IPTV_HLS_DEFAULT_MAX_INPUT_BYTES - probe.size())
+                if (count > IPTV_HLS_DEFAULT_MAX_INPUT_BYTES - manifest.size())
                     return false;
-                probe.append(bytes, count);
-                if (first && probe.size() >= 8 && probe.compare(0, 7, "#EXTM3U") != 0)
+                manifest.append(bytes, count);
+                if (first && manifest.size() >= 8 && manifest.compare(0, 7, "#EXTM3U") != 0)
                 {
                     transport = true;
-                    const bool accepted = decoder->push(probe.data(), probe.size());
-                    probe.clear();
+                    const bool accepted = decoder->push(manifest.data(), manifest.size());
+                    manifest.clear();
                     return accepted;
                 }
                 return true;
             },
-            &effective, 0, poll);
+            &effective, 0, poll, probe, first);
         if (transport && ok && decoder->opened)
             iptv_native_backend_drain(&decoder->native);
         if (!ok || transport)
@@ -349,16 +362,20 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
         // A small rendition is sufficient for the television on the menu.
         limits.max_width = 1280;
         limits.max_height = 720;
-        auto parsed = iptv_hls_parse(probe.data(), probe.size(), effective.c_str(),
+        auto parsed = iptv_hls_parse(manifest.data(), manifest.size(), effective.c_str(),
                                      effective.size(), &limits, playlist.get());
         if (parsed == IPTV_HLS_NO_VARIANT_WITHIN_LIMITS)
         {
             iptv_hls_default_limits(&limits);
-            parsed = iptv_hls_parse(probe.data(), probe.size(), effective.c_str(), effective.size(),
-                                    &limits, playlist.get());
+            parsed = iptv_hls_parse(manifest.data(), manifest.size(), effective.c_str(),
+                                    effective.size(), &limits, playlist.get());
         }
         if (parsed != IPTV_HLS_OK)
+        {
+            if (probe)
+                *probe = {ProbeOutcome::unsupported, 0};
             return;
+        }
         if (playlist->kind == IPTV_HLS_KIND_MASTER)
         {
             if (++masters > 4 || playlist->selected_variant >= playlist->variant_count)
@@ -385,7 +402,7 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
             std::string location;
             if (!download(
                     segment.url, headers, control, [&](const char *bytes, std::size_t count)
-                    { return decoder->push(bytes, count); }, &location, 0, poll))
+                    { return decoder->push(bytes, count); }, &location, 0, poll, probe, false))
                 return;
             next_sequence = segment.sequence + 1;
         }
@@ -408,7 +425,7 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
 
 void preview(const PlayRequest &request, const iptv::http::RequestControl &control,
              void (*picture)(void *, const iptv_native_picture_t *), void *context,
-             PreviewAudio *audio)
+             PreviewAudio *audio, ProbeResult *probe)
 {
     auto urls = request.urls;
     if (!request.portal_command.empty())
@@ -416,15 +433,28 @@ void preview(const PlayRequest &request, const iptv::http::RequestControl &contr
         PortalClient portal(request.portal, &control, portal_fetch);
         std::string url;
         if (!portal.sign_in() || !portal.resolve(request.portal_command, &url))
+        {
+            if (probe)
+                *probe = {ProbeOutcome::service, 0};
             return;
+        }
         urls = {std::move(url)};
     }
     diag::event("preview start");
+    bool first_probe = true;
     for (const auto &url : urls)
     {
         if (cancelled(control))
             break;
-        watch(url, request, control, picture, context, audio);
+        ProbeResult result;
+        watch(url, request, control, picture, context, audio, probe ? &result : nullptr);
+        if (probe)
+        {
+            *probe = combine_probe(*probe, result, first_probe);
+            first_probe = false;
+            if (result.outcome == ProbeOutcome::service)
+                break;
+        }
     }
     diag::event("preview stopped");
 }

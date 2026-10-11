@@ -1772,6 +1772,25 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
     }
 }
 
+TEST_F(AppTest, SourceCheckRowStartsAndCancelsWithoutChangingSource)
+{
+    const auto source = model_->selected_source_id();
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 4);
+    for (std::size_t i = 0; i < model_->saved_sources().size(); ++i)
+        move(Direction::down);
+    host::set_preview_probe(static_cast<int>(ptv::ProbeOutcome::unknown), 0, 1000);
+    press(Action::confirm);
+    EXPECT_TRUE(model_->checking_source());
+    EXPECT_EQ(model_->selected_source_id(), source);
+    press(Action::confirm);
+    EXPECT_FALSE(model_->checking_source());
+    EXPECT_EQ(host::keyboard_requests(), 0);
+    host::set_preview(false);
+}
+
 } // namespace
 
 TEST_F(AppTest, AudioNormalizationIsOptionalAndPersists)

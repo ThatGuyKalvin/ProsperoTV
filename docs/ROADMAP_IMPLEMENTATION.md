@@ -276,3 +276,22 @@ exclusive output ownership and defined volume/normalization/speed behavior. The 
 [findings](https://github.com/sainsaji/PS5-Audio-Passthrough-Research/blob/c3be9c2afcb8f7838784ead0fe1c12a2ceea965a/docs/FINDINGS.md)
 also report unresolved receiver lockups after repeated format changes. No surround setting,
 new dependency or console probe was added for this investigation.
+### Explicit source checking (host implementation; native acceptance pending)
+
+Sources offers a Check/Cancel active source row after saved sources, with passed/failed/skipped totals.
+Only visible, permitted live channels are checked. One muted preview connection runs at a time,
+with a 15-second channel budget and one second between channels. Actual decoded pictures pass;
+HTTP 200 and decoder-open alone do not. A channel fails only when all entry URLs return 404/410.
+Missing HLS segments, unsupported codecs/containers, timeouts and interrupted checks never mark
+a channel failed. HTTP 401/403/429/5xx and portal resolution failures stop the batch. Full playback,
+previews/PiP, recordings, source changes, refreshes and parental prompts stop checks before taking
+those resources. No automatic mass checking or restart occurs.
+
+Results use separate per-source .checks.sqlite3 files next to catalogues, bounded to 250,000 rows
+and 64 MiB. Up to 32 results commit together, or after five seconds; cancellation flushes completed
+results. Inconclusive checks preserve prior confirmed health. Source/account/request-header identity,
+channel URL fingerprints and timestamps prevent cross-source or stale overlays. Newer manual
+playback history wins. These files never replace or evict normal playback history. Tests exercise
+classification, first-frame evidence, cancellation, policy changes, batching, caps and precedence.
+Preview codec coverage remains narrower than full playback; skipped counts make this explicit.
+Physical console decoder/provider acceptance is pending, so the roadmap remains unchecked.
