@@ -143,7 +143,9 @@
 - Watch two or four live channels side by side in Multiview, with sound
   following the focused one. Four 720p H.264 feeds are validated on hardware;
   higher resolutions depend on the decoder resources available.
-- Show codec, resolution, frame rate, and bitrate with Touchpad + R1.
+- Codec, resolution, frame rate, and bitrate appear for five seconds when playback
+  starts, then disappear like the bottom playback banner. Press **Touchpad + R1**
+  to show them again for five seconds.
 
 ### Picture and sound
 
@@ -239,7 +241,7 @@ at 3840×2160. Codec and renderer details are documented in
 | Circle during playback | Close the open panel, or stop playback and return to the browser |
 | Options during playback | Open or close the audio/subtitle/picture panel |
 | L1 / R1 in the playback panel | Switch between Audio, Subtitles and Picture |
-| Touchpad + R1 during playback | Toggle codec and performance statistics |
+| Touchpad + R1 during playback | Show codec and FPS/performance statistics for five seconds |
 
 During playback, Options then L1 opens Picture. Fit preserves the decoded picture's
 proportions by default; Stretch fills the screen, while 4:3 and 16:9 correct

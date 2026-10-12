@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define BASE_OUTPUT_WIDTH 1920u
 #define BASE_OUTPUT_HEIGHT 1080u
@@ -210,7 +211,7 @@ void iptv_native_agc_hold_frame(int hold)
 }
 static uint64_t render_sequence;
 static _Atomic int present_cancelled;
-static _Atomic int overlay_enabled = 1;
+static _Atomic uint64_t overlay_until = UINT64_MAX;
 static _Atomic unsigned picture_mode;
 
 void iptv_native_agc_set_picture_mode(unsigned mode)
@@ -1313,12 +1314,30 @@ void iptv_native_agc_loading_stop(void)
 
 void iptv_native_agc_set_overlay_enabled(int enabled)
 {
-    atomic_store_explicit(&overlay_enabled, enabled != 0, memory_order_relaxed);
+    atomic_store_explicit(&overlay_until, enabled ? UINT64_MAX : 0, memory_order_relaxed);
+}
+
+static int overlay_visible_at(uint64_t now)
+{
+    uint64_t until = atomic_load_explicit(&overlay_until, memory_order_relaxed);
+    if (until == UINT64_MAX)
+    {
+        /* Start the five seconds on the first picture, not during network startup. */
+        const uint64_t deadline = now + UINT64_C(5000000);
+        if (atomic_compare_exchange_strong_explicit(&overlay_until, &until, deadline,
+                                                    memory_order_relaxed, memory_order_relaxed))
+            until = deadline;
+    }
+    return now < until;
 }
 
 int iptv_native_agc_overlay_enabled(void)
 {
-    return atomic_load_explicit(&overlay_enabled, memory_order_relaxed);
+    struct timespec now = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return 0;
+    return overlay_visible_at((uint64_t)now.tv_sec * UINT64_C(1000000) +
+                              (uint64_t)now.tv_nsec / UINT64_C(1000));
 }
 
 void iptv_native_agc_present_set_cancelled(int cancelled)
@@ -1696,6 +1715,23 @@ int sceVideoOutSubmitChangeBufferAttribute2(int32_t handle, int32_t index,
 }
 int main(void)
 {
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(10000000));
+    assert(overlay_visible_at(14999999));
+    assert(!overlay_visible_at(15000000));
+    assert(!overlay_visible_at(90000000));
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(90000000));
+    assert(!overlay_visible_at(95000000));
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(100000000));
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(104000000));
+    assert(overlay_visible_at(108999999));
+    assert(!overlay_visible_at(109000000));
+    iptv_native_agc_set_overlay_enabled(0);
+    assert(!overlay_visible_at(110000000));
+    iptv_native_agc_set_overlay_enabled(1);
     presenter.ready = 1;
     presenter.video = 7;
     presenter.frame_number = 2;

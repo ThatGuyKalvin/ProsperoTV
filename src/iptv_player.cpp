@@ -1250,7 +1250,7 @@ class StreamRunner
         const bool overlay_chord =
             iptv_input_pressed(IPTV_INPUT_TOUCHPAD) && iptv_input_pressed(IPTV_INPUT_R1);
         if (overlay_chord && !overlay_chord_down_)
-            iptv_native_agc_set_overlay_enabled(!iptv_native_agc_overlay_enabled());
+            iptv_native_agc_set_overlay_enabled(1);
         overlay_chord_down_ = overlay_chord;
         iptv_input_event_t event{};
         while (iptv_input_next(&event))
@@ -3160,6 +3160,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
             (void)iptv_native_agc_present_shutdown();
         }
     } release_display;
+    iptv_native_agc_set_overlay_enabled(1);
     const auto began = MonotonicUsec();
     for (;;)
     {
