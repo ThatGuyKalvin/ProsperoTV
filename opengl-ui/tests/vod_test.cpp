@@ -533,6 +533,34 @@ TEST_F(VodTest, LoadsBomPrefixedListsAndIndexedSeasonArrays)
     EXPECT_TRUE(catalog.empty());
 }
 
+TEST_F(VodTest, LongProviderTextIsCutShortInsteadOfFailingTheList)
+{
+    // One show of thousands with a cast list longer than is kept used to fail the whole list.
+    std::string cast;
+    for (int i = 0; cast.size() < 1268; ++i)
+        cast += (cast.empty() ? "" : ", ") + std::string("Actor Number ") + std::to_string(i);
+    response("get_series_categories", R"([{"category_id":4,"category_name":"Comedy"}])");
+    response("get_series", R"([{"series_id":21,"name":"Long cast","category_id":4,"cast":")" +
+                               cast + R"(","genre":")" + std::string(300, 'g') +
+                               R"(","cover":"data:image/png;base64,)" + std::string(5000, 'A') +
+                               R"("},{"series_id":22,"name":"Next show","category_id":4}])");
+    iptv::Catalog catalog;
+    ptv::VodMetadata metadata;
+    std::string error;
+    ASSERT_TRUE(
+        ptv::load_vod(account, ptv::VodKind::series, {}, &catalog, nullptr, &error, &metadata))
+        << error;
+    ASSERT_EQ(catalog.size(), 2u);
+    EXPECT_EQ(catalog[1].name, "Next show");
+    const auto &details = metadata[std::string(catalog[0].id)];
+    EXPECT_LE(details.cast.size(), 1024u);
+    EXPECT_GT(details.cast.size(), 900u);
+    EXPECT_EQ(cast.compare(0, details.cast.size(), details.cast), 0);
+    EXPECT_NE(details.cast.back(), ' ');
+    EXPECT_LE(details.genre.size(), 256u);
+    EXPECT_TRUE(catalog[0].tvg_logo.empty());
+}
+
 TEST_F(VodTest, OverviewCountsTitlesAndDisablesOnlyConfirmedEmptyLists)
 {
     response("get_series", "[]");
