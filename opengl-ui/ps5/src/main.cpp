@@ -1564,6 +1564,16 @@ int main()
                     return drawn ? 1 : 0;
                 },
                 &controls);
+            // The controls themselves at the screen's resolution, whatever the stream's.
+            iptv_native_agc_set_screen_osd(
+                [](void *context, void *color, void *mask, std::size_t bytes, std::uint32_t pitch,
+                   std::uint32_t sh, std::uint32_t width, std::uint32_t height, std::uint32_t depth,
+                   int hdr, int cleared) -> int
+                {
+                    return static_cast<ptv::PlaybackOsd *>(context)->draw_screen(
+                        color, mask, bytes, pitch, sh, width, height, depth, hdr, cleared != 0);
+                },
+                &controls);
         }
         else
             say("[TV] playback controls font could not be loaded");
@@ -1582,6 +1592,7 @@ int main()
         iptv_remote_set_browse_handler(nullptr, nullptr);
         iptv_player_set_controls(nullptr, nullptr);
         iptv_native_agc_set_osd(nullptr, nullptr);
+        iptv_native_agc_set_screen_osd(nullptr, nullptr);
         if (controls.copy_picture_settings(settings))
             ptv::save_settings(tv::storage::config_dir(), settings);
         (void)model.check_sleep_timer();

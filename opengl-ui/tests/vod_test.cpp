@@ -807,20 +807,38 @@ TEST_F(VodTest, FilmControlsClampSkipsPauseAndSelectChapters)
     state.chapter_count = 2;
     state.chapter_positions[1] = 50000000;
     controls.set_media_state(state);
+    // Seeking reopens the video: presses add up, and one seek is asked for once they stop.
     EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 1), 1);
+    EXPECT_FALSE(controls.take_media_seek());
+    controls.input(-1, 600000);
+    EXPECT_FALSE(controls.take_media_seek());
+    controls.input(-1, 700001);
     EXPECT_EQ(controls.take_media_seek(), 40000000u);
     EXPECT_FALSE(controls.take_media_seek());
-    EXPECT_EQ(controls.input(IPTV_INPUT_LEFT, 2), 1);
-    EXPECT_EQ(controls.take_media_seek(), 20000000u);
-    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 3), 1);
+    // The next press goes on from there, though the picture has not got there yet.
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 800000), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 900000), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_LEFT, 1000000), 1);
+    controls.input(-1, 1700001);
+    EXPECT_EQ(controls.take_media_seek(), 50000000u);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 2000000), 1);
+    controls.input(-1, 2700001);
     EXPECT_EQ(controls.take_media_seek(), 0u);
-    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 4), 1);
-    EXPECT_EQ(controls.take_media_seek(), 90000000u);
+    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 3000000), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 3100000), 1);
+    controls.input(-1, 3800001);
+    EXPECT_EQ(controls.take_media_seek(), 99999999u); // clamped to the end
+    // Once the picture is where it was sent, presses go on from the picture again.
+    state.position_us = state.duration_us - 1;
+    state.presented = 1;
+    controls.set_media_state(state);
+    state.position_us = 30000000;
+    controls.set_media_state(state);
     EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 5), 1);
     EXPECT_EQ(controls.take_media_pause(), true);
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 6), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 7), 1); // Quality, last tab.
-    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 7), 1); // Chapters.
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 7), 1);    // Chapters, the last row.
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 7), 1); // At the chapter playing.
     EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 8), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 9), 1);
     EXPECT_EQ(controls.take_media_seek(), 50000000u);

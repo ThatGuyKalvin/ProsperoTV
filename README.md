@@ -132,6 +132,10 @@
 - See a banner with the channel's name and its programme when a channel opens
   or when asked for.
 - Choose among the audio tracks a channel carries, and show its subtitles.
+- Press Options for the playback menu: one page with audio, sound delay,
+  subtitles and their size and color, the picture's shape, chapters and
+  quality, each opening a list with the value in use ticked. Picture shapes
+  are shown as small previews, and Fit names the video's own shape.
 - Choose an HLS rendition manually, or enable
   [Auto quality reduction](docs/AUTOMATIC_HLS_QUALITY.md) for buffering on a slow
   connection. Auto only reduces quality and requires compatible renditions.
