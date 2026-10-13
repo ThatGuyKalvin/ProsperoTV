@@ -1,5 +1,5 @@
 diff --git a/src/gfx/draw_list.cpp b/src/gfx/draw_list.cpp
-index 6263fac..d461b9f 100644
+index 6408100..4bd04cc 100644
 --- a/src/gfx/draw_list.cpp
 +++ b/src/gfx/draw_list.cpp
 @@ -52,6 +52,7 @@ void DrawList::clear()
@@ -55,18 +55,18 @@ index 6263fac..d461b9f 100644
  }
  
  void DrawList::image_gradient(std::uint32_t texture, const Rect &r, const Rect &uv, Color top,
-@@ -276,6 +277,7 @@ float DrawList::text(const Font &font, std::uint32_t font_texture, std::string_v
+@@ -275,6 +276,7 @@ float DrawList::text(const Font &font, std::uint32_t font_texture, std::string_v
+ {
      glyph_scratch_.clear();
      const float width = font.layout(text, x, baseline, size, align, glyph_scratch_, tracking);
-     const float range = font.sdf_range(size) * transform_.scale;
 +    const float block_left=align==Align::left?x:align==Align::center?x-width*.5f:x-width;
      // A font handle names a slot the shader samples by itself: such glyphs
      // join the current run. Any other texture is bound per run, as images are.
-     const bool slotted = is_font_handle(font_texture);
-@@ -283,7 +285,7 @@ float DrawList::text(const Font &font, std::uint32_t font_texture, std::string_v
-     for (const GlyphQuad &q : glyph_scratch_)
-     {
-         Instance &i = append(slotted ? 0u : font_texture);
+     // A glyph from a fallback face brings that face's atlas and spread.
+@@ -284,7 +286,7 @@ float DrawList::text(const Font &font, std::uint32_t font_texture, std::string_v
+         const bool slotted = is_font_handle(texture);
+         const float slot = slotted ? static_cast<float>(texture & 0xfu) : 0.0f;
+         Instance &i = append(slotted ? 0u : texture);
 -        const Rect t = apply({q.x0, q.y0, q.x1 - q.x0, q.y1 - q.y0});
 +        const Rect t = apply({rtl_width_>0?2*block_left+width-q.x1:q.x0, q.y0, q.x1 - q.x0, q.y1 - q.y0});
          set4(i.rect, t.x, t.y, t.w, t.h);
@@ -123,7 +123,7 @@ index 5bd5a2b..7a119dd 100644
  constexpr Rect kFullUv{0.0f, 0.0f, 1.0f, 1.0f};
  // The whole texture, for canvases (rendered bottom row first).
 diff --git a/src/gfx/font.cpp b/src/gfx/font.cpp
-index 645aee5..212f361 100644
+index 011bbcb..aeb5197 100644
 --- a/src/gfx/font.cpp
 +++ b/src/gfx/font.cpp
 @@ -60,6 +60,7 @@ std::uint32_t next_codepoint(std::string_view text, std::size_t *index)
@@ -153,21 +153,29 @@ index 645aee5..212f361 100644
      constexpr std::string_view kEllipsis = "\xE2\x80\xA6";
 @@ -147,6 +151,7 @@ std::string Font::fit(std::string_view text, float size, float max_width, float
  
+ bool Font::has_glyph(std::uint32_t codepoint) const
+ {
++    if (shaping_) return shaped_has_glyph(codepoint);
+     if (find(codepoint) != nullptr)
+         return true;
+     for (const Fallback &fallback : fallbacks_)
+@@ -172,6 +177,7 @@ Font::Resolved Font::resolve(std::uint32_t *codepoint) const
+ 
  float Font::measure(std::string_view text, float size, float tracking) const
  {
 +    if (shaping_) return shaped_layout(text,0,0,size,Align::left,nullptr,tracking);
-     const float scale = size / header_.pixel_size;
      float width = 0.0f;
      std::uint32_t previous = 0;
-@@ -174,6 +179,7 @@ float Font::measure(std::string_view text, float size, float tracking) const
+     const Font *previous_face = nullptr;
+@@ -197,6 +203,7 @@ float Font::measure(std::string_view text, float size, float tracking) const
  float Font::layout(std::string_view text, float x, float y, float size, Align align,
                     std::vector<GlyphQuad> &quads, float tracking) const
  {
 +    if (shaping_) return shaped_layout(text,x,y,size,align,&quads,tracking);
-     const float scale = size / header_.pixel_size;
      const float width = measure(text, size, tracking);
      float pen = x;
-@@ -218,6 +224,7 @@ float Font::layout(std::string_view text, float x, float y, float size, Align al
+     if (align == Align::center)
+@@ -242,6 +249,7 @@ float Font::layout(std::string_view text, float x, float y, float size, Align al
  
  std::vector<std::string> Font::wrap(std::string_view text, float size, float max_width) const
  {
@@ -176,7 +184,7 @@ index 645aee5..212f361 100644
      std::string line;
      std::size_t index = 0;
 diff --git a/src/gfx/font.hpp b/src/gfx/font.hpp
-index 0c52b44..0c2d31c 100644
+index bb81e66..b9da212 100644
 --- a/src/gfx/font.hpp
 +++ b/src/gfx/font.hpp
 @@ -7,6 +7,7 @@
@@ -187,7 +195,7 @@ index 0c52b44..0c2d31c 100644
  #include <string>
  #include <string_view>
  #include <vector>
-@@ -28,6 +29,7 @@ enum class Align : std::uint8_t
+@@ -30,6 +31,7 @@ enum class Align : std::uint8_t
      right,
  };
  
@@ -195,15 +203,10 @@ index 0c52b44..0c2d31c 100644
  class Font
  {
    public:
-@@ -84,10 +86,17 @@ class Font
-     }
-     bool has_glyph(std::uint32_t codepoint) const
-     {
--        return find(codepoint) != nullptr;
-+        return shaping_ ? shaped_has_glyph(codepoint) : find(codepoint) != nullptr;
-     }
+@@ -117,6 +119,13 @@ class Font
+         std::uint32_t texture = 0;
+     };
  
-   private:
 +    bool load_shaped(std::string_view data);
 +    bool shaped_has_glyph(std::uint32_t codepoint) const;
 +    float shaped_layout(std::string_view text, float x, float y, float size, Align align,
@@ -213,7 +216,7 @@ index 0c52b44..0c2d31c 100644
 +    std::shared_ptr<FontShaper> shaping_;
      const font_format::Glyph *find(std::uint32_t codepoint) const;
      float kern(std::uint32_t first, std::uint32_t second) const;
- 
+     // The glyph for *codepoint here or in a fallback; a face that has none
 diff --git a/src/ui/components/tabs.cpp b/src/ui/components/tabs.cpp
 index 773e88e..a151beb 100644
 --- a/src/ui/components/tabs.cpp
