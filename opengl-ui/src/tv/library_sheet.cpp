@@ -13,6 +13,20 @@
 
 namespace ptv
 {
+namespace
+{
+// The hint rows of the sheet, centred on cy.
+ui::HintLayout hint_layout(float cy, float size = 30.0f, float text_size = 21.0f)
+{
+    ui::HintLayout layout;
+    layout.size = size;
+    layout.text_size = text_size;
+    layout.item_gap = 30.0f;
+    layout.cy = cy;
+    return layout;
+}
+} // namespace
+
 LibrarySheet::LibrarySheet(Shared &shared) : shared_(shared)
 {
     list_.style.theme = shared.theme;
@@ -445,8 +459,10 @@ void LibrarySheet::draw_number_pad(ui::Canvas &canvas) const
         ui::text(draw, fonts.semibold, tr(keys[i]), x + 100, y + 56, 30,
                  i == number_key_ ? tone::ink : shared_.theme.text, gfx::Align::center);
     }
-    ui::text(draw, fonts.regular, tr("Cross: Enter   Square: Delete   Circle: Back"), 630, 925, 22,
-             shared_.theme.text_muted);
+    const ui::Hint hints[] = {{ui::Button::cross, tr("Choose")},
+                              {ui::Button::square, tr("Delete")},
+                              {ui::Button::circle, tr("Back")}};
+    draw_hint_row(draw, fonts, hints, 3, 630, 660, hint_layout(917));
 }
 
 void LibrarySheet::update(float dt)
@@ -487,24 +503,29 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
                 ui::text(draw, face, face.font->fit(name, 22, 1080), 400, 225, 22,
                          shared_.theme.text_muted);
             }
-        ui::text(draw, fonts.regular,
-                 hidden_list_ ? tr("Cross: Show channel   Circle: Back")
-                              : tr("Cross: Choose   Circle: Back"),
-                 400, 915, 21, shared_.theme.text_muted);
+        const ui::Hint hints[] = {
+            {ui::Button::cross, hidden_list_ ? tr("Show channel") : tr("Choose")},
+            {ui::Button::circle, tr("Back")}};
+        draw_hint_row(draw, fonts, hints, 2, 400, 1120, hint_layout(908));
         return;
     }
-    ui::text(draw, fonts.regular, tr("L1: Channel options"), 400, 225, 21,
-             shared_.theme.text_muted);
+    const ui::Hint options[] = {{ui::Button::l1, tr("Channel options")}};
+    draw_hint_row(draw, fonts, options, 1, 400, 1120, hint_layout(218, 26));
     if (allow_play_)
-        ui::text(draw, fonts.regular, tr("R1: Channel number"), 1180, 190, 24,
-                 shared_.theme.text_muted);
-    ui::text(draw, fonts.regular,
-             folders_
-                 ? tr("Cross: Open   Square: Add/remove channel   Triangle: New folder   Options: "
-                      "Delete   "
-                      "Circle: Back")
-                 : tr("Cross: Browse   Square: Show/hide   Triangle: Normal / PIN / Kids   Circle: "
-                      "Back"),
-             400, 915, 21, shared_.theme.text_muted);
+    {
+        const ui::Hint number[] = {{ui::Button::r1, tr("Channel number")}};
+        draw_hint_row(draw, fonts, number, 1, 1180, 340, hint_layout(182, 30, 24));
+    }
+    const ui::Hint folder_hints[] = {{ui::Button::cross, tr("Open")},
+                                     {ui::Button::square, tr("Add/remove channel")},
+                                     {ui::Button::triangle, tr("New favorite folder")},
+                                     {ui::Button::options, tr("Delete")},
+                                     {ui::Button::circle, tr("Back")}};
+    const ui::Hint category_hints[] = {{ui::Button::cross, tr("Open")},
+                                       {ui::Button::square, tr("Show / Hide")},
+                                       {ui::Button::triangle, tr("Normal / PIN / Kids")},
+                                       {ui::Button::circle, tr("Back")}};
+    draw_hint_row(draw, fonts, folders_ ? folder_hints : category_hints, folders_ ? 5 : 4, 400,
+                  1120, hint_layout(908));
 }
 } // namespace ptv

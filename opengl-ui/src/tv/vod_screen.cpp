@@ -458,11 +458,9 @@ void VodScreen::draw(ui::Canvas &canvas) const
                       600, 34, theme.text_muted, 3);
     }
     else
-        ui::paragraph(
-            draw, fonts.regular,
-            tr("Browse movies or choose a show, then its season and episode. Circle returns "
-               "to the previous list."),
-            1200, 365, 28, 570, 42, theme.text_muted, 7);
+        ui::paragraph(draw, fonts.regular,
+                      tr("Browse movies or choose a show, then its season and episode."), 1200, 365,
+                      28, 570, 42, theme.text_muted, 7);
     ui::text(draw, fonts.regular,
              fonts.regular.font->fit(model.vod().status(), 22, kWidth - 2 * kMargin), kMargin, 949,
              22, theme.text_muted);
@@ -571,8 +569,15 @@ void VodScreen::draw_filters(ui::Canvas &canvas) const
         ui::text(list, face, face.font->fit(readable(face, values[i]), 28, 1280), 300, y + 54, 28,
                  kWhite);
     }
-    ui::text(list, canvas.fonts.regular, tr("Left / Right change    Square reset    Cross close"),
-             280, 710, 24, tone::accent);
+    const ui::Hint hints[] = {{ui::Button::dpad, tr("Change")},
+                              {ui::Button::square, tr("Reset")},
+                              {ui::Button::cross, tr("Close")}};
+    ui::HintLayout layout;
+    layout.size = 32.0f;
+    layout.text_size = 24.0f;
+    layout.item_gap = 34.0f;
+    layout.cy = 702.0f;
+    draw_hint_row(list, canvas.fonts, hints, 3, 280, 1360, layout);
     ui::text(list, canvas.fonts.regular,
              tr("Filters use loaded metadata. Open a title to fetch missing details."), 280, 770,
              22, shared_.theme.text_muted);
@@ -623,9 +628,15 @@ void VodScreen::draw_details(ui::Canvas &canvas) const
                       shared_.theme.text_muted, 100);
     }
     list.pop_clip();
-    ui::text(list, canvas.fonts.regular,
-             tr("Up / Down scroll    Cross watch / open    Circle back"), 140, 866, 23,
-             tone::accent);
+    const ui::Hint hints[] = {{ui::Button::dpad, tr("Scroll")},
+                              {ui::Button::cross, tr("Open / Watch")},
+                              {ui::Button::circle, tr("Back")}};
+    ui::HintLayout layout;
+    layout.size = 32.0f;
+    layout.text_size = 23.0f;
+    layout.item_gap = 34.0f;
+    layout.cy = 858.0f;
+    draw_hint_row(list, canvas.fonts, hints, 3, 140, 1640, layout);
     ui::text(list, canvas.fonts.regular,
              canvas.fonts.regular.font->fit(model.vod().status(), 20, 1570), 140, 905, 20,
              shared_.theme.text_muted);

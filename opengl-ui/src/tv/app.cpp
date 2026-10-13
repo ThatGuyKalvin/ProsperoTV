@@ -454,11 +454,22 @@ void App::draw_pairing(ui::Canvas &canvas) const
     {
         ui::text(list, fonts.semibold, tr("Code expired or unavailable"), 825, 602, 28,
                  tone::accent);
-        ui::text(list, fonts.regular, tr("Press X for a new code"), 825, 652, 26, theme.text_muted);
+        const ui::Hint renew[] = {{ui::Button::cross, tr("New code")}};
+        ui::HintLayout layout;
+        layout.size = 36.0f;
+        layout.text_size = 26.0f;
+        layout.cy = 643.0f;
+        draw_hint_row(list, fonts, renew, 1, 825, 755, layout);
     }
     ui::text(list, fonts.regular, tr("Your browser reconnects automatically on future visits."),
              380, 800, 26, theme.text_muted);
-    ui::text(list, fonts.semibold, tr("Circle: Close"), 1380, 850, 24, theme.text_muted);
+    const ui::Hint close[] = {{ui::Button::circle, tr("Close")}};
+    ui::HintLayout layout;
+    layout.size = 34.0f;
+    layout.text_size = 24.0f;
+    layout.font = &fonts.semibold;
+    layout.cy = 842.0f;
+    draw_hint_row(list, fonts, close, 1, 1580, 1200, layout, true);
 }
 
 void App::show_tab(int index, bool glide)

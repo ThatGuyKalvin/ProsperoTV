@@ -35,6 +35,12 @@ std::string account_date(std::int64_t stamp)
     return tr("Not supplied");
 }
 
+// A source with nothing to open yet; the built-in list has no address and needs none.
+bool needs_setup(const SavedSource *source)
+{
+    return source != nullptr && source->url.empty() && source->kind != 0;
+}
+
 const char *source_title(const SavedSource &source)
 {
     static constexpr const char *defaults[] = {"iptv-org public catalog", "Custom playlist",
@@ -75,8 +81,7 @@ void SourcesScreen::sync()
         ui::ListItem row;
         row.title = source_title(source);
         // The built-in list has no address of its own and nothing to set up.
-        row.subtitle = source.url.empty() && source.kind != 0 ? tr("Press Cross to set up")
-                                                              : tr(schedule_name(source.schedule));
+        row.subtitle = needs_setup(&source) ? tr("Not set up") : tr(schedule_name(source.schedule));
         row.badge = source.id == model.selected_source_id() ? tr("In use") : "";
         if (source.kind == 2)
         {
@@ -331,7 +336,7 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
         ui::paragraph(
             draw, fonts.regular,
             tr("Keep several playlists and accounts. Each keeps its own saved channels and "
-               "refresh schedule. Cross opens the form."),
+               "refresh schedule."),
             left, 375, 26, width, 38, theme.text_muted, 6);
         return;
     }
@@ -373,11 +378,10 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     }
     else
     {
-        ui::paragraph(
-            draw, fonts.regular,
-            tr("Square changes the schedule. A saved list opens immediately; a download runs "
-               "only when due or when requested."),
-            left, 563, 24, width, 34, theme.text_muted, 4);
+        ui::paragraph(draw, fonts.regular,
+                      tr("A saved list opens immediately; a download runs only when due or when "
+                         "requested."),
+                      left, 563, 24, width, 34, theme.text_muted, 4);
     }
     if (id == model.selected_source_id())
     {
@@ -387,7 +391,16 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
                       theme.text_muted, 3);
     }
     else
-        ui::text(draw, fonts.semibold, tr("Cross: Use this source"), left, 765, 26, theme.text);
+    {
+        const ui::Hint hints[] = {
+            {ui::Button::cross, needs_setup(source) ? tr("Set up") : tr("Use source")}};
+        ui::HintLayout layout;
+        layout.size = 36.0f;
+        layout.text_size = 26.0f;
+        layout.font = &fonts.semibold;
+        layout.cy = 756.0f;
+        draw_hint_row(draw, fonts, hints, 1, left, width, layout);
+    }
 }
 
 int SourcesScreen::hints(ui::Hint *out, int capacity) const
@@ -407,8 +420,9 @@ int SourcesScreen::hints(ui::Hint *out, int capacity) const
     add({ui::Button::cross,
          focused_id() == -7
              ? tr(shared_.model.checking_source() ? "Cancel source check" : "Check active source")
-         : focused_id() < 0 ? tr("Add")
-                            : tr("Use source")});
+         : focused_id() < 0                                      ? tr("Add")
+         : needs_setup(shared_.model.saved_source(focused_id())) ? tr("Set up")
+                                                                 : tr("Use source")});
     if (focused_id() > 1)
         add({ui::Button::triangle, tr("Edit")});
     if (focused_id() > 0)

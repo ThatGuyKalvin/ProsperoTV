@@ -74,7 +74,7 @@ void HomeScreen::draw(ui::Canvas &canvas) const
     const char *titles[] = {"Continue watching", "Favorites", "On your usual channels"};
     const char *empty[] = {
         "Your unfinished movies, episodes and last live channel appear here.",
-        "Add favorites from Live TV with Square.",
+        "Favorite a channel in Live TV to keep it here.",
         "Watch channels to build this list. Programme details appear when a guide is available."};
     for (unsigned column = 0; column < rows_.size(); ++column)
     {

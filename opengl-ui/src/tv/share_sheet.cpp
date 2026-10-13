@@ -246,8 +246,14 @@ void ShareSheet::draw(ui::Canvas &canvas) const
     }
     else if (page_ == Page::result)
         line(message_, 22);
-    ui::text(list, fonts.regular, tr("Cross: continue    Circle: cancel"), 280, 920, 22,
-             theme.text);
+    const ui::Hint hints[] = {{ui::Button::cross, tr("Continue")},
+                              {ui::Button::circle, tr("Cancel")}};
+    ui::HintLayout layout;
+    layout.size = 32.0f;
+    layout.text_size = 22.0f;
+    layout.item_gap = 34.0f;
+    layout.cy = 912.0f;
+    draw_hint_row(list, fonts, hints, 2, 280, 1360, layout);
     list.pop_clip();
 }
 } // namespace ptv

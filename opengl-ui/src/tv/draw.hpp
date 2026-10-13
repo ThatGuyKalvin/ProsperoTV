@@ -5,6 +5,7 @@
 #pragma once
 
 #include "tv/shared.hpp"
+#include "ui/glyphs.hpp"
 
 #include <string>
 #include <string_view>
@@ -68,6 +69,14 @@ float draw_chip(ui::Painter &paint, float x, float cy, std::string_view label,
 // A chip with a status dot before its label.
 float draw_status_chip(ui::Canvas &canvas, const ui::Theme &theme, float x, float cy,
                        std::string_view label, Color dot, float height = 40.0f);
+
+// A row of button hints (ui::draw_hints) kept within width: when a
+// language's labels would run past it, glyphs, text and gaps shrink together.
+ui::HintLayout fit_hints(const ui::Fonts &fonts, const ui::Hint *hints, int count,
+                         ui::HintLayout layout, float width);
+// Draws that row from x (or ending at x with right_align). Returns its width.
+float draw_hint_row(gfx::DrawList &list, const ui::Fonts &fonts, const ui::Hint *hints, int count,
+                    float x, float width, const ui::HintLayout &layout, bool right_align = false);
 
 // One channel of a grid. focus is 0..1.
 void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cell,

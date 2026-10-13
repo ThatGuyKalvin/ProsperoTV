@@ -337,6 +337,30 @@ float draw_status_chip(ui::Canvas &canvas, const ui::Theme &theme, float x, floa
     return width;
 }
 
+ui::HintLayout fit_hints(const ui::Fonts &fonts, const ui::Hint *hints, int count,
+                         ui::HintLayout layout, float width)
+{
+    // The gaps beside each glyph keep their size, so a few passes close in on the width.
+    for (int pass = 0; pass < 4; ++pass)
+    {
+        const float measured = ui::measure_hints(fonts, hints, count, layout);
+        if (measured <= width || measured <= 0.0f)
+            break;
+        const float scale = width / measured * 0.99f;
+        layout.size *= scale;
+        layout.text_size *= scale;
+        layout.item_gap *= scale;
+    }
+    return layout;
+}
+
+float draw_hint_row(gfx::DrawList &list, const ui::Fonts &fonts, const ui::Hint *hints, int count,
+                    float x, float width, const ui::HintLayout &layout, bool right_align)
+{
+    return ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, count, x, right_align,
+                          fit_hints(fonts, hints, count, layout, width));
+}
+
 void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cell,
                        const iptv::ChannelView &channel, float focus)
 {

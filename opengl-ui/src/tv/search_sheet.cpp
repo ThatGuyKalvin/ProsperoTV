@@ -635,9 +635,15 @@ void SearchSheet::draw_results(ui::Canvas &canvas) const
              truncated_ ? tr("First 250 matches per kind. Narrow the search.")
                         : group_digits(results_.size()) + tr(" results"),
              kMargin + 24, 951, 19, theme.text_muted);
-    ui::text(canvas.list, canvas.fonts.regular,
-             tr("L1 Results / R1 Search and filters / Cross Open"), kMargin + 24, 1018, 21,
-             theme.text);
+    const ui::Hint hints[] = {{ui::Button::l1, tr("Results")},
+                              {ui::Button::r1, tr("Search and filter")},
+                              {ui::Button::cross, tr("Open")}};
+    ui::HintLayout layout;
+    layout.size = 36.0f;
+    layout.text_size = 23.0f;
+    layout.cy = kHintsY;
+    layout.item_gap = 34.0f;
+    draw_hint_row(canvas.list, canvas.fonts, hints, 3, kMargin + 24, 912, layout);
 }
 
 } // namespace ptv
