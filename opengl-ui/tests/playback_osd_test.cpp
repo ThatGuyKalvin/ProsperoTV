@@ -182,20 +182,32 @@ TEST(PlaybackHud, TimelineAdvancesAndSpeedRemainsVisibleAfterControlsHide)
     media.speed_percent = 100;
     osd.set_media_state(media);
     std::vector<std::uint8_t> frame(1920 * 1080 * 3 / 2, 99);
-    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 1));
-    EXPECT_EQ(frame[820 * 1920 + 300], 210);
-    EXPECT_EQ(frame[820 * 1920 + 1000], 66);
+    // The controls are painted on the control thread once a frame has asked for them.
+    const auto shown = [&](std::uint64_t now)
+    {
+        EXPECT_TRUE(osd.draw(nullptr, 0, 1920, 1080, 1920, 1080, 8, now));
+        osd.input(-1, now);
+        std::fill(frame.begin(), frame.end(), 99);
+        return osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, now);
+    };
+    // The timeline's bar crosses the middle of the screen near the bottom.
+    const std::size_t bar = 930 * 1920 + 1000;
+    ASSERT_TRUE(shown(1));
+    const auto quarter = frame[bar];
+    EXPECT_NE(quarter, 99);
+    EXPECT_EQ(frame[0], 99);
     media.position_us = 5400000000ULL;
     osd.set_media_state(media);
-    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 2));
-    EXPECT_EQ(frame[820 * 1920 + 1000], 210);
+    ASSERT_TRUE(shown(2));
+    EXPECT_NE(frame[bar], quarter); // the accent has passed the middle
     EXPECT_FALSE(osd.draw(nullptr, 0, 1920, 1080, 1920, 1080, 8, 6000001));
     media.speed_percent = 200;
     osd.set_media_state(media);
+    osd.input(-1, 6000002);
     std::fill(frame.begin(), frame.end(), 99);
     ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 6000002));
-    EXPECT_EQ(frame[50 * 1920 + 1720], 28);
-    EXPECT_EQ(frame[820 * 1920 + 1000], 99);
+    EXPECT_NE(frame[76 * 1920 + 1800], 99); // the speed alone, at the top right
+    EXPECT_EQ(frame[bar], 99);
     media.speed_percent = 100;
     osd.set_media_state(media);
     EXPECT_FALSE(osd.draw(nullptr, 0, 1920, 1080, 1920, 1080, 8, 6000003));
@@ -204,12 +216,16 @@ TEST(PlaybackHud, TimelineAdvancesAndSpeedRemainsVisibleAfterControlsHide)
     std::fill(frame.begin(), frame.end(), 99);
     ASSERT_TRUE(
         osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 6000006, {}, 0, true));
+    osd.input(-1, 6000006);
+    std::fill(frame.begin(), frame.end(), 99);
+    ASSERT_TRUE(
+        osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 6000006, {}, 0, true));
     const auto buffering = frame;
     std::fill(frame.begin(), frame.end(), 99);
     ASSERT_TRUE(
         osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 12000000, {}, 0, true));
     EXPECT_EQ(frame, buffering);
-    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 12000001));
+    ASSERT_TRUE(shown(12000001));
     EXPECT_NE(frame, buffering);
     EXPECT_EQ(frame[0], 99);
 }
@@ -291,4 +307,149 @@ TEST(PlaybackSubtitles, SizeAndColorAffectDecodedSurfaceAndSurviveSettingsCopy)
     }
     EXPECT_GT(yellow_chroma, 512u);
     EXPECT_GT(red_chroma, 16u);
+}
+
+TEST(PlaybackMenu, DrawsInColourBesideThePictureAndInsideTheCrop)
+{
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ptv::Model model("/tmp/prosperotv-playback-menu-test");
+    ptv::PlayRequest request;
+    ptv::PlaybackOsd osd(model, request);
+    ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
+    ASSERT_EQ(osd.input(IPTV_INPUT_OPTIONS, 1), 1);
+    // A dark red panel at the right: chroma leaves grey; the left of the picture is untouched.
+    std::vector<std::uint8_t> frame(1920 * 1080 * 3 / 2, 128);
+    ASSERT_TRUE(osd.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 2));
+    const auto *chroma = frame.data() + 1920 * 1080;
+    unsigned red = 0;
+    for (unsigned y = 100; y < 500; ++y)
+        for (unsigned x = 1300; x < 1860; x += 2)
+            red += chroma[y * 1920 + x + 1] > 136;
+    EXPECT_GT(red, 1000u);
+    for (unsigned y = 0; y < 1080; y += 20)
+        EXPECT_EQ(frame[y * 1920 + 600], 128) << y;
+    // Main10, SDR and HDR: drawn in colour too.
+    for (const unsigned hdr : {0u, 1u})
+    {
+        std::vector<std::uint16_t> main10(1920 * 1080 * 3 / 2, 512);
+        ASSERT_TRUE(
+            osd.draw(main10.data(), main10.size() * 2, 1920, 1080, 1920, 1080, 10, 3, {}, hdr));
+        EXPECT_GT(std::count_if(main10.begin() + 1920 * 1080, main10.end(),
+                                [&](auto v) { return hdr ? v != 512 : v > 540; }),
+                  1000)
+            << hdr;
+    }
+    // Zoomed 150%, the panel is drawn smaller, inside the part of the picture on screen.
+    ptv::Settings zoomed;
+    zoomed.picture_mode = 6;
+    ptv::PlaybackOsd zoom(model, request, zoomed);
+    ASSERT_TRUE(zoom.load_fonts(std::getenv("KIT_FONTS")));
+    ASSERT_EQ(zoom.input(IPTV_INPUT_OPTIONS, 1), 1);
+    std::fill(frame.begin(), frame.end(), 128);
+    ASSERT_TRUE(zoom.draw(frame.data(), frame.size(), 1920, 1080, 1920, 1080, 8, 2));
+    for (unsigned y = 0; y < 1080; y += 4)
+        EXPECT_EQ(frame[y * 1920 + 1915], 128) << y;
+    for (unsigned x = 0; x < 1920; x += 4)
+        EXPECT_EQ(frame[1075 * 1920 + x], 128) << x;
+}
+
+TEST(PlaybackScreen, ControlsAreDrawnAtTheScreensResolutionWhateverThePicture)
+{
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ptv::Model model("/tmp/prosperotv-playback-screen-test");
+    ptv::PlayRequest request;
+    request.live = false;
+    request.record_channel_result = false;
+    ptv::PlaybackOsd osd(model, request);
+    ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
+    iptv_player_media_state_t media{};
+    media.available = media.seekable = 1;
+    media.duration_us = 7200000000ULL;
+    media.position_us = 1800000000ULL;
+    media.speed_percent = 100;
+    osd.set_media_state(media);
+    // The screen's planes: 1920 x 1080 (1088 rows), colour then coverage, transparent.
+    const std::size_t plane = 1920 * 1088 * 3 / 2;
+    std::vector<std::uint8_t> color(plane), mask(plane);
+    const auto clear = [&]
+    {
+        for (auto *planes : {&color, &mask})
+        {
+            std::fill(planes->begin(), planes->begin() + 1920 * 1088, 16);
+            std::fill(planes->begin() + 1920 * 1088, planes->end(), 128);
+        }
+    };
+    clear();
+    const auto screen = [&]
+    { return osd.draw_screen(color.data(), mask.data(), plane, 1920, 1088, 1920, 1080, 8, 0); };
+    EXPECT_EQ(screen() & 1, 0); // nothing yet: the controls are painted once a frame asks for them
+    // A small picture: nothing of the controls goes into it.
+    std::vector<std::uint8_t> picture(720 * 576 * 3 / 2, 99);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 1));
+    osd.input(-1, 1);
+    EXPECT_FALSE(osd.draw(picture.data(), picture.size(), 720, 576, 720, 576, 8, 1));
+    EXPECT_TRUE(std::all_of(picture.begin(), picture.end(), [](auto v) { return v == 99; }));
+    // On the planes instead, at full size: the timeline's bar crosses the middle near the bottom.
+    EXPECT_EQ(screen(), 3);
+    EXPECT_GT(mask[930 * 1920 + 1000], 200); // covered
+    EXPECT_NE(color[930 * 1920 + 1000], 16);
+    EXPECT_EQ(mask[100 * 1920 + 1000], 16); // the picture shows through above
+    EXPECT_EQ(screen(), 1);                 // unchanged: nothing to redraw
+    // The menu takes the controls' place.
+    ASSERT_EQ(osd.input(IPTV_INPUT_OPTIONS, 2), 1);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 2));
+    osd.input(-1, 2);
+    EXPECT_EQ(screen(), 3);
+    EXPECT_EQ(mask[930 * 1920 + 300], 16);   // the controls are gone
+    EXPECT_GT(mask[600 * 1920 + 1500], 200); // the menu at the right
+    // Closed, and the banner over: the planes are transparent again.
+    ASSERT_EQ(osd.input(IPTV_INPUT_CIRCLE, 3), 1);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 60000000));
+    osd.input(-1, 60000000);
+    EXPECT_EQ(screen(), 2);
+    EXPECT_TRUE(
+        std::all_of(mask.begin(), mask.begin() + 1920 * 1080, [](auto v) { return v == 16; }));
+    // After the presenter clears them, they are drawn again.
+    EXPECT_EQ(osd.input(IPTV_INPUT_TRIANGLE, 60000001), 1);
+    EXPECT_FALSE(osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 60000002));
+    osd.input(-1, 60000002);
+    EXPECT_EQ(screen(), 3);
+    clear();
+    EXPECT_EQ(osd.draw_screen(color.data(), mask.data(), plane, 1920, 1088, 1920, 1080, 8, 0, true),
+              3);
+    EXPECT_GT(mask[930 * 1920 + 1000], 200);
+}
+
+TEST(PlaybackScreen, ScreensaverHidesPlanesAndWakeRestoresControls)
+{
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ptv::Model model("/tmp/prosperotv-screen-sleep-test");
+    ptv::PlayRequest request;
+    request.record_channel_result = false;
+    ptv::Settings settings;
+    settings.screensaver_minutes = 1;
+    ptv::PlaybackOsd osd(model, request, settings);
+    ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
+    iptv_player_media_state_t media{};
+    media.available = media.paused = 1;
+    media.duration_us = 100000000;
+    osd.set_media_state(media);
+    osd.set_paused(true);
+    const std::size_t plane = 1920 * 1088 * 3 / 2;
+    std::vector<std::uint8_t> color(plane, 16), mask(plane, 16);
+    const auto screen = [&]
+    { return osd.draw_screen(color.data(), mask.data(), plane, 1920, 1088, 1920, 1080, 8, 0); };
+    screen();
+    osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 1);
+    osd.input(-1, 1);
+    ASSERT_EQ(screen() & 1, 1);
+    ASSERT_TRUE(osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 60000001));
+    osd.input(-1, 60000001);
+    EXPECT_EQ(screen() & 1, 0);
+    EXPECT_TRUE(std::all_of(mask.begin(), mask.begin() + 1920 * 1080,
+                            [](auto value) { return value == 16; }));
+    EXPECT_EQ(osd.input(IPTV_INPUT_TRIANGLE, 60000002), 1);
+    osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 60000002);
+    osd.input(-1, 60000002);
+    EXPECT_EQ(screen() & 1, 1);
 }

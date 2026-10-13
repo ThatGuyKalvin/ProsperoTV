@@ -254,6 +254,18 @@ class JsonReader
         return !output || output->size() <= maximum;
     }
 
+    // A value that may be left out: one longer than `maximum` (a logo sent as a whole picture
+    // in a data: address, say) is read past and left empty instead of failing the document.
+    bool OptionalStringOrScalar(std::string *output, std::size_t maximum)
+    {
+        Whitespace();
+        if (!StringOrScalar(output, input_.size() - position_))
+            return false;
+        if (output && output->size() > maximum)
+            output->clear();
+        return true;
+    }
+
     bool SkipValue(std::size_t depth = 0)
     {
         if (depth >= kMaxJsonDepth)

@@ -15,6 +15,7 @@
 #include "iptv_xtream.h"
 #include <gtest/gtest.h>
 #include <zlib.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -172,11 +173,6 @@ TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
     ptv::PlaybackOsd osd(model, request);
     ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
     ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
-    hui::gfx::Font font;
-    std::string font_data;
-    ASSERT_TRUE(hui::save::read_file(
-        std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont", &font_data, 64u << 20));
-    ASSERT_TRUE(font.load(font_data));
     std::vector<std::uint8_t> video(1920 * 1088 * 3 / 2, 100);
     const auto capture = [&](const char *suffix)
     {
@@ -194,20 +190,25 @@ TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
     };
     const auto expect_guide = [&](const std::string &current, const std::string &next)
     {
-        ptv::VideoPanel expected;
-        expected.reset(80, 770, 1760, 230);
-        expected.text(font, current, 30, 101, 28, 1700);
-        expected.text(font, next, 30, 143, 28, 1700);
-        std::vector<std::uint8_t> actual, wanted;
-        for (unsigned y = 70; y < 160; ++y)
+        // The banner's lines, with the gaps between their parts closed up to one space.
+        const auto single = [](std::string text)
         {
-            const auto begin = video.begin() + (770 + y) * 1920 + 80;
-            actual.insert(actual.end(), begin, begin + 1760);
-            wanted.insert(wanted.end(), expected.pixels.begin() + y * 1760,
-                          expected.pixels.begin() + (y + 1) * 1760);
-        }
-        EXPECT_EQ(actual, wanted);
+            text.erase(std::unique(text.begin(), text.end(),
+                                   [](char a, char b) { return a == ' ' && b == ' '; }),
+                       text.end());
+            return text;
+        };
+        const auto controls = osd.controls();
+        EXPECT_EQ(single(controls.line), current);
+        EXPECT_EQ(single(controls.detail), next);
+        // Drawn over the picture, along the bottom.
+        EXPECT_GT(std::count_if(video.begin() + 800 * 1920, video.begin() + 1040 * 1920,
+                                [](auto v) { return v != 100; }),
+                  100000);
     };
+    // The controls are painted on the control thread once a frame has asked for them.
+    EXPECT_TRUE(osd.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 1));
+    osd.input(-1, 1);
     ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 1));
     expect_guide("Now " + ptv::programme_time(now - 1800) + " Football & friends",
                  "Next " + ptv::programme_time(now + 1800) + " Post-match <analysis>");
@@ -236,10 +237,13 @@ TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
                         {12, iptv::SubtitleCodec::subrip, "spa", "Español", false, true}};
     subtitles.selected = 11;
     osd.set_subtitle_state(subtitles);
-    EXPECT_EQ(osd.input(IPTV_INPUT_R1, 5), 1);
+    EXPECT_EQ(osd.input(IPTV_INPUT_DOWN, 5), 1);  // Sound delay
+    EXPECT_EQ(osd.input(IPTV_INPUT_DOWN, 5), 1);  // Subtitles
+    EXPECT_EQ(osd.input(IPTV_INPUT_CROSS, 5), 1); // its list
     std::fill(video.begin(), video.end(), 100);
     ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 5));
     capture("-subtitle-menu.png");
+    EXPECT_EQ(osd.input(IPTV_INPUT_CIRCLE, 6), 1);
     EXPECT_EQ(osd.input(IPTV_INPUT_CIRCLE, 6), 1);
     auto cue = std::make_shared<iptv::SubtitleCue>();
     cue->text = "Hello, world!\n字幕测试";

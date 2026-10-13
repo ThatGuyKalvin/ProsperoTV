@@ -48,6 +48,17 @@ extern "C"
     };
     void iptv_native_agc_set_picture_mode(unsigned mode);
     void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context);
+    /* Controls drawn at the screen's own resolution rather than the picture's: `color` holds
+     * premultiplied colour and `mask` coverage, each limited-range YUV 4:2:0 of `width` x
+     * `height` with rows `pitch` samples apart and `surface_height` rows to a plane, in the
+     * picture's sample depth (Main10 in the low bits). Both start transparent (black) and keep
+     * what was drawn between frames; `cleared` says they were made transparent again. `hdr`
+     * is 1 when the screen is PQ. Returns bit 0 when anything is on them and bit 1 when they
+     * changed. */
+    typedef int (*iptv_native_screen_osd_t)(void *context, void *color, void *mask, size_t bytes,
+                                            uint32_t pitch, uint32_t surface_height, uint32_t width,
+                                            uint32_t height, uint32_t depth, int hdr, int cleared);
+    void iptv_native_agc_set_screen_osd(iptv_native_screen_osd_t draw, void *context);
 
     int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
                                          uint32_t surface_height, uint32_t visible_width,

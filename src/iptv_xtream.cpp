@@ -514,35 +514,36 @@ struct XtreamStreamsParser::State
         std::string stream_url;
         std::string archive, archive_days, adult, number;
         JsonReader entry(element);
-        if (!ReadObject(&entry,
-                        [&](const std::string &key, JsonReader *value)
-                        {
-                            if (key == "is_adult")
-                                return value->StringOrScalar(&adult, 8);
-                            if (key == "num")
-                                return value->StringOrScalar(&number, 64u);
-                            if (key == "stream_id")
-                                return value->StringOrScalar(&stream_id, 64u);
-                            if (key == "tv_archive")
-                                return value->StringOrScalar(&archive, 12u);
-                            if (key == "tv_archive_duration")
-                                return value->StringOrScalar(&archive_days, 12u);
-                            if (key == "name")
-                                return value->StringOrScalar(&name);
-                            if (key == "stream_icon")
-                                return value->StringOrScalar(&logo, kDefaultMaxUrlBytes);
-                            if (key == "epg_channel_id")
-                                return value->StringOrScalar(&epg_id);
-                            if (key == "category_id")
-                                return value->StringOrScalar(&category_id, 64u);
-                            if (key == "container_extension")
-                                return value->StringOrScalar(&extension, 12u);
-                            if (key == "direct_source")
-                                return value->StringOrScalar(&direct_source, kDefaultMaxUrlBytes);
-                            if (key == "stream_url")
-                                return value->StringOrScalar(&stream_url, kDefaultMaxUrlBytes);
-                            return value->SkipValue();
-                        }) ||
+        if (!ReadObject(
+                &entry,
+                [&](const std::string &key, JsonReader *value)
+                {
+                    if (key == "is_adult")
+                        return value->StringOrScalar(&adult, 8);
+                    if (key == "num")
+                        return value->StringOrScalar(&number, 64u);
+                    if (key == "stream_id")
+                        return value->StringOrScalar(&stream_id, 64u);
+                    if (key == "tv_archive")
+                        return value->StringOrScalar(&archive, 12u);
+                    if (key == "tv_archive_duration")
+                        return value->StringOrScalar(&archive_days, 12u);
+                    if (key == "name")
+                        return value->StringOrScalar(&name);
+                    if (key == "stream_icon")
+                        return value->OptionalStringOrScalar(&logo, kDefaultMaxUrlBytes);
+                    if (key == "epg_channel_id")
+                        return value->StringOrScalar(&epg_id);
+                    if (key == "category_id")
+                        return value->StringOrScalar(&category_id, 64u);
+                    if (key == "container_extension")
+                        return value->StringOrScalar(&extension, 12u);
+                    if (key == "direct_source")
+                        return value->OptionalStringOrScalar(&direct_source, kDefaultMaxUrlBytes);
+                    if (key == "stream_url")
+                        return value->OptionalStringOrScalar(&stream_url, kDefaultMaxUrlBytes);
+                    return value->SkipValue();
+                }) ||
             !entry.Finished())
             return false;
 

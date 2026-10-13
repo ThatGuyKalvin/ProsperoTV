@@ -472,10 +472,13 @@ TEST_F(AppTest, RtlCatalogGlyphsNavigationAndPlayerSeekAreConsistent)
     media.position_us = 30000000;
     media.duration_us = 120000000;
     osd.set_media_state(media);
+    // Left is back and Right forward whatever the language; one seek once the presses stop.
     EXPECT_EQ(osd.input(IPTV_INPUT_LEFT, 1000000), 1);
+    osd.input(-1, 1700001);
     EXPECT_EQ(osd.take_media_seek(), 20000000u);
     EXPECT_EQ(osd.input(IPTV_INPUT_RIGHT, 2000000), 1);
-    EXPECT_EQ(osd.take_media_seek(), 40000000u);
+    osd.input(-1, 2700001);
+    EXPECT_EQ(osd.take_media_seek(), 30000000u);
     ptv::Settings settings;
     settings.interface_language = 9;
     ASSERT_TRUE(ptv::save_settings(dir_, settings));

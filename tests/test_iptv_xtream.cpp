@@ -232,6 +232,27 @@ TEST(IptvXtreamTest, LoadsAProviderWithMoreThanAHundredThousandChannels)
     EXPECT_LT(catalog.MemoryBytes() / catalog.size(), 320u);
 }
 
+TEST(IptvXtreamTest, AWholePictureForALogoLeavesOutOnlyTheLogo)
+{
+    // Some providers send a channel's logo as the picture itself, a data: address many
+    // kilobytes long; the channel is kept without it, and so is the rest of the list.
+    const std::string picture = "data:image/jpeg;base64," + std::string(6000, 'A');
+    const std::string answer =
+        R"([{"num":1,"name":"Board 1","stream_id":11,"stream_icon":")" + picture +
+        R"(","direct_source":")" + picture +
+        R"("},{"num":2,"name":"Board 2","stream_id":12,"stream_icon":"http://img.invalid/2.png"}])";
+    iptv::Catalog catalog;
+    iptv::ParseReport report;
+    ASSERT_EQ(iptv::ParseXtreamLiveStreams(answer, Credentials(), {}, kSource, &catalog, &report),
+              iptv::XtreamStatus::ok);
+    ASSERT_EQ(catalog.size(), 2u);
+    EXPECT_EQ(report.accepted, 2u);
+    EXPECT_EQ(catalog[0].name, "Board 1");
+    EXPECT_TRUE(catalog[0].tvg_logo.empty());
+    EXPECT_EQ(catalog[0].url.find("data:"), std::string_view::npos);
+    EXPECT_EQ(catalog[1].tvg_logo, "http://img.invalid/2.png");
+}
+
 TEST(IptvXtreamTest, KeepsTheFirstChannelsOfAProviderTooLargeToHold)
 {
     const std::string answer = StreamsAnswer(1500);

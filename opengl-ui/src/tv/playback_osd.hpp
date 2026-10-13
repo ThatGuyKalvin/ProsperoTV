@@ -4,9 +4,12 @@
 #pragma once
 
 #include "tv/model.hpp"
+#include "tv/player_sheet.hpp"
 #include "tv/settings.hpp"
 #include "ui/fonts.hpp"
 #include "iptv_player.h"
+#include <array>
+#include <memory>
 #include <mutex>
 
 namespace ptv
@@ -67,12 +70,42 @@ class PlaybackOsd
     {
         return selected_;
     }
+    // What the controls show now.
+    ControlsModel controls();
+    // The controls, menu, channel list and text subtitles at the screen's resolution, into the
+    // presenter's planes (iptv_native_agc_set_screen_osd): premultiplied colour and coverage.
+    // Once this is called, draw() puts only the stream's own picture subtitles into the picture.
+    // Returns bit 0 when anything is on the planes and bit 1 when they changed.
+    int draw_screen(void *color, void *mask, std::size_t bytes, unsigned pitch,
+                    unsigned surface_height, unsigned width, unsigned height, unsigned depth,
+                    int hdr, bool cleared = false);
     bool draw(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
               unsigned visible_width, unsigned visible_height, unsigned depth, std::uint64_t now,
               const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles = {},
               unsigned hdr = false, bool buffering = false);
 
   private:
+    // The settings menu: a page of settings, each opening a list of its values.
+    enum class Setting
+    {
+        audio,
+        subtitles,
+        delay,
+        picture,
+        subtitle_size,
+        subtitle_color,
+        chapters,
+        quality,
+    };
+    int handle(int action, std::uint64_t now);
+    void refresh_menu();
+    std::vector<Setting> menu_settings() const;
+    std::vector<SheetRow> menu_options(Setting setting) const;
+    std::string menu_value(Setting setting) const;
+    int choose(Setting setting, unsigned index, std::uint64_t now);
+    SheetModel menu_model() const;
+    SheetModel list_model() const;
+    ControlsModel controls_model() const;
     void update_guide();
     void paint();
     void paint_subtitles();
@@ -88,7 +121,6 @@ class PlaybackOsd
     bool live_ = false, list_ = false, dirty_ = true, started_ = false;
     bool audio_menu_ = false;
     iptv_player_quality_state_t quality_{};
-    unsigned quality_focus_ = 0;
     std::optional<iptv_hls_quality_t> quality_selection_;
     bool auto_quality_selection_ = false;
     std::optional<iptv_player_audio_state_t> restore_audio_;
@@ -97,19 +129,25 @@ class PlaybackOsd
     iptv_player_live_state_t history_{};
     iptv_player_media_state_t media_{};
     bool on_demand_ = false;
-    unsigned chapter_focus_ = 0;
     std::uint64_t progress_saved_at_ = 0;
     std::optional<std::uint64_t> media_seek_;
+    // Seeking reopens the video, so presses add up on a target first and it is asked for once,
+    // a moment after the last; the timeline shows where it is going until the picture is there.
+    std::optional<std::uint64_t> seek_target_, seek_shown_;
+    std::uint64_t seek_commit_at_ = 0, seek_shown_until_ = 0;
+    std::uint64_t seek_position() const;
     std::optional<bool> media_pause_;
     std::optional<unsigned> media_speed_;
-    unsigned audio_focus_ = 0;
     iptv_player_audio_state_t audio_{};
     std::optional<std::uint32_t> audio_selection_;
     std::optional<int> audio_delay_;
     iptv::SubtitleState subtitles_;
-    unsigned tab_ = 0, picture_focus_ = 0, picture_mode_ = 0;
+    unsigned picture_mode_ = 0;
+    Setting setting_ = Setting::picture;
+    bool picking_ = false;
+    unsigned option_focus_ = 0;
+    unsigned frame_milli_ = 0; // the picture's shape, as last drawn
     std::optional<unsigned> picture_selection_;
-    unsigned subtitle_focus_ = 0;
     std::optional<std::uint32_t> subtitle_selection_;
     std::vector<std::shared_ptr<const iptv::SubtitleCue>> subtitle_cues_;
     std::uint64_t banner_until_ = 0, guide_minute_ = 0;
@@ -118,8 +156,33 @@ class PlaybackOsd
     int current_position_ = -1;
     std::optional<unsigned> selected_;
     std::mutex mutex_;
-    hui::gfx::Font regular_, east_asian_, korean_;
+    hui::gfx::Font regular_, semibold_, display_, east_asian_, korean_;
     hui::ui::Fonts fonts_;
+    // The menu is painted on the control thread when it changes and drawn like a subtitle.
+    std::unique_ptr<PlayerSheet> sheet_;
+    SheetModel painted_;
+    iptv::SubtitleCue menu_cue_;
+    // The controls likewise, painted while the last frame showed them.
+    bool controls_wanted_ = false;
+    std::optional<ControlsModel> painted_controls_;
+    iptv::SubtitleCue controls_cue_;
+    std::string painted_badge_;
+    iptv::SubtitleCue badge_cue_;
+    // What the screen's planes show, and where (see draw_screen).
+    bool screen_ = false, screen_sleeping_ = false;
+    bool badge_wanted_ = false, overlay_wanted_ = false, captions_ = false;
+    unsigned ui_version_ = 0;
+    iptv::SubtitleCue panel_cue_; // the channel list, or the controls without the kit's fonts
+    struct ScreenState
+    {
+        unsigned version = 0;
+        bool panel = false, menu = false, controls = false, badge = false, captions = false;
+        int captions_y = 0, hdr = -1;
+        unsigned depth = 0;
+        bool operator==(const ScreenState &) const = default;
+    };
+    ScreenState screen_state_;
+    std::vector<std::array<int, 4>> screen_drawn_; // x0, y0, x1, y1 of what is on the planes
     VideoPanel panel_;
     VideoPanel speed_panel_;
     unsigned speed_panel_percent_ = 0;

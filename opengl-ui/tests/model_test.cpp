@@ -891,6 +891,37 @@ TEST_F(ModelTest, LiveReplayKeepsPausedBannerAndPreservesMenuNavigation)
     model.close();
 }
 
+TEST_F(ModelTest, PlaybackChannelListIsTheThemedSheetAtTheScreensResolution)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ptv::PlaybackOsd controls(model, request);
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ASSERT_TRUE(controls.load_fonts(std::getenv("KIT_FONTS")));
+    const std::size_t plane = 1920 * 1088 * 3 / 2;
+    std::vector<std::uint8_t> color(plane, 16), mask(plane, 16);
+    std::fill(color.begin() + 1920 * 1088, color.end(), 128);
+    std::fill(mask.begin() + 1920 * 1088, mask.end(), 128);
+    const auto screen = [&] {
+        return controls.draw_screen(color.data(), mask.data(), plane, 1920, 1088, 1920, 1080, 8, 0);
+    };
+    (void)screen();
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 1); // the list
+    EXPECT_FALSE(controls.draw(nullptr, 0, 720, 576, 720, 576, 8, 2));
+    EXPECT_EQ(screen(), 3);
+    EXPECT_GT(mask[400 * 1920 + 1500], 200); // the sheet at the right
+    EXPECT_EQ(mask[400 * 1920 + 300], 16);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 3), 1);
+    EXPECT_FALSE(controls.draw(nullptr, 0, 720, 576, 720, 576, 8, 60000000));
+    controls.input(-1, 60000000);
+    EXPECT_EQ(screen(), 2);
+    EXPECT_EQ(mask[400 * 1920 + 1500], 16);
+    model.close();
+}
+
 TEST_F(ModelTest, PlaybackAudioMenuSelectsLanguagesAndOffWithoutZapping)
 {
     ptv::Model model(dir_);
@@ -905,7 +936,9 @@ TEST_F(ModelTest, PlaybackAudioMenuSelectsLanguagesAndOffWithoutZapping)
     state.tracks[1] = {0x112, 0x0f, "spa", 0};
     state.selected_pid = 0x111;
     controls.set_audio_state(state);
+    // The menu opens on Audio; Cross lists the tracks at the one playing.
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 2), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 2), 1);
     EXPECT_FALSE(controls.selected_channel());
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
@@ -914,11 +947,14 @@ TEST_F(ModelTest, PlaybackAudioMenuSelectsLanguagesAndOffWithoutZapping)
     state.pending = 1;
     controls.set_audio_state(state);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 4), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 4), 1);
     EXPECT_FALSE(controls.take_audio_selection());
     state.pending = 0;
     state.selected_pid = 0x112;
     controls.set_audio_state(state);
-    EXPECT_EQ(controls.input(IPTV_INPUT_LEFT, 5), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 5), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 5), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 5), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 6), 1);
     EXPECT_EQ(controls.take_audio_selection(), 0u);
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 7), 1);
@@ -927,6 +963,7 @@ TEST_F(ModelTest, PlaybackAudioMenuSelectsLanguagesAndOffWithoutZapping)
     ptv::PlaybackOsd vod(model, request);
     vod.set_audio_state(state);
     EXPECT_EQ(vod.input(IPTV_INPUT_OPTIONS, 9), 1);
+    EXPECT_EQ(vod.input(IPTV_INPUT_CROSS, 10), 1);
     EXPECT_EQ(vod.input(IPTV_INPUT_CROSS, 10), 1);
     EXPECT_EQ(vod.take_audio_selection(), 0x112u);
     EXPECT_FALSE(vod.selected_channel());
@@ -949,8 +986,8 @@ TEST_F(ModelTest, PlaybackAudioMenuHandlesChangingTracksAndLastPage)
         state.tracks[i] = {0x111 + i, 0x0f, "eng", 0};
     controls.set_audio_state(state);
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
-    for (unsigned i = 0; i < 5; ++i)
-        EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 2), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 2), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 2), 1); // Off wraps round to the last track.
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
     EXPECT_EQ(controls.take_audio_selection(), 0x111u + 31);
     std::vector<std::uint8_t> surface(1920 * 1088 * 3 / 2, 16);
@@ -959,6 +996,8 @@ TEST_F(ModelTest, PlaybackAudioMenuHandlesChangingTracksAndLastPage)
     state.count = 1;
     state.result = IPTV_STREAM_NATIVE_ERROR;
     controls.set_audio_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 4), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 4), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 4), 1);
     EXPECT_EQ(controls.take_audio_selection(), 0x111u);
     ASSERT_TRUE(controls.draw(surface.data(), surface.size(), 1920, 1088, 1920, 1080, 8, 30000000));
@@ -969,7 +1008,7 @@ TEST_F(ModelTest, PlaybackAudioMenuHandlesChangingTracksAndLastPage)
     model.close();
 }
 
-TEST_F(ModelTest, SubtitleSelectionUsesItsOwnTabAndCaptionsOutliveTheBanner)
+TEST_F(ModelTest, SubtitleSelectionUsesItsOwnSettingAndCaptionsOutliveTheBanner)
 {
     ptv::Model model(dir_);
     load(model);
@@ -981,9 +1020,11 @@ TEST_F(ModelTest, SubtitleSelectionUsesItsOwnTabAndCaptionsOutliveTheBanner)
     state.tracks = {{11, iptv::SubtitleCodec::subrip, "eng", "English", false, false},
                     {12, iptv::SubtitleCodec::subrip, "spa", "Español", false, false}};
     controls.set_subtitle_state(state);
+    // No audio tracks: the menu opens on the sound delay, and Subtitles is next.
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 2), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 2), 1);
     EXPECT_FALSE(controls.selected_channel());
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 3), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 4), 1);
     EXPECT_EQ(controls.take_subtitle_selection(), 11u);
@@ -991,6 +1032,7 @@ TEST_F(ModelTest, SubtitleSelectionUsesItsOwnTabAndCaptionsOutliveTheBanner)
     EXPECT_FALSE(controls.take_subtitle_selection());
     state.selected = 11;
     controls.set_subtitle_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 5), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_UP, 5), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 6), 1);
     EXPECT_EQ(controls.take_subtitle_selection(), 0u);
@@ -1007,7 +1049,7 @@ TEST_F(ModelTest, SubtitleSelectionUsesItsOwnTabAndCaptionsOutliveTheBanner)
     EXPECT_GT(std::count(video.begin(), video.begin() + 1920 * 1080, 235), 100);
     EXPECT_FALSE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 11000000));
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 12000000), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 12000001), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 12000001), 1);
     state.tracks.clear();
     controls.set_subtitle_state(state);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 12000002), 1);
@@ -1123,19 +1165,26 @@ TEST_F(ModelTest, PlaybackPictureModesDoNotSelectTracksOrChannels)
     ASSERT_TRUE(model.play(model.visible(0)));
     ASSERT_TRUE(model.take_play_request(&request));
     ptv::PlaybackOsd controls(model, request);
+    // Sound delay, subtitle size and colour, then Picture: Up wraps round to it.
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 2), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 2), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 2), 1);
     for (unsigned mode = 0; mode < 7; ++mode)
     {
+        // The list opens at the mode in use; the next one is below it.
+        EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
+        if (mode)
+            EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 3), 1);
         EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
         EXPECT_EQ(controls.take_picture_selection(), mode);
         EXPECT_FALSE(controls.take_picture_selection());
         EXPECT_FALSE(controls.take_audio_selection());
         EXPECT_FALSE(controls.take_subtitle_selection());
         EXPECT_FALSE(controls.selected_channel());
-        EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 4), 1);
     }
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 4), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 4), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 5), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 5), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 5), 1);
     EXPECT_FALSE(controls.take_picture_selection());
     ptv::Settings picture;
@@ -1144,6 +1193,8 @@ TEST_F(ModelTest, PlaybackPictureModesDoNotSelectTracksOrChannels)
     EXPECT_EQ(picture.subtitle_size, 2);
     controls.input(IPTV_INPUT_DOWN, 5);
     controls.input(IPTV_INPUT_RIGHT, 5);
+    controls.input(IPTV_INPUT_DOWN, 5);
+    controls.input(IPTV_INPUT_CROSS, 5);
     ASSERT_TRUE(controls.copy_picture_settings(picture));
     EXPECT_EQ(picture.subtitle_color, 1);
     ASSERT_TRUE(ptv::save_settings(dir_, picture));
@@ -1426,14 +1477,15 @@ TEST_F(ModelTest, QualityPickerReopensOnlyPlayableChoicesAndKeepsTracksAcrossIds
     ptv::PlayRequest request;
     request.live = false;
     ptv::PlaybackOsd controls(model, request);
+    // Without a choice of qualities there is no Quality row: Up wraps round to Picture.
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 2), 1);
-    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 2), 1);
     EXPECT_FALSE(controls.quality_selection());
     iptv_player_quality_state_t quality{};
     quality.count = 1;
     controls.set_quality_state(quality);
-    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 3), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 3), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 3), 1);
     EXPECT_FALSE(controls.quality_selection());
     quality.count = 2;
     quality.variants[0] = {2000000, 1280, 720, IPTV_HLS_CODEC_AVC, IPTV_HLS_VIDEO_RANGE_SDR};
@@ -1442,7 +1494,8 @@ TEST_F(ModelTest, QualityPickerReopensOnlyPlayableChoicesAndKeepsTracksAcrossIds
     ASSERT_TRUE(controls.load_fonts(std::getenv("KIT_FONTS")));
     std::vector<std::uint8_t> video(1920 * 1088 * 3 / 2, 77);
     EXPECT_TRUE(controls.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 3));
-    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 4), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 4), 1);  // Quality, after Picture.
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 4), 1); // Opens at the quality playing.
     EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 5), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 6), 1); // Unsupported row cannot reopen.
     EXPECT_FALSE(controls.quality_selection());
@@ -1492,7 +1545,7 @@ TEST_F(ModelTest, QualityPickerReopensOnlyPlayableChoicesAndKeepsTracksAcrossIds
     ptv::PlaybackOsd live(model, request);
     live.set_quality_state(quality);
     EXPECT_EQ(live.input(IPTV_INPUT_OPTIONS, 1), 1);
-    EXPECT_EQ(live.input(IPTV_INPUT_L1, 2), 1);
+    EXPECT_EQ(live.input(IPTV_INPUT_UP, 2), 1);
     EXPECT_EQ(live.input(IPTV_INPUT_CIRCLE, 3), 1);
     EXPECT_FALSE(live.quality_selection());
     model.close();
@@ -1510,9 +1563,10 @@ TEST_F(ModelTest, AutomaticQualityIsExplicitAndNeedsTwoKnownBitrates)
     quality.variants[0].bandwidth = 2000000;
     controls.set_quality_state(quality);
     controls.input(IPTV_INPUT_OPTIONS, 1);
-    controls.input(IPTV_INPUT_L1, 2);
-    for (unsigned i = 0; i < 3; ++i)
-        controls.input(IPTV_INPUT_DOWN, 3 + i);
+    controls.input(IPTV_INPUT_UP, 2);    // Quality, the last row.
+    controls.input(IPTV_INPUT_CROSS, 3); // At the first variant, which plays.
+    for (unsigned i = 0; i < 2; ++i)
+        controls.input(IPTV_INPUT_DOWN, 4 + i);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 6), 1);
     EXPECT_FALSE(controls.quality_selection());
     quality.variants[1].bandwidth = 1000000;

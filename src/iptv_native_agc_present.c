@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define BASE_OUTPUT_WIDTH 1920u
 #define BASE_OUTPUT_HEIGHT 1080u
@@ -24,6 +25,18 @@
 #define FOUR_K_FRAMEBUFFER_BYTES 0x2000000u
 #define FRAMEBUFFER_ALIGNMENT 0x200000u
 #define SHADER_MEMORY_BYTES 0x10000u
+/* The black picture painted under a picture that does not fill the screen, at the end of the
+ * shader memory. Its rows are 256 samples: the GPU reads a linear texture with its row pitch
+ * rounded up to 256 bytes, so narrower rows would be read wrongly. */
+#define BLACK_OFFSET 0xe000u
+/* The controls' planes, at the interface's resolution whatever the picture's (see
+ * iptv_native_agc_set_screen_osd). The GPU reads a Main10 plane with an implicit pitch, so
+ * rows are exactly as wide as the screen. */
+#define SCREEN_WIDTH 1920u
+#define SCREEN_HEIGHT 1080u
+#define SCREEN_ROWS 1088u
+#define BLACK_WIDTH 256u
+#define BLACK_HEIGHT 8u
 #define DIRECT_MEMORY_TYPE 12
 #define MAP_PROTECTION 0x33
 #define VIDEO_OUT_PIXEL_FORMAT_SDR UINT64_C(0x8000000000000000)
@@ -183,15 +196,23 @@ typedef struct iptv_native_agc_presenter
     void *overlay_surface;
     int64_t overlay_start;
     size_t overlay_bytes;
+    void *screen; /* the controls' colour plane, then their mask */
+    int64_t screen_start;
+    size_t screen_plane_bytes;
+    size_t screen_pool_bytes;
+    uint8_t screen_hdr;     /* how the planes were last drawn */
+    uint8_t screen_cleared; /* transparent since the last draw */
 } iptv_native_agc_presenter_t;
 
 static iptv_native_agc_presenter_t presenter = {
     .shader_start = -1,
     .framebuffer_start = -1,
     .overlay_start = -1,
+    .screen_start = -1,
     .video = -1,
 };
 static uint64_t agc_state;
+
 static uint8_t agc_initialized;
 static _Atomic int hold_frame;
 extern void tv_diag_line(const char *line) __attribute__((weak));
@@ -210,7 +231,7 @@ void iptv_native_agc_hold_frame(int hold)
 }
 static uint64_t render_sequence;
 static _Atomic int present_cancelled;
-static _Atomic int overlay_enabled = 1;
+static _Atomic uint64_t overlay_until = UINT64_MAX;
 static _Atomic unsigned picture_mode;
 
 void iptv_native_agc_set_picture_mode(unsigned mode)
@@ -243,6 +264,8 @@ static _Atomic int force_sdr_output;
 static _Atomic int sample_color_output;
 static iptv_native_osd_t draw_osd;
 static void *osd_context;
+static iptv_native_screen_osd_t draw_screen;
+static void *screen_context;
 
 void iptv_native_agc_set_color_test(int force_sdr, int sample_output)
 {
@@ -286,6 +309,12 @@ static int switch_output(int hdr)
         return 0;
     }
     return result;
+}
+
+void iptv_native_agc_set_screen_osd(iptv_native_screen_osd_t draw, void *context)
+{
+    draw_screen = draw;
+    screen_context = context;
 }
 
 void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context)
@@ -346,6 +375,31 @@ static void flush_gpu_data(const void *address, size_t bytes)
     for (; at < end; at += 64)
         __asm__ volatile("clflush (%0)" : : "r"(at) : "memory");
     __asm__ volatile("mfence" ::: "memory");
+}
+
+/* Both of the controls' planes transparent: black, which adds nothing and darkens nothing. */
+static void clear_screen(void)
+{
+    if (!presenter.screen)
+        return;
+    const size_t luma = (size_t)SCREEN_WIDTH * SCREEN_ROWS;
+    for (unsigned plane = 0; plane < 2u; ++plane)
+    {
+        uint8_t *start = (uint8_t *)presenter.screen + plane * presenter.screen_plane_bytes;
+        if (presenter.main10)
+        {
+            uint16_t *samples = (uint16_t *)start;
+            for (size_t index = 0; index < luma + luma / 2u; ++index)
+                samples[index] = index < luma ? 64u : 512u;
+        }
+        else
+        {
+            memset(start, 16, luma);
+            memset(start + luma, 128, luma / 2u);
+        }
+    }
+    flush_gpu_data(presenter.screen, presenter.screen_plane_bytes * 2u);
+    presenter.screen_cleared = 1;
 }
 
 static const uint8_t *glyph_rows(char character)
@@ -793,7 +847,8 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
                         void *vertex_shader, void *pixel_shader, const void *source,
                         size_t source_bytes, uint32_t pitch, uint32_t surface_height,
                         uint32_t visible_width, uint32_t visible_height, uint32_t output_width,
-                        uint32_t output_height, int64_t render_marker, unsigned mode)
+                        uint32_t output_height, int64_t render_marker, unsigned mode,
+                        int with_screen)
 {
     static const uint16_t target_offsets[16] = {0x318, 0x31b, 0x31c, 0x31d, 0x31e, 0x31f,
                                                 0x321, 0x323, 0x324, 0x325, 0x390, 0x398,
@@ -866,29 +921,10 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     float picture_width, picture_height;
     picture_size(visible_width, visible_height, output_width, output_height, mode, &picture_width,
                  &picture_height);
-    // Erase bars left by earlier frames when the viewer changes picture shape.
-    const unsigned left =
-        (unsigned)((picture_width < output_width ? output_width - picture_width : 0) * .5f + .999f);
-    const unsigned top =
-        (unsigned)((picture_height < output_height ? output_height - picture_height : 0) * .5f +
-                   .999f);
-    if ((left || top) && (presenter.picture_width[buffer_index] != picture_width ||
-                          presenter.picture_height[buffer_index] != picture_height))
-    {
-        uint32_t *pixels = target;
-        for (unsigned y = 0; y < output_height; ++y)
-        {
-            uint32_t *row = pixels + (size_t)y * output_width;
-            if (y < top || y >= output_height - top)
-                memset(row, 0, output_width * sizeof(*row));
-            else if (left)
-            {
-                memset(row, 0, left * sizeof(*row));
-                memset(row + output_width - left, 0, left * sizeof(*row));
-            }
-        }
-        flush_gpu_data(target, (size_t)output_width * output_height * sizeof(*pixels));
-    }
+    /* A picture that does not fill the screen leaves bars, painted black on every frame by the
+     * GPU before the picture (see below). Clearing them from the CPU is not enough: the GPU can
+     * still write back what it drew there in earlier frames. */
+    const int bars = picture_width < output_width - .5f || picture_height < output_height - .5f;
     if (presenter.picture_width[buffer_index] != picture_width ||
         presenter.picture_height[buffer_index] != picture_height)
         fprintf(stderr, "[TV] picture mode=%u source=%ux%u viewport=%.1fx%.1f output=%ux%u\n", mode,
@@ -911,6 +947,7 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     ADD_REG(0x090, 0x80000000u);
     ADD_REG(0x091, output_width | (output_height << 16));
     ADD_REG(0x08e, 0x0f);
+    ADD_REG(0x1e0, 0); /* no blending: the controls' passes below turn it on */
 #undef ADD_REG
 
     memcpy(geometry_cb, geometry_constants, sizeof(geometry_constants));
@@ -982,9 +1019,99 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
         descriptor[7] = (uint32_t)(vertex >> 32);
     }
     sceAgcCbSetShRegisterRangeDirect(&command, 0x8c + slot, descriptor, 8);
+    if (bars)
+    {
+        /* A small black picture stretched over the whole screen, then the picture in its place. */
+        uint8_t *black = memory + BLACK_OFFSET;
+        const size_t black_y = (size_t)BLACK_WIDTH * BLACK_HEIGHT * component_bytes;
+        const size_t black_uv = black_y / 2u;
+        if (component_bytes == 2u)
+        {
+            uint16_t *samples = (uint16_t *)black;
+            for (size_t index = 0; index < (black_y + black_uv) / 2u; ++index)
+                samples[index] = index < black_y / 2u ? 64u : 512u;
+        }
+        else
+        {
+            memset(black, 16, black_y);
+            memset(black + black_y, 128, black_uv);
+        }
+        uint8_t *black_cb = memory + 0xd200;
+        memcpy(black_cb, pixel_cb, 64);
+        ((uint32_t *)black_cb)[12] = float_bits((float)BLACK_WIDTH);
+        ((uint32_t *)black_cb)[13] = float_bits((float)BLACK_HEIGHT);
+        ((uint32_t *)black_cb)[14] = BLACK_WIDTH;
+        ((uint32_t *)black_cb)[15] = BLACK_WIDTH / 2u;
+        agc_register_t *viewports = (agc_register_t *)(memory + 0xd000);
+        const agc_register_t full[4] = {
+            {0x10f, 0, float_bits(output_width * .5f)},
+            {0x110, 0, float_bits(output_width * .5f)},
+            {0x111, 0, float_bits(output_height * -.5f)},
+            {0x112, 0, float_bits(output_height * .5f)},
+        };
+        const agc_register_t placed[4] = {
+            {0x10f, 0, float_bits(picture_width * .5f)},
+            {0x110, 0, float_bits(output_width * .5f)},
+            {0x111, 0, float_bits(picture_height * -.5f)},
+            {0x112, 0, float_bits(output_height * .5f)},
+        };
+        memcpy(viewports, full, sizeof(full));
+        memcpy(viewports + 4, placed, sizeof(placed));
+        sceAgcDcbSetCxRegistersIndirect(&command, viewports, 4);
+        bind_pixel_source(&command, resources, black, black_y, black_uv, black_cb, BLACK_WIDTH,
+                          BLACK_HEIGHT, presenter.main10);
+        sceAgcDcbDrawIndexAuto(&command, 4, 2);
+        sceAgcDcbSetCxRegistersIndirect(&command, viewports + 4, 4);
+    }
     bind_pixel_source(&command, resources, source, y_bytes, uv_bytes, pixel_cb, visible_width,
                       visible_height, presenter.main10);
     sceAgcDcbDrawIndexAuto(&command, 4, 2);
+
+    if (with_screen && presenter.screen)
+    {
+        /* The controls over the whole screen: first their mask darkens what is under them
+         * (destination x (1 - source)), then their premultiplied colour is added (destination
+         * + source). The planes are converted as they were drawn: BT.709, or BT.2020 PQ on an
+         * HDR screen, without the picture's transfer conversion. */
+        static const uint32_t blends[2] = {
+            0x00000300u | (1u << 24) | (1u << 29) | (1u << 30),
+            0x00000101u | (1u << 24) | (1u << 29) | (1u << 30),
+        };
+        const size_t plane_y = (size_t)SCREEN_WIDTH * SCREEN_ROWS * component_bytes;
+        const size_t plane_uv = plane_y / 2u;
+        uint8_t *screen_cb = memory + 0xd300;
+        memcpy(screen_cb, pixel_constants, sizeof(pixel_constants));
+        if (presenter.screen_hdr)
+        {
+            ((uint32_t *)screen_cb)[4] = float_bits(1.8814f);
+            ((uint32_t *)screen_cb)[5] = float_bits(-.164553f);
+            ((uint32_t *)screen_cb)[9] = float_bits(-.571353f);
+            ((uint32_t *)screen_cb)[10] = float_bits(1.4746f);
+        }
+        ((uint32_t *)screen_cb)[12] = float_bits((float)SCREEN_WIDTH);
+        ((uint32_t *)screen_cb)[13] = float_bits((float)SCREEN_HEIGHT);
+        ((uint32_t *)screen_cb)[14] = SCREEN_WIDTH;
+        ((uint32_t *)screen_cb)[15] = SCREEN_WIDTH / 2u;
+        for (unsigned pass = 0; pass < 2u; ++pass)
+        {
+            agc_register_t *pass_cx = (agc_register_t *)(memory + 0xd400 + pass * 0x80u);
+            const agc_register_t registers[6] = {
+                {0x10f, 0, float_bits(output_width * .5f)},
+                {0x110, 0, float_bits(output_width * .5f)},
+                {0x111, 0, float_bits(output_height * -.5f)},
+                {0x112, 0, float_bits(output_height * .5f)},
+                {0x1e0, 0, blends[pass]},
+                {0x1d8, 0, 0},
+            };
+            memcpy(pass_cx, registers, sizeof(registers));
+            sceAgcDcbSetCxRegistersIndirect(&command, pass_cx, 6);
+            const uint8_t *plane = (const uint8_t *)presenter.screen +
+                                   (pass == 0u ? presenter.screen_plane_bytes : 0u);
+            bind_pixel_source(&command, resources, plane, plane_y, plane_uv, screen_cb,
+                              SCREEN_WIDTH, SCREEN_HEIGHT, presenter.main10);
+            sceAgcDcbDrawIndexAuto(&command, 4, 2);
+        }
+    }
     sceAgcDcbSetFlip(&command, (uint32_t)video, buffer_index, 1, render_marker);
 
     submit.words = words;
@@ -1046,6 +1173,18 @@ static int32_t teardown_presenter(int drain)
         if (first_result == 0 && result != 0)
             first_result = result;
     }
+    if (presenter.screen)
+    {
+        result = sceKernelMunmap(presenter.screen, presenter.screen_pool_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
+    if (presenter.screen_start >= 0)
+    {
+        result = sceKernelReleaseDirectMemory(presenter.screen_start, presenter.screen_pool_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
     if (presenter.shader_start >= 0)
     {
         result = sceKernelReleaseDirectMemory(presenter.shader_start, SHADER_MEMORY_BYTES);
@@ -1058,6 +1197,7 @@ static int32_t teardown_presenter(int drain)
     presenter.shader_start = -1;
     presenter.framebuffer_start = -1;
     presenter.overlay_start = -1;
+    presenter.screen_start = -1;
     presenter.video = -1;
     return first_result;
 }
@@ -1179,6 +1319,19 @@ static int32_t initialize_presenter(const void *source, size_t source_bytes, uin
     }
     if (result != 0)
         goto fail;
+
+    /* The controls' planes. Without them the controls are drawn into the picture instead. */
+    presenter.screen_plane_bytes =
+        (size_t)SCREEN_WIDTH * SCREEN_ROWS * 3u / 2u * (main10 ? 2u : 1u);
+    presenter.screen_pool_bytes = (presenter.screen_plane_bytes * 2u + 0x3fffu) & ~(size_t)0x3fffu;
+    if (sceKernelAllocateDirectMemory(0, direct_limit, presenter.screen_pool_bytes, 0x4000,
+                                      DIRECT_MEMORY_TYPE, &presenter.screen_start) != 0)
+        presenter.screen_start = -1;
+    else if (sceKernelMapDirectMemory(&presenter.screen, presenter.screen_pool_bytes,
+                                      MAP_PROTECTION, 0, presenter.screen_start, 0x4000) != 0)
+        presenter.screen = NULL;
+    presenter.screen_hdr = 0;
+    clear_screen();
 
     presenter.ready = 1;
     return 0;
@@ -1313,12 +1466,30 @@ void iptv_native_agc_loading_stop(void)
 
 void iptv_native_agc_set_overlay_enabled(int enabled)
 {
-    atomic_store_explicit(&overlay_enabled, enabled != 0, memory_order_relaxed);
+    atomic_store_explicit(&overlay_until, enabled ? UINT64_MAX : 0, memory_order_relaxed);
+}
+
+static int overlay_visible_at(uint64_t now)
+{
+    uint64_t until = atomic_load_explicit(&overlay_until, memory_order_relaxed);
+    if (until == UINT64_MAX)
+    {
+        /* Start the five seconds on the first picture, not during network startup. */
+        const uint64_t deadline = now + UINT64_C(5000000);
+        if (atomic_compare_exchange_strong_explicit(&overlay_until, &until, deadline,
+                                                    memory_order_relaxed, memory_order_relaxed))
+            until = deadline;
+    }
+    return now < until;
 }
 
 int iptv_native_agc_overlay_enabled(void)
 {
-    return atomic_load_explicit(&overlay_enabled, memory_order_relaxed);
+    struct timespec now = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return 0;
+    return overlay_visible_at((uint64_t)now.tv_sec * UINT64_C(1000000) +
+                              (uint64_t)now.tv_nsec / UINT64_C(1000));
 }
 
 void iptv_native_agc_present_set_cancelled(int cancelled)
@@ -1517,11 +1688,33 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
             flush_gpu_data(source, yuv_bytes);
         }
     }
+    /* The controls, at the screen's resolution: drawn into planes of their own and blended
+     * over the placed picture, so a small picture does not make them coarse. */
+    int with_screen = 0;
+    if (overlay && draw_screen && presenter.screen)
+    {
+        const int hdr = presenter.hdr != 0;
+        if (presenter.screen_hdr != hdr)
+        {
+            /* Drawn for the other kind of screen: start again from transparent. */
+            clear_screen();
+            presenter.screen_hdr = (uint8_t)hdr;
+        }
+        const int state =
+            draw_screen(screen_context, presenter.screen,
+                        (uint8_t *)presenter.screen + presenter.screen_plane_bytes,
+                        presenter.screen_plane_bytes, SCREEN_WIDTH, SCREEN_ROWS, SCREEN_WIDTH,
+                        SCREEN_HEIGHT, bit_depth, hdr, presenter.screen_cleared);
+        presenter.screen_cleared = 0;
+        if (state & 2)
+            flush_gpu_data(presenter.screen, presenter.screen_plane_bytes * 2u);
+        with_screen = state & 1;
+    }
     result = render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
                           presenter.vertex_shader, presenter.pixel_shader, source, source_bytes,
                           pitch, surface_height, visible_width, visible_height,
                           presenter.output_width, presenter.output_height, render_marker,
-                          overlay ? atomic_load(&picture_mode) : IPTV_PICTURE_STRETCH);
+                          overlay ? atomic_load(&picture_mode) : IPTV_PICTURE_STRETCH, with_screen);
     if (result != 0)
         return result;
     presenter.pending_marker = render_marker;
@@ -1696,6 +1889,23 @@ int sceVideoOutSubmitChangeBufferAttribute2(int32_t handle, int32_t index,
 }
 int main(void)
 {
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(10000000));
+    assert(overlay_visible_at(14999999));
+    assert(!overlay_visible_at(15000000));
+    assert(!overlay_visible_at(90000000));
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(90000000));
+    assert(!overlay_visible_at(95000000));
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(100000000));
+    iptv_native_agc_set_overlay_enabled(1);
+    assert(overlay_visible_at(104000000));
+    assert(overlay_visible_at(108999999));
+    assert(!overlay_visible_at(109000000));
+    iptv_native_agc_set_overlay_enabled(0);
+    assert(!overlay_visible_at(110000000));
+    iptv_native_agc_set_overlay_enabled(1);
     presenter.ready = 1;
     presenter.video = 7;
     presenter.frame_number = 2;
