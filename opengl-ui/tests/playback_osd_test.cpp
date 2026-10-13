@@ -419,3 +419,37 @@ TEST(PlaybackScreen, ControlsAreDrawnAtTheScreensResolutionWhateverThePicture)
               3);
     EXPECT_GT(mask[930 * 1920 + 1000], 200);
 }
+
+TEST(PlaybackScreen, ScreensaverHidesPlanesAndWakeRestoresControls)
+{
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ptv::Model model("/tmp/prosperotv-screen-sleep-test");
+    ptv::PlayRequest request;
+    request.record_channel_result = false;
+    ptv::Settings settings;
+    settings.screensaver_minutes = 1;
+    ptv::PlaybackOsd osd(model, request, settings);
+    ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
+    iptv_player_media_state_t media{};
+    media.available = media.paused = 1;
+    media.duration_us = 100000000;
+    osd.set_media_state(media);
+    osd.set_paused(true);
+    const std::size_t plane = 1920 * 1088 * 3 / 2;
+    std::vector<std::uint8_t> color(plane, 16), mask(plane, 16);
+    const auto screen = [&]
+    { return osd.draw_screen(color.data(), mask.data(), plane, 1920, 1088, 1920, 1080, 8, 0); };
+    screen();
+    osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 1);
+    osd.input(-1, 1);
+    ASSERT_EQ(screen() & 1, 1);
+    ASSERT_TRUE(osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 60000001));
+    osd.input(-1, 60000001);
+    EXPECT_EQ(screen() & 1, 0);
+    EXPECT_TRUE(std::all_of(mask.begin(), mask.begin() + 1920 * 1080,
+                            [](auto value) { return value == 16; }));
+    EXPECT_EQ(osd.input(IPTV_INPUT_TRIANGLE, 60000002), 1);
+    osd.draw(nullptr, 0, 720, 576, 720, 576, 8, 60000002);
+    osd.input(-1, 60000002);
+    EXPECT_EQ(screen() & 1, 1);
+}

@@ -183,6 +183,34 @@ PlayerSheet::PlayerSheet(const ui::Fonts &fonts, const Settings &settings)
         if (index >= 0 && static_cast<std::size_t>(index) < shown_.rows.size())
             draw_preview(canvas, row, shown_.rows[index], focus);
     };
+    // Provider labels need the same script fallback as the playback controls.
+    options_.content = [this](ui::Canvas &canvas, const Rect &row, const ui::ListItem &item,
+                              int index, float focus)
+    {
+        const auto &style = options_.style;
+        const float left = row.x + style.padding;
+        options_.leading(canvas, {left, row.y, style.leading_width, row.h}, item, index, focus);
+        options_.trailing(canvas, row, item, index, focus);
+        const float x = left + style.leading_width + 18.0f;
+        const float room = std::max(row.x + row.w - style.padding - row.h - x, 0.0f);
+        const Color ink = ui::Highlight::text_color(style, style.highlight, focus, theme_.text);
+        const Color quiet = gfx::mix(theme_.text_muted, ink, focus * 0.6f);
+        const auto text = [&](const std::string &value, const ui::FontRef &usual, float y,
+                              float size, Color color)
+        {
+            const auto &face = face_for(fonts_, usual, value);
+            ui::text(canvas.list, face, face.font->fit(readable(face, value), size, room), x, y,
+                     size, color);
+        };
+        float y = row.cy() + style.title_size * 0.34f;
+        if (!item.subtitle.empty())
+            y = row.cy() - (style.title_size + style.subtitle_size * 1.25f) * 0.5f +
+                style.title_size * 0.84f;
+        text(item.title, fonts_.semibold, y, style.title_size, ink);
+        if (!item.subtitle.empty())
+            text(item.subtitle, fonts_.regular, y + style.subtitle_size * 1.3f, style.subtitle_size,
+                 quiet);
+    };
 }
 
 void PlayerSheet::draw_preview(ui::Canvas &canvas, const Rect &row, const SheetRow &item,

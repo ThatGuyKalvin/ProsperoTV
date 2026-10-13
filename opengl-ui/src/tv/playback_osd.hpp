@@ -169,7 +169,8 @@ class PlaybackOsd
     std::string painted_badge_;
     iptv::SubtitleCue badge_cue_;
     // What the screen's planes show, and where (see draw_screen).
-    bool screen_ = false, badge_wanted_ = false, overlay_wanted_ = false, captions_ = false;
+    bool screen_ = false, screen_sleeping_ = false;
+    bool badge_wanted_ = false, overlay_wanted_ = false, captions_ = false;
     unsigned ui_version_ = 0;
     iptv::SubtitleCue panel_cue_; // the channel list, or the controls without the kit's fonts
     struct ScreenState

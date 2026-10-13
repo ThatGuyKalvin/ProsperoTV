@@ -398,7 +398,8 @@ std::optional<std::uint32_t> PlaybackOsd::take_subtitle_selection()
 void PlaybackOsd::set_live_state(const iptv_player_live_state_t &state)
 {
     std::lock_guard lock(mutex_);
-    const auto behind = [](const iptv_player_live_state_t &value) {
+    const auto behind = [](const iptv_player_live_state_t &value)
+    {
         return value.last_us > value.position_us ? (value.last_us - value.position_us) / 1000000
                                                  : 0;
     };
@@ -838,9 +839,6 @@ std::vector<PlaybackOsd::Setting> PlaybackOsd::menu_settings() const
 std::vector<SheetRow> PlaybackOsd::menu_options(Setting setting) const
 {
     std::vector<SheetRow> rows;
-    // Letters the fonts do not hold are left out, as in the rest of the interface.
-    const auto shown = [&](const std::string &text)
-    { return fonts_.semibold.font ? readable(fonts_.semibold, text) : text; };
     const auto add = [&](std::string label, std::string value, bool checked)
     {
         SheetRow row;
@@ -875,7 +873,7 @@ std::vector<SheetRow> PlaybackOsd::menu_options(Setting setting) const
                 detail += tr("  Hearing impaired");
             if (track.audio_type == 3)
                 detail += tr("  Audio description");
-            add(shown(label), detail, !audio_.disabled && track.pid == audio_.selected_pid);
+            add(label, detail, !audio_.disabled && track.pid == audio_.selected_pid);
         }
         break;
     case Setting::subtitles:
@@ -899,7 +897,7 @@ std::vector<SheetRow> PlaybackOsd::menu_options(Setting setting) const
             if (track.hearing_impaired)
                 detail += tr("  Hearing impaired");
             const auto begin = detail.find_first_not_of(' ');
-            add(shown(label), begin == std::string::npos ? "" : detail.substr(begin),
+            add(label, begin == std::string::npos ? "" : detail.substr(begin),
                 track.id == subtitles_.selected);
         }
         break;
@@ -954,7 +952,7 @@ std::vector<SheetRow> PlaybackOsd::menu_options(Setting setting) const
             const std::string title(media_.chapter_titles[i],
                                     strnlen(media_.chapter_titles[i], 129));
             const auto at = minutes(media_.chapter_positions[i]);
-            add(title.empty() ? at : shown(title), title.empty() ? "" : at, i == current);
+            add(title.empty() ? at : title, title.empty() ? "" : at, i == current);
         }
         break;
     }
@@ -978,8 +976,9 @@ std::vector<SheetRow> PlaybackOsd::menu_options(Setting setting) const
         }
         const bool available = quality_.selected < quality_.count &&
                                quality_.variants[quality_.selected].bandwidth &&
-                               std::count_if(quality_.variants, quality_.variants + quality_.count,
-                                             [](const auto &v) { return v.bandwidth != 0; }) > 1;
+                               std::count_if(
+                                   quality_.variants, quality_.variants + quality_.count,
+                                   [](const auto &v) { return v.bandwidth != 0; }) > 1;
         add(tr(available ? "Auto (reduce on buffering)" : "Auto unavailable (missing bitrate)"),
             live_ ? tr("Live restarts at the live edge; replay buffer is cleared") : "",
             quality_.automatic != 0);
@@ -1044,8 +1043,9 @@ int PlaybackOsd::choose(Setting setting, unsigned index, std::uint64_t now)
         const bool automatic = index == quality_.count + 1;
         const bool available = quality_.selected < quality_.count &&
                                quality_.variants[quality_.selected].bandwidth &&
-                               std::count_if(quality_.variants, quality_.variants + quality_.count,
-                                             [](const auto &v) { return v.bandwidth != 0; }) > 1;
+                               std::count_if(
+                                   quality_.variants, quality_.variants + quality_.count,
+                                   [](const auto &v) { return v.bandwidth != 0; }) > 1;
         if (quality_.count < 2 || index > quality_.count + 1 ||
             !(index == 0 || (automatic ? available : quality_.variants[index - 1].bandwidth != 0)))
         {
@@ -1162,10 +1162,9 @@ SheetModel PlaybackOsd::list_model() const
         const auto channel = model_.channel(index);
         SheetRow row;
         const std::string name = model_.number_label(index) + "  " + display_name(channel);
-        row.label = fonts_.semibold.font ? readable(fonts_.semibold, name) : name;
+        row.label = name;
         if (const auto programme = model_.guide().now(channel.id, time))
-            row.value =
-                fonts_.regular.font ? readable(fonts_.regular, programme->title) : programme->title;
+            row.value = programme->title;
         row.checked = channel.id == current_id_;
         model.rows.push_back(std::move(row));
     }
@@ -1434,7 +1433,8 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
     }
     if (!last_activity_ || !paused_)
         last_activity_ = now;
-    if (sleeping(now))
+    screen_sleeping_ = sleeping(now);
+    if (screen_sleeping_)
     {
         if (!surface)
             return true;
@@ -1660,6 +1660,8 @@ int PlaybackOsd::draw_screen(void *color, void *mask, std::size_t bytes, unsigne
     state.controls = controls_wanted_ && sheet_ && !controls_cue_.bitmaps.empty();
     state.badge = badge_wanted_ && sheet_ && !badge_cue_.bitmaps.empty();
     state.captions = captions_ && !styled_subtitles_.bitmaps.empty();
+    if (screen_sleeping_)
+        state.menu = state.panel = state.controls = state.badge = state.captions = false;
     if (state.captions)
         state.captions_y = (overlay_wanted_ ? (history_.available ? 660 : 740) : 1030) -
                            static_cast<int>(subtitle_panel_.height);

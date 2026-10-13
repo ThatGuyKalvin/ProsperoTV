@@ -362,3 +362,27 @@ TEST(SoftRaster, DrawsShapesLikeTheShader)
 }
 
 } // namespace
+
+TEST(PlayerSheet, ProviderRowsUseBothScriptFallbackFonts)
+{
+    const char *dir = std::getenv("KIT_FONTS");
+    hui::gfx::Font asian, korean;
+    auto fonts = menu_fonts().fonts;
+    MenuFonts::load(dir, "noto-sans-east-asian.huifont", &asian, &fonts.hand, 0xf0000005u);
+    MenuFonts::load(dir, "noto-sans-korean.huifont", &korean, &fonts.pixel, 0xf0000006u);
+    ptv::PlayerSheet sheet(fonts, {});
+    ptv::SheetModel model;
+    model.picker = true;
+    model.title = "Channels";
+    model.rows = {row(Kind::option, "1 中文", "한국어")};
+    iptv::SubtitleCue cue;
+    ASSERT_TRUE(sheet.paint(model, cue));
+    bool has_asian = false, has_korean = false;
+    for (const auto &run : sheet.recorded().runs())
+    {
+        has_asian |= run.texture == fonts.hand.texture;
+        has_korean |= run.texture == fonts.pixel.texture;
+    }
+    EXPECT_TRUE(has_asian);
+    EXPECT_TRUE(has_korean);
+}
