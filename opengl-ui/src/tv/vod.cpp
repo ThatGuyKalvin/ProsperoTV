@@ -9,6 +9,7 @@
 #include "iptv_store.h"
 #include "iptv_source_state.h"
 #include <algorithm>
+#include <limits>
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
@@ -88,11 +89,29 @@ bool detail_field(const std::string &key, JsonReader *value, VodDetails &details
                        }))
             return false;
     }
-    else if (!value->StringOrScalar(&text, target == &details.plot || target == &details.poster
-                                               ? 4096
-                                           : target == &details.cast ? 1024
-                                                                     : 256))
-        return false;
+    else
+    {
+        // Longer text than is kept is cut short, not refused: one show with a long cast list
+        // must not stop the whole list loading. A poster address that long is no address.
+        const std::size_t keep = target == &details.plot || target == &details.poster ? 4096
+                                 : target == &details.cast                            ? 1024
+                                                                                      : 256;
+        if (!value->OptionalStringOrScalar(
+                &text, target == &details.poster ? keep : std::numeric_limits<std::size_t>::max()))
+            return false;
+        if (text.size() > keep)
+        {
+            text.resize(keep);
+            // At a whole character, and for the cast at a whole name.
+            while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xc0u) == 0x80u)
+                text.pop_back();
+            if (!text.empty() && static_cast<unsigned char>(text.back()) >= 0xc0u)
+                text.pop_back();
+            if (const auto comma = text.rfind(',');
+                target == &details.cast && comma != 0 && comma != std::string::npos)
+                text.resize(comma);
+        }
+    }
     if (text == "null")
         text.clear();
     if (target == &details.year)
@@ -185,7 +204,8 @@ struct Parser
                             if (key == "name" || key == "title")
                                 return value->StringOrScalar(&name);
                             if (key == "stream_icon" || key == "cover")
-                                return value->StringOrScalar(&logo, iptv::kDefaultMaxUrlBytes);
+                                return value->OptionalStringOrScalar(&logo,
+                                                                     iptv::kDefaultMaxUrlBytes);
                             if (key == "is_adult")
                                 return value->StringOrScalar(&adult, 8);
                             if (key == "category_id")
@@ -314,8 +334,7 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
                                               });
                          }
                          return ReadObject(value,
-                                           [&](const std::string &season, JsonReader *episodes)
-                                           {
+                                           [&](const std::string &season, JsonReader *episodes) {
                                                return ReadArray(
                                                    episodes, [&](JsonReader *episode)
                                                    { return parser.item(episode, season); });
