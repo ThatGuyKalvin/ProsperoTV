@@ -78,6 +78,11 @@ void iptv_audio_decoder_free(iptv_audio_decoder_t **decoder)
     *decoder = NULL;
 }
 
+unsigned iptv_audio_decoder_source_channels(const iptv_audio_decoder_t *d)
+{
+    return d && d->layout.nb_channels > 0 ? (unsigned)d->layout.nb_channels : 0;
+}
+
 iptv_audio_decoder_t *iptv_audio_decoder_create(uint32_t type)
 {
     return iptv_audio_decoder_create_channels(type, 2);
@@ -89,6 +94,7 @@ iptv_audio_decoder_t *iptv_audio_decoder_create_channels(uint32_t type, unsigned
         return NULL;
     enum AVCodecID id = type == 0x81u   ? AV_CODEC_ID_AC3
                         : type == 0x87u ? AV_CODEC_ID_EAC3
+                        : type == 0x82u ? AV_CODEC_ID_DTS
                         : type == 0x11u ? AV_CODEC_ID_AAC_LATM
                                         : AV_CODEC_ID_AAC;
     const AVCodec *codec = avcodec_find_decoder(id);

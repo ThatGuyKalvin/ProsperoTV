@@ -26,6 +26,10 @@ extern "C"
         uint32_t field;       /* 0: full picture; 1/2: reconstruct top/bottom field. */
         uint32_t cpu_written; /* Copy and flush CPU-decoded surfaces before the GPU reads. */
         iptv_color_info_t color;
+        /* The sound being played: its transport stream type in bits 0-7, 1 for the console's
+         * decoder or 2 for software in bits 8-15, the source's channels from bit 16; 0 for
+         * none. */
+        uint32_t audio;
     } iptv_native_video_overlay_t;
 
     /* Register only between foreground sessions; the player joins its workers
@@ -74,6 +78,9 @@ extern "C"
                                                  uint32_t bit_depth,
                                                  const iptv_native_video_overlay_t *overlay);
     int32_t iptv_native_agc_present_finish_frame(void);
+    /* When the picture iptv_native_agc_present_finish_frame last saw reach the screen, as
+     * CLOCK_MONOTONIC microseconds from the flip's own time; 0 when unknown. */
+    uint64_t iptv_native_agc_last_flip_us(void);
     int32_t iptv_native_agc_loading_start(void);
     void iptv_native_agc_loading_stop(void);
     void iptv_native_agc_set_overlay_enabled(int enabled);

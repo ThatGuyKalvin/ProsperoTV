@@ -105,6 +105,7 @@ int32_t sceKernelMapDirectMemory(void **address, size_t length, int protection, 
 int32_t sceKernelMunmap(void *address, size_t length);
 int32_t sceKernelReleaseDirectMemory(int64_t direct_memory_start, size_t length);
 int32_t sceKernelUsleep(uint32_t microseconds);
+uint64_t sceKernelGetProcessTime(void);
 int scePthreadCreate(void **thread, const void *attributes, void *(*entry)(void *), void *argument,
                      const char *name);
 int scePthreadJoin(void *thread, void **result);
@@ -430,6 +431,7 @@ static const uint8_t *glyph_rows(char character)
     static const uint8_t s[7] = {15, 16, 16, 14, 1, 1, 30};
     static const uint8_t t[7] = {31, 4, 4, 4, 4, 4, 4};
     static const uint8_t v[7] = {17, 17, 17, 17, 17, 10, 4};
+    static const uint8_t w[7] = {17, 17, 17, 21, 21, 21, 10};
     static const uint8_t x[7] = {17, 17, 10, 4, 10, 17, 17};
     static const uint8_t dot[7] = {0, 0, 0, 0, 0, 6, 6};
 
@@ -475,6 +477,8 @@ static const uint8_t *glyph_rows(char character)
         return t;
     case 'V':
         return v;
+    case 'W':
+        return w;
     case 'X':
         return x;
     case '.':
@@ -680,7 +684,7 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
 
     if (iptv_native_agc_overlay_enabled())
     {
-        char text[96];
+        char text[128];
         const uint32_t x = visible_width >= 200u ? 16u : 4u;
         const uint32_t y = 16u;
         const uint32_t height = 7u * scale + 12u;
@@ -698,6 +702,24 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
             bytes = snprintf(text, sizeof(text), "%s %uX%u %u.%02u FPS %u KBPS", codec,
                              overlay->width, overlay->height, overlay->fps_x100 / 100u,
                              overlay->fps_x100 % 100u, overlay->bitrate_kbps);
+        /* Then the sound: its format, the source's channels, and the console's decoder (HW)
+         * or software (SW). */
+        const uint32_t audio_type = overlay->audio & 0xffu, channels = overlay->audio >> 16;
+        if (bytes > 0 && (size_t)bytes < sizeof(text) && audio_type && channels)
+        {
+            const char *sound = audio_type == 0x0fu   ? "AAC"
+                                : audio_type == 0x11u ? "AAC LATM"
+                                : audio_type == 0x81u ? "AC3"
+                                : audio_type == 0x87u ? "EAC3"
+                                : audio_type == 0x82u ? "DTS"
+                                                      : "MP2";
+            const int more =
+                snprintf(text + bytes, sizeof(text) - (size_t)bytes, "  %s %uCH %s", sound,
+                         channels, ((overlay->audio >> 8) & 0xffu) == 1u ? "HW" : "SW");
+            if (more > 0)
+                bytes =
+                    (size_t)(bytes + more) < sizeof(text) ? bytes + more : (int)sizeof(text) - 1;
+        }
         if (bytes > 0 && x < visible_width && y < visible_height)
         {
             width = (uint32_t)bytes * 6u * scale + 12u;
@@ -1497,6 +1519,28 @@ void iptv_native_agc_present_set_cancelled(int cancelled)
     atomic_store_explicit(&present_cancelled, cancelled != 0, memory_order_relaxed);
 }
 
+static uint64_t last_flip_us;
+
+uint64_t iptv_native_agc_last_flip_us(void)
+{
+    return last_flip_us;
+}
+
+// The flip status holds the process time of the last flip (its second field). Taken against
+// the process time and CLOCK_MONOTONIC read together, it says when that picture reached the
+// screen on the clock the player times pictures and sound with.
+static uint64_t flip_monotonic_us(uint64_t flip_process_us)
+{
+    struct timespec now = {0};
+    const uint64_t process = sceKernelGetProcessTime();
+    if (!flip_process_us || flip_process_us > process ||
+        process - flip_process_us > UINT64_C(1000000) || clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return 0;
+    const uint64_t monotonic =
+        (uint64_t)now.tv_sec * UINT64_C(1000000) + (uint64_t)now.tv_nsec / UINT64_C(1000);
+    return monotonic > process - flip_process_us ? monotonic - (process - flip_process_us) : 0;
+}
+
 int32_t iptv_native_agc_present_finish_frame(void)
 {
     uint64_t status[16] = {0};
@@ -1509,6 +1553,9 @@ int32_t iptv_native_agc_present_finish_frame(void)
         if (sceVideoOutGetFlipStatus(presenter.video, status) == 0 &&
             (int64_t)status[3] >= presenter.pending_marker)
         {
+            // Only the flip of this very picture tells when it was shown.
+            last_flip_us =
+                (int64_t)status[3] == presenter.pending_marker ? flip_monotonic_us(status[1]) : 0;
             presenter.pending_marker = 0;
             if (presenter.report_color && atomic_load(&sample_color_output))
             {
@@ -1840,6 +1887,10 @@ int sceVideoOutGetFlipStatus(int32_t handle, void *status)
     ((int64_t *)status)[3] = INT64_MAX;
     return 0;
 }
+uint64_t sceKernelGetProcessTime(void)
+{
+    return 0;
+}
 int sceVideoOutGetOutputStatus(int32_t handle, video_output_status_t *status)
 {
     (void)handle;
@@ -1985,6 +2036,20 @@ int main(void)
                 }
             assert(white);
         }
+    }
+    /* The sound follows the video's figures on the same line: "  DTS 6CH SW" takes the panel
+     * past where the video's figures alone end (at x = 364). */
+    presenter.hdr = 0;
+    presenter.source_transfer = 0;
+    iptv_native_video_overlay_t sound = overlay;
+    sound.show_controls = 0;
+    for (unsigned with_sound = 0; with_sound <= 1; ++with_sound)
+    {
+        sound.audio = with_sound ? 0x82u | 2u << 8 | 6u << 16 : 0;
+        memset(source, 0x5a, sizeof(source));
+        draw_video_overlay(source, sizeof(source), pitch, height, width, visible_height, &sound, 1);
+        assert(((uint8_t *)source)[20 * pitch + 300] != 0x5a);
+        assert((((uint8_t *)source)[20 * pitch + 450] != 0x5a) == (int)with_sound);
     }
     return 0;
 }

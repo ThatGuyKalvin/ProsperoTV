@@ -905,8 +905,18 @@ TEST_F(VodTest, SoundDelayChangesOnlyInsideAudioMenuAndIsBounded)
     EXPECT_EQ(controls.take_audio_delay(), 2000);
     EXPECT_EQ(controls.input(IPTV_INPUT_SQUARE, 150), 1);
     EXPECT_EQ(controls.take_audio_delay(), 0);
-    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 151), 1);
-    controls.input(IPTV_INPUT_GO_LIVE, 152);
+    // Left and Right on Sound delay are fine steps; L2 and R2 coarse ones.
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 151), 1);
+    EXPECT_EQ(controls.take_audio_delay(), 10);
+    controls.input(IPTV_INPUT_LEFT, 152);
+    controls.input(IPTV_INPUT_LEFT, 153);
+    EXPECT_EQ(controls.take_audio_delay(), -10);
+    controls.input(IPTV_INPUT_PLAY_PAUSE, 154);
+    EXPECT_EQ(controls.take_audio_delay(), -60);
+    EXPECT_EQ(controls.input(IPTV_INPUT_SQUARE, 155), 1);
+    EXPECT_EQ(controls.take_audio_delay(), 0);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 156), 1);
+    controls.input(IPTV_INPUT_GO_LIVE, 157);
     EXPECT_FALSE(controls.take_audio_delay());
     model.close();
 }

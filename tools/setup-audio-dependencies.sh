@@ -48,9 +48,9 @@ cd "$build"
     --enable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
     --enable-avcodec --enable-avutil --enable-swresample --enable-avformat \
     --enable-demuxer=mov,matroska,hls,webvtt --enable-muxer=mpegts \
-    --enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio \
+    --enable-parser=h264,hevc,aac,aac_latm,ac3,dca,mpegaudio \
     --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb \
-    --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,h264,hevc,text,subrip,ass,movtext,webvtt,dvbsub,dvdsub,pgssub
+    --enable-decoder=aac,aac_latm,ac3,eac3,dca,mp2,mp3,h264,hevc,text,subrip,ass,movtext,webvtt,dvbsub,dvdsub,pgssub
 # The SDK probe linker permits unresolved imports. PS5 exports gmtime, not
 # gmtime_r; select FFmpeg's own portability fallback instead of a bogus import.
 if [[ $target == ps5 ]]; then

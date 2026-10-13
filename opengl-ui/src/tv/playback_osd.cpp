@@ -611,7 +611,8 @@ int PlaybackOsd::handle(int action, std::uint64_t now)
             else if (action == IPTV_INPUT_RIGHT)
                 action = IPTV_INPUT_LEFT;
         }
-        // L2 and R2 move the sound earlier and later wherever the menu is.
+        // L2 and R2 move the sound earlier and later wherever the menu is, 50 ms at a time;
+        // Left and Right on Sound delay by 10 ms, fine enough to set lip sync.
         if (action == IPTV_INPUT_PLAY_PAUSE || action == IPTV_INPUT_GO_LIVE)
         {
             const int step = action == IPTV_INPUT_PLAY_PAUSE ? -50 : 50;
@@ -657,7 +658,7 @@ int PlaybackOsd::handle(int action, std::uint64_t now)
             audio_delay_ = audio_.delay_ms =
                 action == IPTV_INPUT_SQUARE
                     ? 0
-                    : std::clamp(audio_.delay_ms + (action == IPTV_INPUT_LEFT ? -50 : 50), -2000,
+                    : std::clamp(audio_.delay_ms + (action == IPTV_INPUT_LEFT ? -10 : 10), -2000,
                                  2000);
         else if (setting_ != Setting::delay &&
                  (action == IPTV_INPUT_CROSS || action == IPTV_INPUT_RIGHT))
@@ -867,6 +868,7 @@ std::vector<SheetRow> PlaybackOsd::menu_options(Setting setting) const
                 label += " (" + std::string(track.language, strnlen(track.language, 3)) + ")";
             std::string detail = track.stream_type == 0x81                          ? "AC-3"
                                  : track.stream_type == 0x87                        ? "E-AC-3"
+                                 : track.stream_type == 0x82                        ? "DTS"
                                  : track.stream_type == 3 || track.stream_type == 4 ? "MPEG audio"
                                                                                     : "AAC";
             if (track.audio_type == 2)
@@ -1127,7 +1129,7 @@ SheetModel PlaybackOsd::menu_model() const
             row.current = audio_.delay_ms;
             row.low = -2000;
             row.high = 2000;
-            row.step = 50;
+            row.step = 10;
         }
         else
         {

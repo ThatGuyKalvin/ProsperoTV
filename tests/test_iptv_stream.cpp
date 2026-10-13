@@ -946,6 +946,120 @@ TEST(IptvStreamTest, SelectsDolbyDescriptorsAndLatmAndReassemblesPrivatePes)
     }
 }
 
+TEST(IptvStreamTest, AnEac3DependentSubstreamTakesNoTimeOfItsOwn)
+{
+    // 7.1 E-AC-3 follows each frame with a dependent substream for the extra channels. Timed
+    // as a frame of its own, it put every later frame of the packet 32 ms late.
+    std::vector<std::uint8_t> independent(16, 0);
+    independent[0] = 0x0b;
+    independent[1] = 0x77;
+    independent[3] = 7;
+    independent[4] = 0x30;
+    independent[5] = 0x80;
+    auto dependent = independent;
+    dependent[2] = 0x40;
+    std::vector<std::uint8_t> payload = independent;
+    payload.insert(payload.end(), dependent.begin(), dependent.end());
+    payload.insert(payload.end(), independent.begin(), independent.end());
+    FakeBackend fake;
+    iptv_stream_backend_t backend{};
+    backend.context = &fake;
+    backend.open = FakeOpen;
+    backend.submit_video = FakeVideo;
+    backend.submit_audio = FakeAudio;
+    backend.disable_audio = FakeDisableAudio;
+    backend.drain = FakeDrain;
+    backend.close = FakeClose;
+    iptv_stream_session_t session{};
+    iptv_stream_init(&session);
+    ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+    std::vector<std::uint8_t> bytes;
+    AppendPacket(&bytes, PsiPacket(0, PatSection()));
+    AppendPacket(&bytes, PsiPacket(0x100, PmtSection(0x87)));
+    AppendPacket(&bytes, H264Packet(0, true));
+    AppendPacket(&bytes, StampedPacket(PesPacket(0x111, 0, 0xbd, payload), 90000));
+    for (const auto byte : bytes)
+        ASSERT_EQ(iptv_stream_push(&session, &byte, 1), IPTV_STREAM_OK);
+    const auto *telemetry = iptv_stream_telemetry(&session);
+    EXPECT_EQ(fake.audios, 3u);
+    EXPECT_EQ(fake.disables, 0u);
+    EXPECT_EQ(telemetry->last_audio_pts_us, 1000000u + 32000u);
+    EXPECT_EQ(telemetry->format.audio_channels, 2u);
+    EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+}
+
+TEST(IptvStreamTest, PlaysDtsCoresAndPassesOverDtsHdExtensions)
+{
+    const auto put =
+        [](std::vector<std::uint8_t> &bytes, unsigned at, unsigned count, unsigned value)
+    {
+        for (unsigned i = 0; i < count; ++i)
+            if ((value >> (count - 1u - i)) & 1u)
+                bytes[(at + i) / 8u] |= static_cast<std::uint8_t>(0x80u >> ((at + i) % 8u));
+    };
+    // A 96-byte core of 512 samples at 48 kHz, five channels and the low-frequency one.
+    std::vector<std::uint8_t> core(96, 0);
+    core[0] = 0x7f;
+    core[1] = 0xfe;
+    core[2] = 0x80;
+    core[3] = 0x01;
+    put(core, 32, 1, 1);
+    put(core, 33, 5, 31);
+    put(core, 39, 7, 15);
+    put(core, 46, 14, 95);
+    put(core, 60, 6, 9);
+    put(core, 66, 4, 13);
+    put(core, 70, 5, 15);
+    put(core, 85, 2, 2);
+    // A 16-byte DTS-HD substream with an 8-byte header.
+    std::vector<std::uint8_t> extension(16, 0);
+    extension[0] = 0x64;
+    extension[1] = 0x58;
+    extension[2] = 0x20;
+    extension[3] = 0x25;
+    put(extension, 43, 8, 7);
+    put(extension, 51, 16, 15);
+    std::vector<std::uint8_t> both = core;
+    both.insert(both.end(), extension.begin(), extension.end());
+    const std::vector<std::vector<std::uint8_t>> descriptors{
+        {}, {0x7b, 0}, {0x05, 4, 'D', 'T', 'S', '1'}};
+    for (const auto &descriptor : descriptors)
+    {
+        FakeBackend fake;
+        iptv_stream_backend_t backend{};
+        backend.context = &fake;
+        backend.open = FakeOpen;
+        backend.submit_video = FakeVideo;
+        backend.submit_audio = FakeAudio;
+        backend.disable_audio = FakeDisableAudio;
+        backend.drain = FakeDrain;
+        backend.close = FakeClose;
+        iptv_stream_session_t session{};
+        iptv_stream_init(&session);
+        ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+        std::vector<std::uint8_t> bytes;
+        AppendPacket(&bytes, PsiPacket(0, PatSection()));
+        AppendPacket(&bytes, PsiPacket(0x100, PmtSection(descriptor.empty() ? 0x82 : 0x06, 0x111,
+                                                         0x1b, descriptor)));
+        AppendPacket(&bytes, H264Packet(0, true));
+        AppendPacket(&bytes, PesPacket(0x111, 0, 0xbd, core));
+        AppendPacket(&bytes, PesPacket(0x111, 1, 0xbd, both));
+        AppendPacket(&bytes, PesPacket(0x111, 2, 0xbd, core));
+        for (const auto byte : bytes)
+            ASSERT_EQ(iptv_stream_push(&session, &byte, 1), IPTV_STREAM_OK);
+        const auto *telemetry = iptv_stream_telemetry(&session);
+        EXPECT_EQ(telemetry->format.audio_stream_type, 0x82u);
+        EXPECT_EQ(telemetry->format.audio_sample_rate, 48000u);
+        EXPECT_EQ(telemetry->format.audio_channels, 6u);
+        EXPECT_EQ(telemetry->dropped_payloads, 0u);
+        EXPECT_EQ(fake.audios, 3u);
+        EXPECT_EQ(fake.disables, 0u);
+        EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+    }
+}
+
 TEST(IptvStreamTest, ResetsTransportTimelineWithoutReopeningBackend)
 {
     FakeBackend fake;

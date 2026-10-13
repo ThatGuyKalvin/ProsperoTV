@@ -998,6 +998,11 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
                 if (tag == 0x7au || (tag == 0x05u && length >= 4u &&
                                      std::memcmp(section + descriptor, "EAC3", 4) == 0))
                     audio_type = 0x87u;
+                if (tag == 0x7bu || (tag == 0x05u && length >= 4u &&
+                                     (std::memcmp(section + descriptor, "DTS1", 4) == 0 ||
+                                      std::memcmp(section + descriptor, "DTS2", 4) == 0 ||
+                                      std::memcmp(section + descriptor, "DTS3", 4) == 0)))
+                    audio_type = 0x82u;
             }
             if (tag == 0x0au)
             {
@@ -1768,8 +1773,18 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
         size_t frame_bytes = 0;
         if (iptv_audio_software_type(impl->format.audio_stream_type))
         {
-            if (impl->audio_es.size < 7u)
+            if (impl->audio_es.size < iptv_audio_frame_header_bytes(impl->format.audio_stream_type))
                 return IPTV_STREAM_OK;
+            if (const size_t skip = iptv_audio_frame_skip(impl->format.audio_stream_type,
+                                                          impl->audio_es.data, impl->audio_es.size);
+                skip && skip <= impl->audio_es.capacity)
+            {
+                if (skip > impl->audio_es.size)
+                    return IPTV_STREAM_OK;
+                buffer_erase(&impl->audio_es, skip);
+                marker_erase(&impl->audio_markers, skip, IPTV_STREAM_PTS_UNKNOWN);
+                continue;
+            }
             frame_bytes = iptv_audio_frame_info(impl->format.audio_stream_type, impl->audio_es.data,
                                                 impl->audio_es.size, &rate, &samples);
             if (!frame_bytes)
@@ -1845,7 +1860,9 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
             return disable_audio(session, impl,
                                  "audio format changed; continuing with silent video");
         impl->format.audio_sample_rate = rate;
-        impl->format.audio_channels = channels;
+        // An E-AC-3 dependent substream names no channels of its own: keep the frame's.
+        if (channels || !channels_may_change)
+            impl->format.audio_channels = channels;
         session->telemetry.format = impl->format;
 
         /* Keep complete frames bounded until video parameter sets permit the

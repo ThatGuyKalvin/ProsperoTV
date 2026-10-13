@@ -118,7 +118,11 @@ int main(int argc, char **argv)
         if (getenv("AUDIO_TEST_PRINT"))
             printf("type %u pass %u peak %d\n", type, pass, peak);
         assert(peak >= least_peak && peak <= CEILING);
+        /* The source's channels, before the downmix: a 5.1 fixture says 6 even in stereo. */
+        const unsigned source = iptv_audio_decoder_source_channels(decoder);
+        assert(source >= 1 && source <= 8 && (least_peak < 22000 || source == 6));
         iptv_audio_decoder_reset(decoder);
+        assert(iptv_audio_decoder_source_channels(decoder) == 0);
     }
     uint32_t rate = 0, samples = 0;
     size_t first_frame = type == 15 ? ((data[3] & 3u) << 11) + (data[4] << 3) + (data[5] >> 5)

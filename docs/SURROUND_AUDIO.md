@@ -5,7 +5,7 @@ Settings > Audio output offers Stereo (the default) and 5.1 surround. Choose
 playback. The setting is saved per profile, included in settings backups,
 translated, and protected by the existing parent lock.
 
-AAC, AC-3 and E-AC-3 software decoding preserves six PCM channels in
+AAC, AC-3, E-AC-3 and DTS software decoding preserves six PCM channels in
 FL, FR, FC, LFE, BL, BR order. Side-surround layouts are remapped and 7.1
 sources are mixed to 5.1. Stereo sources retain silent rear channels. Playback
 speed, sample-rate conversion, user volume and optional loudness normalization

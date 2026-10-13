@@ -78,7 +78,7 @@ int main() {
             # reach of a mix scaled down so that it cannot clip (it peaked near 9650).
             for kind, fixture, least_peak in ((15, "aac-stereo.aac", 0), (15, "aac-surround.bin", 22000),
                                               (129, "ac3-surround.bin", 22000), (135, "eac3-surround.bin", 22000),
-                                              (17, "aac-latm.bin", 0)):
+                                              (130, "dts-surround.bin", 22000), (17, "aac-latm.bin", 0)):
                 with self.subTest(fixture=fixture):
                     subprocess.run([executable, str(kind), str(ROOT / "tests/fixtures" / fixture), str(least_peak)],
                                    check=True, timeout=10)
@@ -92,14 +92,15 @@ int main() {
                 "src/iptv_audio_decode.c", "tests/test_audio_decode.c", *flags, "-lm", "-o", executable], cwd=ROOT, check=True)
             for codec, kind, layout, channels in (("aac", 15, "5.1", 6), ("aac", 15, "5.1(side)", 6),
                                                   ("aac", 15, "7.1", 8), ("ac3", 129, "5.1(side)", 6),
-                                                  ("eac3", 135, "5.1(side)", 6)):
+                                                  ("eac3", 135, "5.1(side)", 6), ("dca", 130, "5.1(side)", 6)):
                 for speaker in range(channels):
                     fixture = str(Path(directory) / "speaker.aac")
                     tones = ["0"] * channels
                     tones[speaker] = "0.5*sin(2*PI*%d*t)" % (60 if speaker == 3 else 997)
                     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                         "aevalsrc=" + "|".join(tones) + ":s=48000:d=0.2:c=" + layout,
-                        "-c:a", codec, "-b:a", "512k", "-f", "adts" if codec == "aac" else codec, fixture], check=True)
+                        "-c:a", codec, "-strict", "-2", "-b:a", "768k" if codec == "dca" else "512k",
+                        "-f", {"aac": "adts", "dca": "dts"}.get(codec, codec), fixture], check=True)
                     mapped = speaker if speaker < 6 else speaker - 2
                     with self.subTest(codec=codec, layout=layout, speaker=speaker):
                         subprocess.run([executable, str(kind), fixture, "1000", "6", str(1 << mapped)], check=True, timeout=10)

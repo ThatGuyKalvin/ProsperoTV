@@ -322,10 +322,13 @@ struct Reader
         return 0;
     }
 };
-bool audio_supported(AVCodecID codec)
+bool audio_supported(const AVCodecParameters &p)
 {
-    return codec == AV_CODEC_ID_AAC || codec == AV_CODEC_ID_MP2 || codec == AV_CODEC_ID_MP3 ||
-           codec == AV_CODEC_ID_AC3 || codec == AV_CODEC_ID_EAC3;
+    // DTS plays its core; DTS Express has none.
+    return p.codec_id == AV_CODEC_ID_AAC || p.codec_id == AV_CODEC_ID_MP2 ||
+           p.codec_id == AV_CODEC_ID_MP3 || p.codec_id == AV_CODEC_ID_AC3 ||
+           p.codec_id == AV_CODEC_ID_EAC3 ||
+           (p.codec_id == AV_CODEC_ID_DTS && p.profile != AV_PROFILE_DTS_EXPRESS);
 }
 } // namespace
 bool NormalizeHlsWebVtt(std::string_view segment, std::string &normalized)
@@ -557,7 +560,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             (p->codec_id == AV_CODEC_ID_H264 || p->codec_id == AV_CODEC_ID_HEVC ||
              (p->codec_id == AV_CODEC_ID_VP9 && output.vp9_packet)))
             video = static_cast<int>(i);
-        if (p->codec_type == AVMEDIA_TYPE_AUDIO && audio_supported(p->codec_id))
+        if (p->codec_type == AVMEDIA_TYPE_AUDIO && audio_supported(*p))
             tracks.push_back(static_cast<int>(i));
         if (p->codec_type == AVMEDIA_TYPE_SUBTITLE &&
             subtitle_codec(p->codec_id) != SubtitleCodec::none && p->extradata_size >= 0 &&

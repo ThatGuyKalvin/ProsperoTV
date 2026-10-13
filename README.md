@@ -148,8 +148,9 @@
   following the focused one. Four 720p H.264 feeds are validated on hardware;
   higher resolutions depend on the decoder resources available.
 - Codec, resolution, frame rate, and bitrate appear for five seconds when playback
-  starts, then disappear like the bottom playback banner. Press **Touchpad + R1**
-  to show them again for five seconds.
+  starts, with the sound's format, channels, and whether the console's decoder
+  (HW) or software (SW) is decoding it, then disappear like the bottom playback
+  banner. Press **Touchpad + R1** to show them again for five seconds.
 
 ### Picture and sound
 
@@ -158,8 +159,9 @@
 - Show HDR10 and HLG channels as HDR, with SDR tone mapping when HDR output is
   not available.
 - Present each field of an interlaced broadcast separately to keep its motion.
-- Play AAC, MP2, AC-3, and E-AC-3 sound, with Stereo by default and optional
-  [decoded 5.1 surround](docs/SURROUND_AUDIO.md) for compatible HDMI receivers.
+- Play AAC, MP2, AC-3, E-AC-3, and DTS sound (the core of a DTS-HD track), with
+  Stereo by default and optional [decoded 5.1 surround](docs/SURROUND_AUDIO.md)
+  for compatible HDMI receivers.
 - Keep the picture in step with the sound: frames are timed against the sound
   being played.
 - Adapt buffering to live HLS timing, and recover from stale segments and
@@ -245,7 +247,7 @@ at 3840×2160. Codec and renderer details are documented in
 | Circle during playback | Close the open panel, or stop playback and return to the browser |
 | Options during playback | Open or close the audio/subtitle/picture panel |
 | L1 / R1 in the playback panel | Switch between Audio, Subtitles and Picture |
-| Touchpad + R1 during playback | Show codec and FPS/performance statistics for five seconds |
+| Touchpad + R1 during playback | Show video and sound codecs and FPS/performance statistics for five seconds |
 
 During playback, Options then L1 opens Picture. Fit preserves the decoded picture's
 proportions by default; Stretch fills the screen, while 4:3 and 16:9 correct

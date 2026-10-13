@@ -9,6 +9,8 @@ the synthetic signals are dedicated to the public domain under CC0-1.0.
   0.15 seconds, 192 kbps, with a 997 Hz signal **only in the center channel**.
   This verifies that stereo downmix retains dialogue rather than merely taking
   the first two source channels.
+- `dts-surround.bin`: the same 5.1 center-channel tone, 0.15 seconds, encoded at
+  768 kbps with FFmpeg's experimental DTS (`dca`) encoder as a raw DTS stream.
 
 The decoder check verifies nonzero left/right output, decoding after reset, and that the
 surround fixtures' tone comes out at the source's level rather than scaled down.

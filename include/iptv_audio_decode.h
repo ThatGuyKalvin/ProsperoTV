@@ -12,6 +12,9 @@ iptv_audio_decoder_t *iptv_audio_decoder_create_channels(uint32_t stream_type, u
 void iptv_audio_limit_to_s16_channels(float *gain, uint32_t sample_rate, const float *samples,
                                       size_t frames, unsigned channels, int16_t *pcm);
 void iptv_audio_decoder_free(iptv_audio_decoder_t **decoder);
+/* The channels of the last decoded frame as the source has them, before any downmix; 0 before
+ * the first. */
+unsigned iptv_audio_decoder_source_channels(const iptv_audio_decoder_t *decoder);
 void iptv_audio_decoder_reset(iptv_audio_decoder_t *decoder);
 /* Returns PCM bytes (possibly zero while buffering), or a negative codec error. */
 int iptv_audio_decode(iptv_audio_decoder_t *decoder, const uint8_t *data, size_t bytes,
