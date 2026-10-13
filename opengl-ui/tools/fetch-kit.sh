@@ -21,7 +21,7 @@ if [[ -n ${KIT:-} ]]; then
     printf '%s\n' "$kit"
     exit 0
 fi
-pin=4bd942579dd981b3df9c740438489ca6a614ddc0
+pin=dbf8286661224c7d8b01fdea62052251eec43eca
 kit="$root/.deps/ps5-homebrew-ui"
 if [[ $(git -C "$kit" rev-parse HEAD 2>/dev/null || true) != "$pin" ]]; then
     rm -rf -- "$kit"
