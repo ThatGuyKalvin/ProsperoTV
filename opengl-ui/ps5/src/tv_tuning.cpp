@@ -21,7 +21,6 @@ enum class Phase
 {
     running,    // the channel opens: the bar creeps between its floor and ceiling
     completing, // the first picture is ready: the bar runs to its end
-    holding,    // a breath at 100 %
     fading,     // the screen goes to black
     done,
 };
@@ -218,29 +217,25 @@ extern "C" int tv_tuning_compose(void *surface, size_t surface_bytes)
             s.progress += (ceiling - s.progress) * (1.0f - std::exp(-dt / 2.5f));
         break;
     }
+    // The first picture is ready and waits for the rest: the bar runs out in 120 ms and the
+    // screen fades in 150 ms, about 0.3 s. A 260 ms run-out, a 90 ms hold at the end and a
+    // 280 ms fade held the picture back 0.7 s at every start and every seek.
     case Phase::completing:
     {
-        const float t = static_cast<float>(now - s.phase_us) / 260000.0f;
+        const float t = static_cast<float>(now - s.phase_us) / 120000.0f;
         const float eased = t >= 1.0f ? 1.0f : 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
         s.progress = s.from + (1.0f - s.from) * eased;
         if (t >= 1.0f)
         {
-            s.phase = Phase::holding;
-            s.phase_us = now;
-        }
-        break;
-    }
-    case Phase::holding:
-        s.progress = 1.0f;
-        if (now - s.phase_us >= 90000u)
-        {
+            // This frame shows the bar full; the next begins the fade.
             s.phase = Phase::fading;
             s.phase_us = now;
         }
         break;
+    }
     case Phase::fading:
     {
-        const float t = static_cast<float>(now - s.phase_us) / 280000.0f;
+        const float t = static_cast<float>(now - s.phase_us) / 150000.0f;
         brightness = t >= 1.0f ? 0.0f : 1.0f - t * t * (3.0f - 2.0f * t);
         if (t >= 1.0f)
             s.phase = Phase::done; // this frame is black; the next call ends it
@@ -275,7 +270,7 @@ extern "C" int tv_tuning_compose(void *surface, size_t surface_bytes)
             s.dumped_middle = true;
             dump(surface, s.dump_dir + "/tuning-2-middle.bmp");
         }
-        else if (!s.dumped_end && s.phase == Phase::holding)
+        else if (!s.dumped_end && s.progress >= 1.0f)
         {
             s.dumped_end = true;
             dump(surface, s.dump_dir + "/tuning-3-complete.bmp");

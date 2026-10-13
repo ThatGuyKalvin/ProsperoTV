@@ -1202,10 +1202,35 @@ static int32_t teardown_presenter(int drain)
     return first_result;
 }
 
+static uint32_t startup_steps_us[5];
+
+void iptv_native_agc_last_startup_us(uint32_t steps[5])
+{
+    memcpy(steps, startup_steps_us, sizeof(startup_steps_us));
+}
+
+static uint64_t startup_clock_us(void)
+{
+    struct timespec now = {0};
+    (void)clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * UINT64_C(1000000) + (uint64_t)now.tv_nsec / UINT64_C(1000);
+}
+
+static uint32_t startup_step(uint64_t *since)
+{
+    const uint64_t now = startup_clock_us();
+    const uint64_t step = now - *since;
+    *since = now;
+    return step > UINT32_MAX ? UINT32_MAX : (uint32_t)step;
+}
+
 static int32_t initialize_presenter(const void *source, size_t source_bytes, uint32_t visible_width,
                                     uint32_t visible_height, int main10)
 {
     const output_geometry_t output = output_geometry_for(visible_width, visible_height);
+    const uint64_t startup_began = startup_clock_us();
+    uint64_t step_began = startup_began;
+    uint32_t steps[5] = {0};
     int64_t direct_limit = sceKernelGetDirectMemorySize();
     int32_t result = 0;
     int32_t link_result = -1;
@@ -1287,8 +1312,10 @@ static int32_t initialize_presenter(const void *source, size_t source_bytes, uin
         goto fail;
     }
 
+    steps[1] = startup_step(&step_began);
     presenter.video = sceVideoOutOpen(0xff, 0, 0, NULL);
     result = presenter.video >= 0 ? sceVideoOutSetFlipRate(presenter.video, 0) : presenter.video;
+    steps[2] = startup_step(&step_began);
     if (result == 0)
         result = sceKernelAllocateDirectMemory(0, direct_limit, presenter.framebuffer_pool_bytes,
                                                FRAMEBUFFER_ALIGNMENT, DIRECT_MEMORY_TYPE,
@@ -1320,6 +1347,7 @@ static int32_t initialize_presenter(const void *source, size_t source_bytes, uin
     if (result != 0)
         goto fail;
 
+    steps[3] = startup_step(&step_began);
     /* The controls' planes. Without them the controls are drawn into the picture instead. */
     presenter.screen_plane_bytes =
         (size_t)SCREEN_WIDTH * SCREEN_ROWS * 3u / 2u * (main10 ? 2u : 1u);
@@ -1332,6 +1360,9 @@ static int32_t initialize_presenter(const void *source, size_t source_bytes, uin
         presenter.screen = NULL;
     presenter.screen_hdr = 0;
     clear_screen();
+    steps[4] = startup_step(&step_began);
+    steps[0] = startup_step(&(uint64_t){startup_began});
+    memcpy(startup_steps_us, steps, sizeof(steps));
 
     presenter.ready = 1;
     return 0;

@@ -380,6 +380,12 @@ typedef struct backend_state
     _Atomic uint64_t audio_clock_time_us;
     _Atomic uint32_t audio_clock_generation;
     uint64_t av_report_us;
+    // From playback starting to its first picture, for the diagnostic log: when it began, the
+    // frames given to the decoder since, and when the decoder gave a picture back.
+    uint64_t start_trace_us;
+    uint64_t start_first_output_us;
+    uint32_t start_frames_in;
+    uint32_t start_output_frames;
     int64_t av_offset_min_us;
     int64_t av_offset_max_us;
     video_queue_item_t *video_queue;
@@ -1270,6 +1276,7 @@ static int audio_clock_now(const backend_state_t *state, uint64_t now, uint64_t 
 
 // The diagnostic log, every five seconds: how far the picture was from the sound.
 static void trace_av_offset(backend_state_t *state, uint64_t pts_us, uint64_t now);
+static void trace_first_picture(backend_state_t *state, uint64_t present_us);
 
 static uint64_t adjusted_audio_clock(const backend_state_t *state, uint64_t sound)
 {
@@ -1797,6 +1804,11 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     uint32_t reject_flags = 0;
 
     const uint32_t component_bytes = state->config.bit_depth == 10 ? 2u : 1u;
+    if (state->start_trace_us && !state->start_first_output_us)
+    {
+        state->start_first_output_us = monotonic_us();
+        state->start_output_frames = state->start_frames_in;
+    }
     required_bytes = (uint64_t)output->pitch *
                      (output->height + ((uint64_t)output->height + 1u) / 2u) * component_bytes;
     state->telemetry.decoder_output_valid = output->valid;
@@ -1952,6 +1964,8 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
                 state->config.visible_width, state->config.visible_height, state->config.bit_depth,
                 &overlay);
         elapsed = monotonic_us() - started;
+        if (state->start_trace_us && result == 0)
+            trace_first_picture(state, elapsed);
         state->telemetry.present_total_us += elapsed;
         if (elapsed > state->telemetry.present_max_us)
             state->telemetry.present_max_us = elapsed;
@@ -2037,6 +2051,8 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
 
     state->telemetry.last_video_access_unit_bytes = frame_bytes;
     state->telemetry.last_video_nal_mask = 0;
+    if (state->start_trace_us)
+        ++state->start_frames_in;
     if (state->config.codec == IPTV_NATIVE_CODEC_H264)
     {
         const uint8_t *bytes = (const uint8_t *)coded_frame;
@@ -2300,6 +2316,38 @@ static void trace_av_offset(backend_state_t *state, uint64_t pts_us, uint64_t no
     state->av_report_us = 0;
 }
 
+// Once per start: where the time from playback starting to its first picture went.
+static void trace_first_picture(backend_state_t *state, uint64_t present_us)
+{
+    const uint64_t now = monotonic_us();
+    if (tv_diag_enabled() && state->start_first_output_us >= state->start_trace_us)
+    {
+        uint32_t steps[5] = {0};
+        if (!state->config.picture)
+            iptv_native_agc_last_startup_us(steps);
+        // Between the decoder's picture and presenting it: pacing, and in the interface's build
+        // the tuning screen leaving.
+        const uint64_t presenting = now - present_us;
+        const uint64_t waited = presenting > state->start_first_output_us
+                                    ? presenting - state->start_first_output_us
+                                    : 0;
+        char line[352];
+        snprintf(
+            line, sizeof(line),
+            "[player] first picture: the decoder gave it %llu ms after playing began, %u "
+            "frames in; it waited %llu ms to be presented; presenting it took %llu ms (the "
+            "presenter's last start: %u ms, shaders %u, video output %u, framebuffers %u, "
+            "controls %u); %llu ms in all",
+            (unsigned long long)((state->start_first_output_us - state->start_trace_us) / 1000u),
+            state->start_output_frames, (unsigned long long)(waited / 1000u),
+            (unsigned long long)(present_us / 1000u), steps[0] / 1000u, steps[1] / 1000u,
+            steps[2] / 1000u, steps[3] / 1000u, steps[4] / 1000u,
+            (unsigned long long)((now - state->start_trace_us) / 1000u));
+        tv_diag_line(line);
+    }
+    state->start_trace_us = 0;
+}
+
 static void restart_playback_buffer(backend_state_t *state)
 {
     atomic_store(&state->playback_gate_started_us, monotonic_us());
@@ -2483,6 +2531,9 @@ static void *video_worker_entry(void *argument)
             }
             state->pace_active = 0;
             trace_playback_buffer(state, "filled, playing");
+            state->start_trace_us = monotonic_us();
+            state->start_first_output_us = 0;
+            state->start_frames_in = 0;
             atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         }
         const int32_t result =

@@ -71,6 +71,7 @@ TEST(TuningScreen, TheBarCreepsWithTheStagesThenRunsOutAndFades)
     // The first picture is ready: the bar runs to its end, the screen fades
     // to black, and then there is nothing more to show.
     tv_tuning_finishing();
+    const auto finishing = std::chrono::steady_clock::now();
     std::vector<std::uint8_t> complete;
     for (int frame = 0; frame < 200; ++frame)
     {
@@ -81,6 +82,8 @@ TEST(TuningScreen, TheBarCreepsWithTheStagesThenRunsOutAndFades)
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
     EXPECT_FALSE(complete.empty());
+    // The picture waits for all of it, at every start and seek: well under half a second.
+    EXPECT_LT(std::chrono::steady_clock::now() - finishing, std::chrono::milliseconds(500));
     EXPECT_EQ(tv_tuning_compose(surface.data(), surface.size()), 0);
     EXPECT_EQ(luma_at(surface, 100, 100), 16);
     EXPECT_EQ(luma_at(surface, static_cast<int>(kBarX + 20.0f), row), 16);
