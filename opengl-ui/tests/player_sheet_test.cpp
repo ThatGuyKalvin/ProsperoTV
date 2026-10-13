@@ -378,10 +378,12 @@ TEST(PlayerSheet, ProviderRowsUseBothScriptFallbackFonts)
     iptv::SubtitleCue cue;
     ASSERT_TRUE(sheet.paint(model, cue));
     bool has_asian = false, has_korean = false;
-    for (const auto &run : sheet.recorded().runs())
+    for (const auto &instance : sheet.recorded().instances())
     {
-        has_asian |= run.texture == fonts.hand.texture;
-        has_korean |= run.texture == fonts.pixel.texture;
+        if (instance.params[3] != static_cast<float>(hui::gfx::Shape::glyph))
+            continue;
+        has_asian |= instance.params[2] == 5.0f;
+        has_korean |= instance.params[2] == 6.0f;
     }
     EXPECT_TRUE(has_asian);
     EXPECT_TRUE(has_korean);
