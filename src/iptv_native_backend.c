@@ -82,6 +82,9 @@ unsigned iptv_native_get_volume(void)
 #define DEMUX_BUFFER_US (PLAYBACK_BUFFER_US + UINT64_C(1000000))
 #define PLAYBACK_START_TIMEOUT_US UINT64_C(8000000)
 #define PLAYBACK_UNDERRUN_GRACE_US UINT64_C(250000)
+/* A seek target at most this far past its keyframe lands exactly; further on, it lands on the
+ * keyframe rather than download pictures nobody sees. */
+#define SEEK_EXACT_WITHIN_US UINT64_C(1000000)
 #define VIDEO_MODULE_ID 207u
 #define AUDIO_MODULE_ID 0x0088u
 #define PACE_SLEEP_SLICE_US 5000u
@@ -416,6 +419,12 @@ typedef struct backend_state
     _Atomic int playback_started;
     _Atomic int programme_draining;
     _Atomic uint64_t playback_gate_started_us;
+    _Atomic uint32_t seek_hint_generation;
+    _Atomic uint64_t seek_hint_show_from_us;
+    _Atomic uint64_t seek_hint_refill_us;
+    _Atomic uint64_t playback_buffer_us;
+    uint64_t show_from_pts_us;
+    uint8_t seek_timeline;
 
     uint64_t open_started_us;
     uint64_t last_present_monotonic_us;
@@ -1746,6 +1755,69 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
     return 0;
 }
 
+static uint64_t playback_refill_us(const backend_state_t *state)
+{
+    const uint64_t refill = atomic_load_explicit(&state->playback_buffer_us, memory_order_relaxed);
+    return refill ? refill : PLAYBACK_BUFFER_US;
+}
+
+static int seek_hides_picture(const backend_state_t *state, uint64_t pts_us)
+{
+    return pts_us != UINT64_MAX && pts_us < state->show_from_pts_us;
+}
+
+static uint64_t first_shown_pts(const backend_state_t *state, uint32_t read)
+{
+    const uint64_t first = atomic_load(&state->video_queue[read % VIDEO_QUEUE_CAPACITY].pts_us);
+    return first != UINT64_MAX && state->show_from_pts_us > first ? state->show_from_pts_us : first;
+}
+
+static void begin_playback_timeline(backend_state_t *state, uint32_t generation,
+                                    uint64_t first_pts_us)
+{
+    uint64_t show_from = 0;
+    uint64_t refill = 0;
+    if (atomic_load_explicit(&state->seek_hint_generation, memory_order_acquire) == generation)
+    {
+        refill = atomic_load_explicit(&state->seek_hint_refill_us, memory_order_relaxed);
+        show_from = atomic_load_explicit(&state->seek_hint_show_from_us, memory_order_relaxed);
+        const uint64_t hidden = state->telemetry.software_video ? 0 : SEEK_EXACT_WITHIN_US;
+        if (first_pts_us == UINT64_MAX)
+            show_from = 0;
+        else if (show_from < first_pts_us || show_from - first_pts_us > hidden)
+            show_from = first_pts_us;
+    }
+    state->show_from_pts_us = show_from;
+    state->seek_timeline =
+        atomic_load_explicit(&state->seek_hint_generation, memory_order_relaxed) == generation;
+    atomic_store_explicit(&state->playback_buffer_us, refill, memory_order_relaxed);
+}
+
+static int decodes_hidden(const backend_state_t *state, uint64_t pts_us)
+{
+    return state->seek_timeline && seek_hides_picture(state, pts_us);
+}
+
+static int seek_still_pending(const backend_state_t *state)
+{
+    return state->seek_timeline &&
+           atomic_load_explicit(&state->presented_generation, memory_order_acquire) !=
+               state->video_generation;
+}
+
+static int seek_still_wanted(const backend_state_t *state)
+{
+    const uint32_t read = atomic_load_explicit(&state->video_queue_read, memory_order_acquire);
+    if (!state->video_queue || read == atomic_load(&state->video_queue_write))
+        return 0;
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    if (state->video_generation == generation)
+        return seek_still_pending(state);
+    return state->video_queue[read % VIDEO_QUEUE_CAPACITY].generation == generation &&
+           atomic_load_explicit(&state->seek_hint_generation, memory_order_acquire) == generation;
+}
+
 static int32_t complete_pending_presentation(backend_state_t *state)
 {
     uint64_t started;
@@ -1939,6 +2011,8 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         state->telemetry.state = state->state;
         return IPTV_NATIVE_E_DECODER_OUTPUT;
     }
+    if (seek_hides_picture(state, presentation_pts_us))
+        displayable = 0;
 
     iptv_field_info_t fields = state->pending_pts.taken_fields;
     if (fields.first && !fields.duration_us && presentation_pts_us != UINT64_MAX &&
@@ -2059,7 +2133,10 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         state->pending_present_from_drain = (uint8_t)(from_drain != 0);
         state->pending_handover_us = handed_over_us;
         state->presentation_pending = 1;
-        if (state->telemetry.presented_frames == 0)
+        if (state->telemetry.presented_frames == 0 ||
+            (state->seek_timeline &&
+             atomic_load_explicit(&state->presented_generation, memory_order_relaxed) !=
+                 state->video_generation))
         {
             result = complete_pending_presentation(state);
             if (result != 0)
@@ -2278,6 +2355,7 @@ static int playback_queues_ready(const backend_state_t *state)
         atomic_load_explicit(&state->playback_gate_started_us, memory_order_acquire);
     const uint64_t now = monotonic_us();
     const uint32_t generation = atomic_load(&state->stream_generation);
+    const uint64_t refill = playback_refill_us(state);
     const int current_audio =
         audio_write != audio_read && atomic_load(&state->audio_generation) == generation;
     const int timed_out = gate_started_us != 0 && now >= gate_started_us &&
@@ -2294,10 +2372,9 @@ static int playback_queues_ready(const backend_state_t *state)
         state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].generation == generation &&
         (timed_out || pressure ||
          media_span_ready(
-             video_write - video_read,
-             atomic_load(&state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].pts_us),
+             video_write - video_read, first_shown_pts(state, video_read),
              atomic_load(&state->video_queue[(video_write - 1u) % VIDEO_QUEUE_CAPACITY].pts_us),
-             PLAYBACK_BUFFER_US));
+             refill));
     const uint32_t audio_rate = atomic_load(&state->audio_queue_sample_rate);
     const uint32_t audio_type = atomic_load(&state->audio_buffer_type);
     // AAC carries at least 1024 core samples; Layer II carries 1152 per frame and DTS
@@ -2310,7 +2387,7 @@ static int playback_queues_ready(const backend_state_t *state)
         !audio_type || atomic_load(&state->audio_sync_pending) || timed_out || pressure ||
         (current_audio && audio_rate &&
          (uint64_t)(audio_write - audio_read) * audio_samples * UINT64_C(1000000) / audio_rate >=
-             PLAYBACK_BUFFER_US);
+             refill);
     return video_ready && audio_ready;
 }
 
@@ -2430,6 +2507,12 @@ static void restart_playback_buffer(backend_state_t *state)
     atomic_store_explicit(&state->playback_started, 0, memory_order_release);
 }
 
+static void restart_after_underrun(backend_state_t *state)
+{
+    atomic_store_explicit(&state->playback_buffer_us, 0, memory_order_relaxed);
+    restart_playback_buffer(state);
+}
+
 static void release_queued_video(backend_state_t *state)
 {
     uint32_t read;
@@ -2460,7 +2543,7 @@ static int32_t pause_video(backend_state_t *state)
     if (result)
         return result;
     while (atomic_load(&state->paused) && !atomic_load(&state->stop_requested) &&
-           !atomic_load(&state->video_worker_stop))
+           !atomic_load(&state->video_worker_stop) && !seek_still_wanted(state))
     {
         const uint64_t now = monotonic_us();
         const iptv_native_picture_t *picture = &state->pause_picture;
@@ -2539,7 +2622,7 @@ static void *video_worker_entry(void *argument)
                                                      atomic_load(&state->video_queue_write)
                                                  ? "ran out of video"
                                                  : "ran out of sound");
-                restart_playback_buffer(state);
+                restart_after_underrun(state);
                 starved_since_us = 0;
             }
         }
@@ -2597,6 +2680,7 @@ static void *video_worker_entry(void *argument)
             state->pause_picture = (iptv_native_picture_t){0};
             state->pace_active = 0;
             state->video_generation = generation;
+            begin_playback_timeline(state, generation, atomic_load(&item->pts_us));
             // Old entries must be discarded before waiting for fresh media.
             // A seek to live needs the same cushion as initial playback.
             restart_playback_buffer(state);
@@ -2604,7 +2688,8 @@ static void *video_worker_entry(void *argument)
         }
         if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
             !atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) &&
-            !atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
+            !atomic_load_explicit(&state->stop_requested, memory_order_relaxed) &&
+            !decodes_hidden(state, atomic_load(&item->pts_us)) && !seek_still_pending(state))
         {
             if (!playback_queues_ready(state))
             {
@@ -3364,6 +3449,34 @@ void iptv_native_backend_request_reposition(iptv_native_backend_t *backend)
         atomic_store_explicit(&state->paused, 0, memory_order_release);
     }
 }
+int32_t iptv_native_backend_seek_hint(iptv_native_backend_t *backend, uint64_t show_from_pts_us,
+                                      uint64_t refill_us)
+{
+    backend_state_t *state = state_from(backend);
+    if (!state || state->magic != BACKEND_MAGIC)
+        return IPTV_NATIVE_E_ARGUMENT;
+    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
+        return IPTV_NATIVE_E_STATE;
+    atomic_store_explicit(&state->seek_hint_show_from_us, show_from_pts_us, memory_order_relaxed);
+    atomic_store_explicit(&state->seek_hint_refill_us, refill_us, memory_order_relaxed);
+    atomic_store_explicit(&state->seek_hint_generation,
+                          atomic_load_explicit(&state->stream_generation, memory_order_acquire),
+                          memory_order_release);
+    return 0;
+}
+
+int iptv_native_backend_playing(const iptv_native_backend_t *backend)
+{
+    const backend_state_t *state = const_state_from(backend);
+    if (!state || state->magic != BACKEND_MAGIC)
+        return 0;
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    return atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
+           !atomic_load_explicit(&state->discard_input, memory_order_acquire) &&
+           atomic_load_explicit(&state->presented_generation, memory_order_acquire) == generation;
+}
+
 uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend)
 {
     const backend_state_t *state = const_state_from(backend);
@@ -3756,6 +3869,41 @@ static void test_drain_controls(void *context)
         atomic_store(&state->video_worker_done, 1);
     }
 }
+int32_t iptv_native_agc_present_yuv_deferred(const void *source, size_t source_bytes,
+                                             uint32_t pitch, uint32_t surface_height,
+                                             uint32_t visible_width, uint32_t visible_height,
+                                             uint32_t bit_depth,
+                                             const iptv_native_video_overlay_t *overlay)
+{
+    (void)source, (void)source_bytes, (void)pitch, (void)surface_height, (void)visible_width;
+    (void)visible_height, (void)bit_depth, (void)overlay;
+    assert(!"pictures go to the consumer");
+    return -1;
+}
+int32_t iptv_native_agc_present_finish_frame(void)
+{
+    return 0;
+}
+int iptv_native_agc_hdr_active(void)
+{
+    return 0;
+}
+uint64_t iptv_native_agc_last_flip_us(void)
+{
+    return 0;
+}
+void iptv_native_agc_last_startup_us(uint32_t steps[5])
+{
+    memset(steps, 0, 5 * sizeof(*steps));
+}
+static unsigned test_pictures_shown;
+static uint64_t test_picture_pts;
+static void test_picture(void *context, const iptv_native_picture_t *picture)
+{
+    (void)context;
+    ++test_pictures_shown;
+    test_picture_pts = picture->pts_us;
+}
 int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
 {
     assert(handle == 7 && (flags == 3 || flags == 255));
@@ -4067,8 +4215,151 @@ int main(void)
     assert(playback_queues_ready(&gate)); // Fresh video has its full startup cushion.
     atomic_store(&gate.stream_generation, 2);
     assert(!playback_queues_ready(&gate)); // Another seek invalidates the queued window.
+    gate.magic = BACKEND_MAGIC;
+    gate.state = IPTV_NATIVE_STATE_OPEN;
+    atomic_store(&gate.stream_generation, 5);
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate, 7000000, 500000) ==
+           0);
+    assert(atomic_load(&gate.seek_hint_generation) == 5);
+    begin_playback_timeline(&gate, 6, 6000000);
+    assert(gate.show_from_pts_us == 0 && playback_refill_us(&gate) == PLAYBACK_BUFFER_US);
+    assert(!gate.seek_timeline && !decodes_hidden(&gate, 0));
+    begin_playback_timeline(&gate, 5, 6000000);
+    assert(gate.show_from_pts_us == 7000000 && playback_refill_us(&gate) == 500000);
+    assert(gate.seek_timeline);
+    gate.video_generation = 5;
+    atomic_store(&gate.presented_generation, 4);
+    assert(seek_still_pending(&gate));
+    atomic_store(&gate.presented_generation, 5);
+    assert(!seek_still_pending(&gate));
+    atomic_store(&gate.presented_generation, 4);
+    atomic_store(&gate.video_queue_read, 0);
+    atomic_store(&gate.video_queue_write, 0);
+    assert(!seek_still_wanted(&gate));
+    atomic_store(&gate.video_queue_write, 1);
+    assert(seek_still_wanted(&gate));
+    atomic_store(&gate.presented_generation, 5);
+    assert(!seek_still_wanted(&gate));
+    atomic_store(&gate.stream_generation, 6);
+    gate.video_queue[0].generation = 6;
+    assert(!seek_still_wanted(&gate));
+    atomic_store(&gate.seek_hint_generation, 6);
+    assert(seek_still_wanted(&gate));
+    atomic_store(&gate.stream_generation, 5);
+    atomic_store(&gate.seek_hint_generation, 5);
+    assert(decodes_hidden(&gate, 6960000) && !decodes_hidden(&gate, 7000000));
+    assert(!decodes_hidden(&gate, UINT64_MAX));
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate,
+                                         6000000 + SEEK_EXACT_WITHIN_US + 1, 0) == 0);
+    begin_playback_timeline(&gate, 5, 6000000);
+    assert(gate.show_from_pts_us == 6000000);
+    assert(!decodes_hidden(&gate, 6000000));
+    assert(playback_refill_us(&gate) == PLAYBACK_BUFFER_US);
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate,
+                                         6000000 + SEEK_EXACT_WITHIN_US, 0) == 0);
+    begin_playback_timeline(&gate, 5, 6000000);
+    assert(gate.show_from_pts_us == 6000000 + SEEK_EXACT_WITHIN_US);
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate, 1000000, 0) == 0);
+    begin_playback_timeline(&gate, 5, 6000000);
+    assert(gate.show_from_pts_us == 6000000);
+    begin_playback_timeline(&gate, 5, UINT64_MAX);
+    assert(gate.show_from_pts_us == 0);
+    gate.telemetry.software_video = 1;
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate, 7000000, 0) == 0);
+    begin_playback_timeline(&gate, 5, 6000000);
+    assert(gate.show_from_pts_us == 6000000);
+    gate.telemetry.software_video = 0;
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate, 6500000, 500000) ==
+           0);
+    begin_playback_timeline(&gate, 5, 6000000);
+    restart_playback_buffer(&gate);
+    gate.video_queue[0].generation = gate.video_queue[1].generation = 5;
+    atomic_store(&gate.audio_generation, 5);
+    atomic_store(&gate.audio_queue_write, 2);
+    atomic_store(&gate.audio_sync_pending, 1);
+    atomic_store(&gate.video_queue_read, 0);
+    atomic_store(&gate.video_queue_write, 2);
+    atomic_store(&gate.video_queue[0].pts_us, 6000000);
+    atomic_store(&gate.video_queue[1].pts_us, 6900000);
+    assert(!playback_queues_ready(&gate));
+    atomic_store(&gate.video_queue[1].pts_us, 7000000);
+    assert(playback_queues_ready(&gate));
+    gate.show_from_pts_us = 0;
+    assert(playback_queues_ready(&gate));
+    atomic_store(&gate.video_queue[1].pts_us, 6400000);
+    assert(!playback_queues_ready(&gate));
+    restart_after_underrun(&gate);
+    assert(!atomic_load(&gate.playback_started));
+    assert(playback_refill_us(&gate) == PLAYBACK_BUFFER_US);
+    atomic_store(&gate.video_queue[1].pts_us, 7000000);
+    assert(!playback_queues_ready(&gate));
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate, 0, 0) == 0);
+    const iptv_native_backend_t *gate_backend = (const iptv_native_backend_t *)(void *)&gate;
+    atomic_store(&gate.presented_generation, 5);
+    assert(!iptv_native_backend_playing(gate_backend));
+    atomic_store(&gate.playback_started, 1);
+    assert(iptv_native_backend_playing(gate_backend));
+    atomic_store(&gate.presented_generation, 4);
+    assert(!iptv_native_backend_playing(gate_backend));
+    atomic_store(&gate.playback_started, 0);
+    gate.state = IPTV_NATIVE_STATE_IDLE;
+    assert(iptv_native_backend_seek_hint((iptv_native_backend_t *)(void *)&gate, 0, 0) ==
+           IPTV_NATIVE_E_STATE);
     free(gate.audio_queue);
     free(gate.video_queue);
+    {
+        backend_state_t shown = {0};
+        shown.mode = &video_modes[1];
+        shown.config.codec = IPTV_NATIVE_CODEC_H264;
+        shown.config.bit_depth = 8;
+        shown.config.visible_width = shown.config.coded_width = 1920;
+        shown.config.visible_height = shown.config.coded_height = 1080;
+        shown.config.picture = test_picture;
+        shown.previous_picture_pts = UINT64_MAX;
+        shown.frame_slot_size = (size_t)1920 * (1080 + 540);
+        shown.frame_allocation.address = calloc(1, shown.frame_slot_size);
+        assert(shown.frame_allocation.address);
+        atomic_store(&shown.presented_pts_us, UINT64_MAX);
+        shown.show_from_pts_us = 7000000;
+        const videodec2_frame_t frame = {sizeof(frame), shown.frame_allocation.address,
+                                         shown.frame_slot_size, 1, 0};
+        videodec2_output_t output = {0};
+        output.size = sizeof(output);
+        output.valid = 1;
+        output.picture_count = 1;
+        output.codec = shown.mode->decoder_codec;
+        output.width = output.pitch = output.pitch_bytes = 1920;
+        output.height = 1080;
+        output.buffer = shown.frame_allocation.address;
+        output.buffer_size = shown.frame_slot_size;
+        const iptv_field_info_t no_fields = {0};
+        const uint64_t pictures[] = {6000000, 6400000, 6800000, 7000000};
+        for (unsigned picture = 0; picture < 4; ++picture)
+        {
+            const int hidden = picture < 3;
+            assert(state_pending_push(&shown, pictures[picture], 1, no_fields));
+            assert(present_video_output(&shown, &frame, &output, 1, 0) == 0);
+            assert(shown.telemetry.decoded_frames == picture + 1);
+            assert(shown.telemetry.hidden_decoded_frames == (hidden ? picture + 1 : 3));
+            assert(test_pictures_shown == (hidden ? 0u : 1u));
+            assert(shown.telemetry.pacing_resets == (hidden ? 0u : 1u));
+            assert(shown.telemetry.pacing_waits == 0);
+        }
+        assert(test_picture_pts == 7000000 && shown.telemetry.presented_frames == 1);
+        assert(atomic_load(&shown.presented_pts_us) == 7000000);
+        assert(state_pending_push(&shown, 7040000, 1, no_fields));
+        assert(present_video_output(&shown, &frame, &output, 1, 0) == 0);
+        assert(atomic_load(&shown.presented_pts_us) == 7000000 && shown.presentation_pending);
+        assert(complete_pending_presentation(&shown) == 0);
+        shown.video_generation = 2;
+        shown.seek_timeline = 1;
+        shown.show_from_pts_us = 0;
+        assert(state_pending_push(&shown, 3000000, 1, no_fields));
+        assert(present_video_output(&shown, &frame, &output, 1, 0) == 0);
+        assert(atomic_load(&shown.presented_pts_us) == 3000000 && !shown.presentation_pending);
+        assert(atomic_load(&shown.presented_generation) == 2);
+        free(shown.frame_allocation.address);
+    }
     iptv_native_backend_t programme_backend;
     assert(iptv_native_backend_init(&programme_backend) == 0);
     backend_state_t *programme = state_from(&programme_backend);

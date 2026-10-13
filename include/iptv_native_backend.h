@@ -230,6 +230,11 @@ extern "C"
     void iptv_native_backend_set_paused(iptv_native_backend_t *backend, int paused);
     int iptv_native_backend_paused(const iptv_native_backend_t *backend);
     void iptv_native_backend_request_reposition(iptv_native_backend_t *backend);
+    /* Stream owner's thread only: a short refill and hidden pictures before show_from_pts_us
+     * for the timeline after the next discontinuity. */
+    int32_t iptv_native_backend_seek_hint(iptv_native_backend_t *backend, uint64_t show_from_pts_us,
+                                          uint64_t refill_us);
+    int iptv_native_backend_playing(const iptv_native_backend_t *backend);
     /* UINT64_MAX until a picture from the current playback timeline is presented. */
     uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend);
     void iptv_native_backend_request_stop(iptv_native_backend_t *backend);

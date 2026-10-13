@@ -885,6 +885,36 @@ TEST_F(VodTest, FilmControlsClampSkipsPauseAndSelectChapters)
     model.close();
 }
 
+TEST_F(VodTest, SeekInsideTheOpenFilmShowsTheTargetUntilThePictureGetsThere)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    ptv::PlayRequest request;
+    request.on_demand = true;
+    request.record_channel_result = false;
+    ptv::PlaybackOsd controls(model, request);
+    iptv_player_media_state_t state{};
+    state.available = state.seekable = state.presented = 1;
+    state.position_us = 30000000;
+    state.duration_us = 100000000;
+    controls.set_media_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 1), 1);
+    controls.input(-1, 700001);
+    EXPECT_EQ(controls.take_media_seek(), 40000000u);
+    controls.set_media_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 800000), 1);
+    controls.input(-1, 1500001);
+    EXPECT_EQ(controls.take_media_seek(), 50000000u);
+    state.position_us = 50000000;
+    controls.set_media_state(state);
+    state.position_us = 55000000;
+    controls.set_media_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 2000000), 1);
+    controls.input(-1, 2700001);
+    EXPECT_EQ(controls.take_media_seek(), 65000000u);
+    model.close();
+}
+
 TEST_F(VodTest, SoundDelayChangesOnlyInsideAudioMenuAndIsBounded)
 {
     ptv::Model model(dir);

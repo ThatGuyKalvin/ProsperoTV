@@ -29,6 +29,9 @@ struct MediaInput
     bool (*open_resource)(void *, const char *, std::int64_t begin, std::int64_t end,
                           MediaInput *) = nullptr;
     void (*close)(void *) = nullptr;
+    // Optional: a pending seek target in microseconds, or -1; null always seeks by reopening.
+    std::int64_t (*take_seek)(void *) = nullptr;
+    bool (*seek_waiting)(void *) = nullptr;
 };
 struct MediaAudioTrack
 {
@@ -66,10 +69,15 @@ struct MediaOutput
     void (*timeline)(void *, const MediaTimeline &) = nullptr;
     // Optional video-only VP9 path; packet storage is borrowed for this call.
     bool (*vp9_packet)(void *, const MediaVp9Packet &) = nullptr;
+    // Optional inline seek hooks; a seek that cannot move or commit goes to seek_failed.
+    void (*seek_armed)(void *, bool) = nullptr;
+    void (*seek_begin)(void *) = nullptr;
+    bool (*seek_commit)(void *, std::int64_t target_us) = nullptr;
+    void (*seek_failed)(void *, std::int64_t target_us) = nullptr;
 };
 // 0: complete, 1: cancelled, -1: error. Streaming I/O, no transcoding.
 // start_us is relative to the beginning; seek to the preceding decodable keyframe.
-// Every call creates a fresh mux timeline; the caller must reset its decoder too.
+// Every call and every inline seek start a fresh mux timeline; the caller must reset its decoder.
 int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *error,
               std::int64_t start_us = 0);
 bool LooksLikeMedia(const std::uint8_t *bytes, std::size_t count);

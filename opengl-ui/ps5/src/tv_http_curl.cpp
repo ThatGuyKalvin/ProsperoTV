@@ -228,13 +228,13 @@ void drive(Request *request, int wait_ms)
 }
 
 // True when the waiting thread's owner wants the wait to end. Asked at most
-// every 50 ms: the question reads the controller.
+// every 10 ms, so a waiting seek ends the read quickly.
 bool interrupted()
 {
     if (g_interrupt == nullptr || !pthread_equal(pthread_self(), g_interrupt_thread))
         return false;
     const std::int64_t now = now_ms();
-    if (now - g_interrupt_asked_ms < 50)
+    if (now - g_interrupt_asked_ms < 10)
         return false;
     g_interrupt_asked_ms = now;
     return g_interrupt(g_interrupt_context);

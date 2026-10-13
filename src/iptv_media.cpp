@@ -58,6 +58,8 @@ std::string vtt_timestamp(std::int64_t ms)
                   static_cast<long long>(ms / 1000 % 60), static_cast<long long>(ms % 1000));
     return text;
 }
+struct Reader;
+bool reader_gives_way(Reader &reader);
 struct Resource
 {
     struct Location
@@ -106,6 +108,7 @@ struct Resource
         return &type;
     }
     MediaInput input;
+    Reader *reader = nullptr;
     AVIOContext *io = nullptr;
     Location location{location_class(), nullptr};
     std::string prefix;
@@ -121,9 +124,12 @@ struct Resource
     }
     int raw(std::uint8_t *bytes, int count)
     {
-        if (input.cancelled && input.cancelled(input.context))
+        if ((input.cancelled && input.cancelled(input.context)) ||
+            (reader && reader_gives_way(*reader)))
             return AVERROR_EXIT;
         const int result = input.read(input.context, bytes, count);
+        if (result < 0 && reader && reader_gives_way(*reader))
+            return AVERROR_EXIT;
         return result < 0 || result > count ? AVERROR(EIO) : result ? result : AVERROR_EOF;
     }
     static int read(void *self, std::uint8_t *bytes, int count)
@@ -131,7 +137,8 @@ struct Resource
         auto &r = *static_cast<Resource *>(self);
         if (count <= 0)
             return AVERROR(EINVAL);
-        if (r.input.cancelled && r.input.cancelled(r.input.context))
+        if ((r.input.cancelled && r.input.cancelled(r.input.context)) ||
+            (r.reader && reader_gives_way(*r.reader)))
             return AVERROR_EXIT;
         if (!r.initialized)
         {
@@ -190,36 +197,51 @@ struct Reader
     AVIOContext *in = nullptr, *out = nullptr;
     AVPacket *packet = nullptr;
     std::vector<std::unique_ptr<Resource>> resources{};
+    bool reading = false, gave_way = false;
     ~Reader()
     {
         av_packet_free(&packet);
         avformat_close_input(&demux);
+        close_mux();
+        if (in)
+            av_freep(&in->buffer);
+        avio_context_free(&in);
+    }
+    void close_mux()
+    {
         if (mux)
             mux->pb = nullptr;
         avformat_free_context(mux);
-        if (in)
-            av_freep(&in->buffer);
+        mux = nullptr;
         if (out)
             av_freep(&out->buffer);
-        avio_context_free(&in);
         avio_context_free(&out);
     }
     bool cancelled() const
     {
         return input.cancelled && input.cancelled(input.context);
     }
+    bool gives_way()
+    {
+        if (reading && input.seek_waiting && input.seek_waiting(input.context))
+            gave_way = true;
+        return gave_way;
+    }
     static int interrupt(void *self)
     {
-        return static_cast<Reader *>(self)->cancelled();
+        auto &r = *static_cast<Reader *>(self);
+        return r.cancelled() || r.gives_way();
     }
     static int read(void *self, std::uint8_t *buffer, int bytes)
     {
         auto &r = *static_cast<Reader *>(self);
-        if (r.cancelled())
+        if (r.cancelled() || r.gives_way())
             return AVERROR_EXIT;
         if (bytes <= 0 || r.position > kMaxFileBytes - bytes)
             return AVERROR(EFBIG);
         const int got = r.input.read(r.input.context, buffer, bytes);
+        if (got < 0 && r.gives_way())
+            return AVERROR_EXIT;
         if (got < 0 || got > bytes)
             return AVERROR(EIO);
         r.position += got;
@@ -275,7 +297,7 @@ struct Reader
             std::any_of(address.begin(), address.end(),
                         [](unsigned char c) { return c <= 32 || c == 127; }))
             return AVERROR(EACCES);
-        if (r.cancelled())
+        if (r.cancelled() || r.gives_way())
             return AVERROR_EXIT;
         std::int64_t begin = 0, end = -1;
         const auto range = [&](const char *name, std::int64_t &value)
@@ -306,6 +328,7 @@ struct Reader
         }
         resource->io->seekable = 0;
         resource->io->av_class = Resource::io_class();
+        resource->reader = &r;
         resource->location.location = resource->input.url;
         *out = resource->io;
         r.resources.push_back(std::move(resource));
@@ -322,6 +345,10 @@ struct Reader
         return 0;
     }
 };
+bool reader_gives_way(Reader &reader)
+{
+    return reader.gives_way();
+}
 bool audio_supported(const AVCodecParameters &p)
 {
     // DTS plays its core; DTS Express has none.
@@ -630,22 +657,35 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
                      [](const auto &a, const auto &b) { return a.position_us < b.position_us; });
     if (output.timeline)
         output.timeline(output.context, timeline);
-    if (start_us)
+    const bool transport = !strcmp(r.demux->iformat->name, "mpegts");
+    const auto seek_input = [&](std::int64_t start, const char **message)
     {
-        if (!timeline.seekable)
-            return fail("This video does not support seeking.");
-        const auto target = origin + std::min(start_us, timeline.duration_us - 1);
+        const auto target = origin + std::min(start, timeline.duration_us - 1);
         // The TS demuxer's timestamp index marks every packet as a keyframe.
         // Locate a real preceding random-access picture before starting a fresh decoder.
-        const bool transport = !strcmp(r.demux->iformat->name, "mpegts");
         const auto probe = transport ? std::max(origin, target - INT64_C(30000000)) : target;
-        if (avformat_seek_file(r.demux, -1, INT64_MIN, probe, probe, AVSEEK_FLAG_BACKWARD) < 0)
-            return r.cancelled() ? 1 : fail("The video could not seek to that position.");
+        const bool from_start = transport && probe == origin;
+        const auto byte_seek = [&](std::int64_t position)
+        {
+            // FFmpeg's byte seek ignores a failed avio_seek, so move the input first.
+            return avio_seek(r.in, position, SEEK_SET) >= 0 &&
+                   av_seek_frame(r.demux, -1, position, AVSEEK_FLAG_BYTE) >= 0;
+        };
+        if (from_start ? !byte_seek(0)
+                       : avformat_seek_file(r.demux, -1, INT64_MIN, probe, probe,
+                                            AVSEEK_FLAG_BACKWARD) < 0)
+        {
+            *message = "The video could not seek to that position.";
+            return r.cancelled() ? 1 : -1;
+        }
         if (transport)
         {
             AVPacket *packet = av_packet_alloc();
             if (!packet)
-                return fail("Not enough memory to seek this video.");
+            {
+                *message = "Not enough memory to seek this video.";
+                return -1;
+            }
             std::int64_t position = -1;
             std::uint64_t scanned = 0;
             while (!r.cancelled() && scanned < UINT64_C(268435456) &&
@@ -668,9 +708,24 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             av_packet_free(&packet);
             if (r.cancelled())
                 return 1;
-            if (position < 0 || av_seek_frame(r.demux, -1, position, AVSEEK_FLAG_BYTE) < 0)
-                return fail("No nearby keyframe was found for this position.");
+            if (position < 0 && from_start)
+                position = 0;
+            if (position < 0 || !byte_seek(position))
+            {
+                *message = "No nearby keyframe was found for this position.";
+                return -1;
+            }
         }
+        return 0;
+    };
+    if (start_us)
+    {
+        if (!timeline.seekable)
+            return fail("This video does not support seeking.");
+        const char *message = "";
+        const int sought = seek_input(start_us, &message);
+        if (sought)
+            return sought > 0 ? 1 : fail(message);
     }
     const auto timestamp_offset = INT64_C(2000000) - origin;
     const auto shift = [](std::int64_t &stamp, std::int64_t delta)
@@ -714,74 +769,79 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             return 1;
         return result == AVERROR_EOF ? 0 : fail("The video download ended unexpectedly.");
     }
-    if (avformat_alloc_output_context2(&r.mux, nullptr, "mpegts", nullptr) < 0 || !r.mux)
-        return fail("The video transport could not start.");
-    r.mux->output_ts_offset = timestamp_offset;
-    r.mux->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
-    buffer = static_cast<std::uint8_t *>(av_malloc(kBufferBytes));
-    if (!buffer)
-        return fail("Not enough memory to open this video.");
-    r.out = avio_alloc_context(buffer, kBufferBytes, 1, &r, nullptr, Reader::write, nullptr);
-    if (!r.out)
-    {
-        av_free(buffer);
-        return fail("Not enough memory to open this video.");
-    }
-    r.mux->pb = r.out;
-    r.mux->flags |= AVFMT_FLAG_CUSTOM_IO | AVFMT_FLAG_AUTO_BSF;
-    r.mux->max_interleave_delta = AV_TIME_BASE;
     std::vector<int> mapping(r.demux->nb_streams, -1);
-    std::vector<MediaAudioTrack> audio_metadata;
     tracks.insert(tracks.begin(), video);
-    for (const int index : tracks)
+    for (std::size_t k = 0; k < tracks.size(); ++k)
+        mapping[tracks[k]] = static_cast<int>(k);
+    // A fresh muxer per seek: one muxer for the whole video rejects a backward DTS.
+    const auto open_mux = [&]() -> const char *
     {
-        if (index < 0)
-            continue;
-        auto *stream = avformat_new_stream(r.mux, nullptr);
-        if (!stream ||
-            avcodec_parameters_copy(stream->codecpar, r.demux->streams[index]->codecpar) < 0)
-            return fail("The video's tracks could not be prepared.");
-        stream->codecpar->codec_tag = 0;
-        stream->id = 0x100 + stream->index;
-        stream->time_base = r.demux->streams[index]->time_base;
-        stream->disposition = r.demux->streams[index]->disposition;
-        if (const auto *language =
-                av_dict_get(r.demux->streams[index]->metadata, "language", nullptr, 0))
+        if (avformat_alloc_output_context2(&r.mux, nullptr, "mpegts", nullptr) < 0 || !r.mux)
+            return "The video transport could not start.";
+        r.mux->output_ts_offset = timestamp_offset;
+        r.mux->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
+        auto *output_buffer = static_cast<std::uint8_t *>(av_malloc(kBufferBytes));
+        if (!output_buffer)
+            return "Not enough memory to open this video.";
+        r.out =
+            avio_alloc_context(output_buffer, kBufferBytes, 1, &r, nullptr, Reader::write, nullptr);
+        if (!r.out)
         {
-            // MPEG-TS carries three-letter ISO 639 language codes.
-            char code[4]{};
-            if (std::strlen(language->value) == 3 &&
-                std::all_of(language->value, language->value + 3, [](char c)
-                            { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }))
+            av_free(output_buffer);
+            return "Not enough memory to open this video.";
+        }
+        r.mux->pb = r.out;
+        r.mux->flags |= AVFMT_FLAG_CUSTOM_IO | AVFMT_FLAG_AUTO_BSF;
+        r.mux->max_interleave_delta = AV_TIME_BASE;
+        for (const int index : tracks)
+        {
+            auto *stream = avformat_new_stream(r.mux, nullptr);
+            if (!stream ||
+                avcodec_parameters_copy(stream->codecpar, r.demux->streams[index]->codecpar) < 0)
+                return "The video's tracks could not be prepared.";
+            stream->codecpar->codec_tag = 0;
+            stream->id = 0x100 + stream->index;
+            stream->time_base = r.demux->streams[index]->time_base;
+            stream->disposition = r.demux->streams[index]->disposition;
+            if (const auto *language =
+                    av_dict_get(r.demux->streams[index]->metadata, "language", nullptr, 0))
             {
-                std::memcpy(code, language->value, 3);
-                av_dict_set(&stream->metadata, "language", code, 0);
+                // MPEG-TS carries three-letter ISO 639 language codes.
+                char code[4]{};
+                if (std::strlen(language->value) == 3 &&
+                    std::all_of(language->value, language->value + 3, [](char c)
+                                { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }))
+                {
+                    std::memcpy(code, language->value, 3);
+                    av_dict_set(&stream->metadata, "language", code, 0);
+                }
             }
         }
-        mapping[index] = stream->index;
-        if (index != video)
-        {
-            MediaAudioTrack track;
-            track.pid = static_cast<std::uint32_t>(stream->id);
-            track.audio_type = stream->disposition & AV_DISPOSITION_HEARING_IMPAIRED  ? 2
-                               : stream->disposition & AV_DISPOSITION_VISUAL_IMPAIRED ? 3
-                                                                                      : 0;
-            const auto *metadata = r.demux->streams[index]->metadata;
-            if (const auto *language = av_dict_get(metadata, "language", nullptr, 0))
-                track.language.assign(language->value, strnlen(language->value, 31));
-            if (const auto *title = av_dict_get(metadata, "title", nullptr, 0))
-                track.title.assign(title->value, strnlen(title->value, 127));
-            else if (const auto *name = av_dict_get(metadata, "comment", nullptr, 0))
-                track.title.assign(name->value, strnlen(name->value, 127));
-            audio_metadata.push_back(std::move(track));
-        }
+        AVDictionary *mux_options = nullptr;
+        av_dict_set(&mux_options, "mpegts_copyts", "1", 0);
+        const int header = avformat_write_header(r.mux, &mux_options);
+        av_dict_free(&mux_options);
+        return header < 0 ? "This video's tracks are not supported." : nullptr;
+    };
+    if (const char *message = open_mux())
+        return fail(message);
+    std::vector<MediaAudioTrack> audio_metadata;
+    for (std::size_t k = 1; k < tracks.size(); ++k)
+    {
+        const auto *stream = r.demux->streams[tracks[k]];
+        MediaAudioTrack track;
+        track.pid = static_cast<std::uint32_t>(0x100 + k);
+        track.audio_type = stream->disposition & AV_DISPOSITION_HEARING_IMPAIRED  ? 2
+                           : stream->disposition & AV_DISPOSITION_VISUAL_IMPAIRED ? 3
+                                                                                  : 0;
+        if (const auto *language = av_dict_get(stream->metadata, "language", nullptr, 0))
+            track.language.assign(language->value, strnlen(language->value, 31));
+        if (const auto *title = av_dict_get(stream->metadata, "title", nullptr, 0))
+            track.title.assign(title->value, strnlen(title->value, 127));
+        else if (const auto *name = av_dict_get(stream->metadata, "comment", nullptr, 0))
+            track.title.assign(name->value, strnlen(name->value, 127));
+        audio_metadata.push_back(std::move(track));
     }
-    AVDictionary *mux_options = nullptr;
-    av_dict_set(&mux_options, "mpegts_copyts", "1", 0);
-    const int header = avformat_write_header(r.mux, &mux_options);
-    av_dict_free(&mux_options);
-    if (header < 0)
-        return fail("This video's tracks are not supported.");
     if (output.subtitle_tracks)
         output.subtitle_tracks(output.context, subtitles);
     if (output.audio_tracks)
@@ -812,8 +872,92 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         if (shift(pts, timestamp_offset))
             output.subtitle_packet(output.context, id, data, bytes, pts, duration);
     };
-    while (!r.cancelled() && (result = av_read_frame(r.demux, r.packet)) >= 0)
+    const bool inline_seeks = input.take_seek && output.seek_commit && timeline.seekable;
+    struct Armed
     {
+        const MediaOutput &output;
+        bool on = false;
+        void set(bool armed)
+        {
+            if (on != armed && output.seek_armed)
+                output.seek_armed(output.context, armed);
+            on = armed;
+        }
+        ~Armed()
+        {
+            set(false);
+        }
+    } armed{output};
+    std::string seek_error;
+    const auto seek_inside = [&](std::int64_t requested)
+    {
+        const auto target = std::min(requested, timeline.duration_us - 1);
+        const auto reopen = [&](const char *message)
+        {
+            if (r.cancelled())
+                return 1;
+            if (!output.seek_failed)
+            {
+                seek_error = message;
+                return -1;
+            }
+            armed.set(false);
+            output.seek_failed(output.context, target);
+            return 1;
+        };
+        if (output.seek_begin)
+            output.seek_begin(output.context);
+        const char *message = "";
+        const int sought = seek_input(target, &message);
+        if (sought)
+            return sought > 0 ? 1 : reopen(message);
+        r.close_mux();
+        if (!output.seek_commit(output.context, target))
+            return reopen("The video could not continue at that position.");
+        first_video = true;
+        std::fill(clocks.begin(), clocks.end(), Clock{});
+        discontinuity_offset = 0;
+        pending_subtitles.clear();
+        pending_subtitle_bytes = 0;
+        video_clock = origin + target;
+        if (const char *failed = open_mux())
+            return reopen(failed);
+        return 0;
+    };
+    armed.set(inline_seeks);
+    while (!r.cancelled())
+    {
+        const bool gave_way = r.gave_way;
+        if (gave_way)
+        {
+            r.gave_way = false;
+            r.in->error = 0;
+            r.in->eof_reached = 0;
+        }
+        if (inline_seeks)
+        {
+            const auto target = input.take_seek(input.context);
+            if (target < 0 && gave_way)
+                return 1;
+            if (target >= 0)
+            {
+                const int sought = seek_inside(target);
+                if (sought)
+                    return sought > 0 ? 1 : fail(seek_error.c_str());
+                if (r.cancelled())
+                    break;
+            }
+        }
+        r.reading = inline_seeks;
+        result = av_read_frame(r.demux, r.packet);
+        r.reading = false;
+        if (r.gave_way)
+        {
+            av_packet_unref(r.packet);
+            continue;
+        }
+        if (result < 0)
+            break;
         const int source = r.packet->stream_index;
         if (source < 0 || static_cast<std::size_t>(source) >= mapping.size() ||
             r.packet->size < 0 || r.packet->size > 8 * 1024 * 1024)
@@ -960,6 +1104,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         }
         av_packet_unref(r.packet);
     }
+    armed.set(false);
     if (r.cancelled())
         return 1;
     if (result != AVERROR_EOF)

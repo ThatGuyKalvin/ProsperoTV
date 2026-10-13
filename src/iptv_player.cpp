@@ -159,7 +159,26 @@ iptv::TimeshiftSeek gLiveSeekRequest;
 std::mutex gMediaMutex;
 iptv_player_media_state_t gMediaState{};
 std::atomic<std::int64_t> gMediaSeekRequest{-1};
+std::atomic<bool> gMediaSeekReopen{false};
 std::atomic<std::uint64_t> gMediaStartPosition{0};
+constexpr bool kInlineMediaSeek = true;
+constexpr bool kInlineHlsSeek = true;
+constexpr std::uint64_t kSeekRefillUs = 500000;
+constexpr std::uint64_t kNewSessionRefillUs = 2000000;
+constexpr std::uint64_t kSeekCommitTimeoutUsec = 5000000;
+struct SeekTrace
+{
+    std::uint64_t requested_usec = 0;
+    std::uint64_t session = 0;
+    std::int64_t from_us = 0, to_us = 0;
+    bool inline_seek = false;
+    std::uint64_t begin_usec = 0, transport_usec = 0;
+    std::uint64_t picture_usec = 0;
+    std::uint64_t hidden_before = 0;
+};
+std::mutex gSeekTraceMutex;
+SeekTrace gSeekTrace;
+std::atomic<std::uint64_t> gPlaybackSession{0};
 int gMediaPauseRequest = -1;
 bool gInitialPaused = false;
 bool gMediaSession = false;
@@ -762,6 +781,7 @@ struct NativeAdapter
     bool preserve_subtitles = false;
     void (*poll_controls)(void *) = nullptr;
     void *controls_context = nullptr;
+    std::atomic<std::uint64_t> first_video_pts_us{UINT64_MAX};
 };
 
 int AdapterOpen(void *context, const iptv_stream_format_t *format)
@@ -814,6 +834,8 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
 int AdapterVideo(void *context, const std::uint8_t *data, std::size_t bytes, std::uint64_t pts_us)
 {
     auto *adapter = static_cast<NativeAdapter *>(context);
+    if (adapter && adapter->first_video_pts_us.load(std::memory_order_relaxed) == UINT64_MAX)
+        adapter->first_video_pts_us.store(pts_us, std::memory_order_relaxed);
     return adapter && adapter->opened
                ? iptv_native_backend_submit_video(&adapter->backend, data, bytes, pts_us)
                : -1;
@@ -924,6 +946,7 @@ class StreamRunner
         adapter_.poll_controls = [](void *self)
         { (void)static_cast<StreamRunner *>(self)->StopRequested(); };
         adapter_.controls_context = this;
+        ResetMediaSeek();
 
         iptv_stream_init(&session_);
         iptv_stream_backend_t backend{};
@@ -1013,6 +1036,7 @@ class StreamRunner
         adapter_.poll_controls = [](void *self)
         { (void)static_cast<StreamRunner *>(self)->StopRequested(); };
         adapter_.controls_context = this;
+        ResetMediaSeek();
         iptv_stream_init(&session_);
         session_.telemetry.state = IPTV_STREAM_STATE_OPEN;
         session_.telemetry.last_result = IPTV_STREAM_OK;
@@ -1038,6 +1062,106 @@ class StreamRunner
         return active_ && mode_ == RunnerMode::webm;
     }
 
+    void ArmMediaSeek(bool armed)
+    {
+        inline_seek_armed_.store(armed && kInlineMediaSeek && gMediaSession && !live_ &&
+                                     !history_ && mode_ == RunnerMode::transport_stream &&
+                                     read_ahead_thread_,
+                                 std::memory_order_release);
+    }
+    std::int64_t TakeMediaSeek()
+    {
+        if (!TakesSeekInline() || gMediaSeekRequest.load(std::memory_order_acquire) < 0)
+            return -1;
+        const auto target = gMediaSeekRequest.exchange(-1, std::memory_order_acq_rel);
+        if (target >= 0 && gMediaSeekReopen.load(std::memory_order_acquire))
+        {
+            auto none = INT64_C(-1);
+            (void)gMediaSeekRequest.compare_exchange_strong(none, target);
+            return -1;
+        }
+        if (target >= 0)
+            media_seek_target_ = target;
+        return target;
+    }
+    void BeginMediaSeek()
+    {
+        ResetAutoSamples();
+        media_seek_pending_.store(true, std::memory_order_release);
+        if (adapter_.initialized)
+            iptv_native_backend_request_reposition(&adapter_.backend);
+        seek_awaiting_picture_.store(true, std::memory_order_release);
+        const auto now = MonotonicUsec();
+        std::lock_guard lock(gMediaMutex);
+        if (media_seek_target_ >= 0)
+            gMediaState.position_us = static_cast<std::uint64_t>(media_seek_target_);
+        std::lock_guard trace_lock(gSeekTraceMutex);
+        gSeekTrace.inline_seek = true;
+        gSeekTrace.begin_usec = now;
+        gSeekTrace.transport_usec = gSeekTrace.picture_usec = 0;
+    }
+    bool CommitMediaSeek(std::int64_t target)
+    {
+        media_seek_show_from_us_.store(static_cast<std::uint64_t>(target) + 2000000u,
+                                       std::memory_order_relaxed);
+        const auto ticket = media_seek_requested_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        const auto deadline = MonotonicUsec() + kSeekCommitTimeoutUsec;
+        while (media_seek_acked_.load(std::memory_order_acquire) != ticket)
+        {
+            if (StopRequested() || read_ahead_done_.load(std::memory_order_acquire) ||
+                MonotonicUsec() >= deadline)
+                return false;
+            sceKernelUsleep(1000u);
+        }
+        if (media_seek_result_.load(std::memory_order_acquire) != IPTV_STREAM_OK)
+            return false;
+        media_seek_pending_.store(false, std::memory_order_release);
+        iptv_native_telemetry_t native{};
+        const auto hidden = NativeTelemetry(&native) ? native.hidden_decoded_frames : 0;
+        std::lock_guard lock(gSeekTraceMutex);
+        gSeekTrace.transport_usec = MonotonicUsec();
+        gSeekTrace.hidden_before = hidden;
+        return true;
+    }
+    void FailMediaSeek(std::int64_t target)
+    {
+        inline_seek_armed_.store(false, std::memory_order_release);
+        if (PlaybackStopRequested() || target < 0)
+            return;
+        gMediaSeekReopen.store(true, std::memory_order_release);
+        auto none = INT64_C(-1);
+        (void)gMediaSeekRequest.compare_exchange_strong(none, target);
+        {
+            std::lock_guard lock(gSeekTraceMutex);
+            gSeekTrace.inline_seek = false;
+            gSeekTrace.transport_usec = gSeekTrace.picture_usec = gSeekTrace.hidden_before = 0;
+        }
+        if (tv_diag_enabled())
+        {
+            char line[96];
+            std::snprintf(line, sizeof(line), "[player] seek inline FAILED at %lld ms; reopening",
+                          static_cast<long long>(target / 1000));
+            tv_diag_line(line);
+        }
+    }
+    bool SeekWaiting() const
+    {
+        return TakesSeekInline() && gMediaSeekRequest.load(std::memory_order_acquire) >= 0 &&
+               !media_seek_pending_.load(std::memory_order_acquire);
+    }
+    bool NetworkWaitEnds()
+    {
+        return StopRequested() || SeekWaiting();
+    }
+    bool SeekAwaitingPicture() const
+    {
+        return seek_awaiting_picture_.load(std::memory_order_acquire);
+    }
+    std::int64_t MediaSeekTarget() const
+    {
+        return media_seek_target_;
+    }
+
     int Push(const void *data, std::size_t bytes)
     {
         if (!active_ || mode_ != RunnerMode::transport_stream || !data || !bytes ||
@@ -1060,6 +1184,8 @@ class StreamRunner
             return IPTV_STREAM_OK;
         }
 
+        if (media_seek_pending_.load(std::memory_order_acquire))
+            return IPTV_STREAM_OK;
         const auto *source = static_cast<const std::uint8_t *>(data);
         while (bytes)
         {
@@ -1071,7 +1197,8 @@ class StreamRunner
             const std::size_t used = static_cast<std::size_t>(write - read);
             if (used >= kReadAheadBytes)
             {
-                if (StopRequested())
+                if (StopRequested() ||
+                    (TakesSeekInline() && gMediaSeekRequest.load(std::memory_order_acquire) >= 0))
                     return IPTV_STREAM_OK;
                 sceKernelUsleep(1000u);
                 continue;
@@ -1216,7 +1343,7 @@ class StreamRunner
             iptv_native_backend_set_audio_delay(&adapter_.backend, gAudioDelayMs.load());
         UpdateLiveControls();
         UpdateMediaControls();
-        if (gMediaSeekRequest.load(std::memory_order_acquire) >= 0)
+        if (gMediaSeekRequest.load(std::memory_order_acquire) >= 0 && !TakesSeekInline())
         {
             ResetAutoSamples();
             playback_stop_requested_ = true;
@@ -1326,7 +1453,8 @@ class StreamRunner
         iptv_native_telemetry_t telemetry{};
         if (!NativeTelemetry(&telemetry))
             return;
-        const bool suspended = Paused() || gMediaSeekRequest.load() >= 0 || gAutoReplay.load();
+        const bool suspended = Paused() || gMediaSeekRequest.load() >= 0 || gAutoReplay.load() ||
+                               SeekAwaitingPicture();
         const auto now = MonotonicUsec();
         std::lock_guard lock(gQualityMutex);
         if (!gQualityState.automatic || gAutoPending.bandwidth || gQualityState.count < 2 ||
@@ -1500,6 +1628,85 @@ class StreamRunner
     }
 
   private:
+    bool TakesSeekInline() const
+    {
+        return inline_seek_armed_.load(std::memory_order_acquire) &&
+               !gMediaSeekReopen.load(std::memory_order_acquire);
+    }
+
+    void ResetMediaSeek()
+    {
+        inline_seek_armed_.store(false, std::memory_order_release);
+        media_seek_pending_.store(false, std::memory_order_release);
+        seek_awaiting_picture_.store(false, std::memory_order_release);
+        media_seek_acked_.store(media_seek_requested_.load(std::memory_order_acquire),
+                                std::memory_order_release);
+        media_seek_target_ = -1;
+        adapter_.first_video_pts_us.store(UINT64_MAX, std::memory_order_relaxed);
+    }
+
+    void RestartMediaTimeline()
+    {
+        read_ahead_read_.store(read_ahead_write_.load(std::memory_order_acquire),
+                               std::memory_order_release);
+        adapter_.preserve_subtitles = false;
+        const int result = iptv_stream_discontinuity(&session_);
+        if (result == IPTV_STREAM_OK)
+        {
+            adapter_.first_video_pts_us.store(UINT64_MAX, std::memory_order_relaxed);
+            (void)iptv_native_backend_seek_hint(
+                &adapter_.backend, media_seek_show_from_us_.load(std::memory_order_relaxed),
+                kSeekRefillUs);
+            iptv_native_backend_set_paused(&adapter_.backend, Paused() ? 1 : 0);
+        }
+        media_seek_result_.store(result, std::memory_order_release);
+    }
+
+    void ReportSeek()
+    {
+        if (iptv_native_backend_playing(&adapter_.backend))
+            seek_awaiting_picture_.store(false, std::memory_order_release);
+        std::lock_guard lock(gSeekTraceMutex);
+        auto &trace = gSeekTrace;
+        if (!trace.requested_usec ||
+            (trace.inline_seek ? !trace.transport_usec
+                               : trace.session == gPlaybackSession.load(std::memory_order_relaxed)))
+            return;
+        const auto now = MonotonicUsec();
+        if (!trace.picture_usec)
+            trace.picture_usec = now;
+        if (!iptv_native_backend_playing(&adapter_.backend))
+            return;
+        const auto requested = trace.requested_usec;
+        trace.requested_usec = 0;
+        if (!tv_diag_enabled())
+            return;
+        iptv_native_telemetry_t native{};
+        const auto hidden =
+            NativeTelemetry(&native) && native.hidden_decoded_frames >= trace.hidden_before
+                ? native.hidden_decoded_frames - trace.hidden_before
+                : 0;
+        const auto keyframe = adapter_.first_video_pts_us.load(std::memory_order_relaxed);
+        const auto moved_from = trace.inline_seek ? trace.begin_usec : requested;
+        char line[224];
+        std::snprintf(
+            line, sizeof(line),
+            "[player] seek %s: from %lld ms to %lld ms, keyframe %lld ms, input seek %llu ms, "
+            "first picture %llu ms, playing %llu ms, hidden %u, refill %llu ms",
+            trace.inline_seek ? "inline" : "reopen", static_cast<long long>(trace.from_us / 1000),
+            static_cast<long long>(trace.to_us / 1000),
+            keyframe == UINT64_MAX ? -1LL : (static_cast<long long>(keyframe) - 2000000LL) / 1000,
+            static_cast<unsigned long long>(trace.transport_usec >= moved_from && moved_from
+                                                ? (trace.transport_usec - moved_from) / 1000u
+                                                : 0),
+            static_cast<unsigned long long>((trace.picture_usec - requested) / 1000u),
+            static_cast<unsigned long long>((now - requested) / 1000u),
+            static_cast<unsigned>(hidden),
+            static_cast<unsigned long long>(
+                (trace.inline_seek ? kSeekRefillUs : kNewSessionRefillUs) / 1000u));
+        tv_diag_line(line);
+    }
+
     void ResetHistory()
     {
         history_.reset();
@@ -1547,6 +1754,7 @@ class StreamRunner
         {
             gMediaState.position_us = presented - 2000000;
             gMediaState.presented = 1;
+            ReportSeek();
         }
         if (gMediaState.duration_us)
             gMediaState.position_us =
@@ -1740,6 +1948,13 @@ class StreamRunner
         }
         while (!read_ahead_stop_.load(std::memory_order_acquire))
         {
+            if (const auto ticket = media_seek_requested_.load(std::memory_order_acquire);
+                ticket != media_seek_acked_.load(std::memory_order_relaxed))
+            {
+                RestartMediaTimeline();
+                media_seek_acked_.store(ticket, std::memory_order_release);
+                continue;
+            }
             const auto audio_request =
                 gAudioRequest.exchange(UINT32_MAX, std::memory_order_acq_rel);
             if (audio_request != UINT32_MAX)
@@ -1900,6 +2115,13 @@ class StreamRunner
     std::atomic<bool> read_ahead_stop_{false};
     std::atomic<bool> read_ahead_finished_{false};
     std::atomic<bool> read_ahead_done_{false};
+    std::atomic<bool> inline_seek_armed_{false};
+    std::atomic<bool> media_seek_pending_{false};
+    std::atomic<bool> seek_awaiting_picture_{false};
+    std::atomic<std::uint32_t> media_seek_requested_{0}, media_seek_acked_{0};
+    std::atomic<int> media_seek_result_{IPTV_STREAM_OK};
+    std::atomic<std::uint64_t> media_seek_show_from_us_{0};
+    std::int64_t media_seek_target_ = -1;
 };
 
 #if IPTV_PROBE
@@ -2258,6 +2480,14 @@ int OpenAndFeedSegment(const char *url, StreamRunner *runner, std::uint8_t *buff
 
 int RunContainer(const char *url, StreamRunner *runner, const iptv::http::RequestHeaders *headers,
                  const std::string *manifest);
+
+void NoteSeekTransport()
+{
+    std::lock_guard lock(gSeekTraceMutex);
+    if (gSeekTrace.requested_usec && !gSeekTrace.inline_seek && !gSeekTrace.transport_usec &&
+        gSeekTrace.session != gPlaybackSession.load(std::memory_order_relaxed))
+        gSeekTrace.transport_usec = MonotonicUsec();
+}
 
 int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read_buffer,
                 char *playlist_data, const iptv_hls_limits_t *limits, iptv_hls_playlist_t *playlist,
@@ -2666,10 +2896,13 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
             return true;
         };
     }
-    const iptv::MediaOutput output{
+    iptv::MediaOutput output{
         runner,
         [](void *self, const std::uint8_t *bytes, std::size_t count)
-        { return static_cast<StreamRunner *>(self)->Push(bytes, count) == IPTV_STREAM_OK; },
+        {
+            NoteSeekTransport();
+            return static_cast<StreamRunner *>(self)->Push(bytes, count) == IPTV_STREAM_OK;
+        },
         [](void *, const std::vector<iptv::SubtitleTrack> &tracks)
         {
             gSubtitles.set_tracks(tracks);
@@ -2719,9 +2952,28 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
             block.keyframe = packet.keyframe;
             return player->PushWebm(video, block) == IPTV_STREAM_OK;
         }};
+    if (gMediaSession && (!manifest || kInlineHlsSeek))
+    {
+        input.take_seek = [](void *self)
+        { return static_cast<File *>(self)->runner->TakeMediaSeek(); };
+        input.seek_waiting = [](void *self)
+        { return static_cast<File *>(self)->runner->SeekWaiting(); };
+        output.seek_armed = [](void *self, bool armed)
+        { static_cast<StreamRunner *>(self)->ArmMediaSeek(armed); };
+        output.seek_begin = [](void *self) { static_cast<StreamRunner *>(self)->BeginMediaSeek(); };
+        output.seek_commit = [](void *self, std::int64_t target)
+        { return static_cast<StreamRunner *>(self)->CommitMediaSeek(target); };
+        output.seek_failed = [](void *self, std::int64_t target)
+        { static_cast<StreamRunner *>(self)->FailMediaSeek(target); };
+    }
     std::string error;
     const int result =
         iptv::ReadMedia(input, output, &error, gMediaSession ? gMediaStartPosition.load() : 0);
+    if (result < 0 && runner->SeekAwaitingPicture() && !runner->PlaybackStopRequested())
+    {
+        runner->FailMediaSeek(runner->MediaSeekTarget());
+        return 1;
+    }
     if (result < 0)
         SetLastPlaybackError("%s", error.c_str());
     if (result != 0)
@@ -2732,13 +2984,13 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
     return finished == IPTV_STREAM_OK && runner->HasPresentedVideo() ? 0 : -1;
 }
 
-// Network waits of this thread end as soon as the viewer stops the channel.
+// Network waits of this thread end when the viewer stops the channel or a seek is waiting.
 struct NetworkWaitsFollowControls
 {
     explicit NetworkWaitsFollowControls(StreamRunner *runner)
     {
         tv_http_set_interrupt([](void *context)
-                              { return static_cast<StreamRunner *>(context)->StopRequested(); },
+                              { return static_cast<StreamRunner *>(context)->NetworkWaitEnds(); },
                               runner);
     }
     ~NetworkWaitsFollowControls()
@@ -2976,6 +3228,7 @@ static int RunPlayerOnce(const char *url, const char *channel_name, const char *
         gQualityState.selected = IPTV_HLS_NO_VARIANT;
     }
     const std::uint64_t playback_started_us = MonotonicUsec();
+    gPlaybackSession.fetch_add(1, std::memory_order_relaxed);
     {
         std::lock_guard lock(gMediaMutex);
         gMediaState = {};
@@ -3176,6 +3429,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
             RunPlayerOnce(url, channel_name, user_agent, referrer, remaining, reconnect_live, live,
                           authorization, credential_origin, extra_headers);
         const auto target = gMediaSeekRequest.exchange(-1, std::memory_order_acq_rel);
+        gMediaSeekReopen.store(false, std::memory_order_release);
         iptv_player_media_state_t media{};
         iptv_player_media_state(&media);
         if (!live && result < 0 && gMediaStartPosition.load() && !media.presented)
@@ -3201,6 +3455,7 @@ void iptv_player_set_start_position(uint64_t position_us)
     gAudioDelayMs.store(0);
     gPlaybackSpeed.store(100);
     gMediaSeekRequest.store(-1);
+    gMediaSeekReopen.store(false);
     gMediaSavedAudio = UINT32_MAX;
     gMediaSavedSubtitle = 0;
     gMediaRestoreAudio.store(UINT32_MAX);
@@ -3225,9 +3480,17 @@ int iptv_player_seek_media(uint64_t position_us)
         gMediaSavedAudio = gAudioState.count ? gAudioState.selected_pid : UINT32_MAX;
     }
     gMediaSavedSubtitle = gSubtitles.state().selected;
-    gMediaSeekRequest.store(
-        static_cast<std::int64_t>(std::min(position_us, gMediaState.duration_us - 1)),
-        std::memory_order_release);
+    const auto target =
+        static_cast<std::int64_t>(std::min(position_us, gMediaState.duration_us - 1));
+    {
+        std::lock_guard trace_lock(gSeekTraceMutex);
+        gSeekTrace = {};
+        gSeekTrace.requested_usec = std::max<std::uint64_t>(MonotonicUsec(), 1);
+        gSeekTrace.session = gPlaybackSession.load(std::memory_order_relaxed);
+        gSeekTrace.from_us = static_cast<std::int64_t>(gMediaState.position_us);
+        gSeekTrace.to_us = target;
+    }
+    gMediaSeekRequest.store(target, std::memory_order_release);
     return IPTV_STREAM_OK;
 }
 int iptv_player_set_speed(unsigned percent)
@@ -3239,9 +3502,12 @@ int iptv_player_set_speed(unsigned percent)
     iptv_player_media_state(&state);
     if (!state.seekable || !state.duration_us)
         return IPTV_STREAM_INVALID_STATE;
+    gMediaSeekReopen.store(true, std::memory_order_release);
     const int result = iptv_player_seek_media(state.position_us);
     if (result == IPTV_STREAM_OK)
         gPlaybackSpeed.store(percent);
+    else
+        gMediaSeekReopen.store(false, std::memory_order_release);
     return result;
 }
 

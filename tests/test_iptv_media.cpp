@@ -35,6 +35,16 @@ struct Memory
     std::vector<iptv::MediaAudioTrack> audio_tracks;
     std::vector<std::int64_t> subtitle_times;
     iptv::MediaTimeline timeline;
+    std::vector<std::pair<unsigned, std::int64_t>> seek_script;
+    bool take_seeks = true, seek_outputs = true, fail_seeks_after_open = false, armed = false;
+    bool report_failures = true;
+    unsigned asked = 0, armings = 0, begins = 0;
+    std::size_t seek_after_cues = 0;
+    std::size_t seek_after_bytes = 0, read_bytes = 0;
+    bool waiting = false, refuse_waiting_seek = false;
+    unsigned ended_reads = 0;
+    std::vector<std::int64_t> committed, failed;
+    std::vector<std::size_t> segments, subtitle_segments;
     explicit Memory(const char *name)
     {
         std::ifstream file(std::string("build/media-tests/fixtures/") + name, std::ios::binary);
@@ -47,6 +57,16 @@ struct Memory
         auto &m = *static_cast<Memory *>(self);
         const auto count =
             std::min({m.bytes.size() - m.at, m.piece, static_cast<std::size_t>(cap)});
+        auto &root = m.owner ? *m.owner : m;
+        if (root.armed && root.seek_after_bytes && !root.waiting && !root.seek_script.empty() &&
+            root.read_bytes + count >= root.seek_after_bytes)
+        {
+            root.waiting = true;
+            ++root.ended_reads;
+            return -1;
+        }
+        if (root.armed)
+            root.read_bytes += count;
         if (count)
             std::memcpy(out, m.bytes.data() + m.at, count);
         m.at += count;
@@ -59,7 +79,8 @@ struct Memory
             [](void *self, std::int64_t offset)
             {
                 auto &m = *static_cast<Memory *>(self);
-                if (offset < 0 || static_cast<std::uint64_t>(offset) > m.bytes.size())
+                if (offset < 0 || static_cast<std::uint64_t>(offset) > m.bytes.size() ||
+                    (m.fail_seeks_after_open && m.asked))
                     return std::int64_t(-1);
                 ++m.seeks;
                 m.at = static_cast<std::size_t>(offset);
@@ -153,7 +174,66 @@ struct Memory
                     m.stop = true;
                 return !m.reject_output;
             };
-        return iptv::ReadMedia(input, output, error, start_us);
+        if (!seek_script.empty() && take_seeks)
+            input.take_seek = [](void *self)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                EXPECT_TRUE(m.armed);
+                ++m.asked;
+                if (m.seek_after_bytes)
+                {
+                    if (!m.waiting || m.refuse_waiting_seek)
+                        return std::int64_t(-1);
+                    m.waiting = false;
+                    const auto target = m.seek_script.front().second;
+                    m.seek_script.erase(m.seek_script.begin());
+                    return target;
+                }
+                if (m.seek_script.empty() ||
+                    (m.seek_after_cues ? m.subtitle_times.size() < m.seek_after_cues
+                                       : m.asked < m.seek_script.front().first))
+                    return std::int64_t(-1);
+                const auto target = m.seek_script.front().second;
+                m.seek_script.erase(m.seek_script.begin());
+                return target;
+            };
+        if (seek_after_bytes)
+            input.seek_waiting = [](void *self)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                return m.waiting && !m.seek_script.empty();
+            };
+        if (!seek_script.empty() && seek_outputs)
+        {
+            output.seek_armed = [](void *self, bool armed)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                EXPECT_NE(m.armed, armed);
+                m.armed = armed;
+                m.armings += armed;
+            };
+            output.seek_begin = [](void *self) { ++static_cast<Memory *>(self)->begins; };
+            output.seek_commit = [](void *self, std::int64_t target)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                EXPECT_EQ(m.begins, m.committed.size() + m.failed.size() + 1);
+                m.committed.push_back(target);
+                m.segments.push_back(m.transport.size());
+                m.subtitle_segments.push_back(m.subtitle_times.size());
+                return true;
+            };
+            output.seek_failed = [](void *self, std::int64_t target)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                EXPECT_FALSE(m.armed);
+                m.failed.push_back(target);
+            };
+            if (!report_failures)
+                output.seek_failed = nullptr;
+        }
+        const int result = iptv::ReadMedia(input, output, error, start_us);
+        EXPECT_FALSE(armed);
+        return result;
     }
 };
 struct Frames
@@ -857,6 +937,298 @@ TEST(Media, HlsResolvesSegmentsAgainstTheRedirectedPlaylist)
     ASSERT_EQ(memory.run(&error), 0) << error;
     EXPECT_EQ(memory.opened, memory.closed);
     check_transport(memory, false);
+}
+struct Segment
+{
+    std::vector<std::uint64_t> pts;
+    std::vector<std::uint8_t> first_picture;
+    unsigned audio = 0;
+};
+struct Played
+{
+    std::vector<Segment> segments;
+    unsigned opens = 0, discontinuities = 0;
+    std::uint64_t continuity_errors = 0;
+};
+Played play_segments(const Memory &memory)
+{
+    Played played;
+    played.segments.emplace_back();
+    iptv_stream_backend_t backend{};
+    backend.context = &played;
+    backend.open = [](void *self, const iptv_stream_format_t *)
+    {
+        ++static_cast<Played *>(self)->opens;
+        return 0;
+    };
+    backend.submit_video =
+        [](void *self, const std::uint8_t *bytes, std::size_t count, std::uint64_t pts)
+    {
+        auto &segment = static_cast<Played *>(self)->segments.back();
+        if (segment.pts.empty())
+            segment.first_picture.assign(bytes, bytes + count);
+        segment.pts.push_back(pts);
+        return 0;
+    };
+    backend.submit_audio = [](void *self, const std::uint8_t *, std::size_t, std::uint64_t)
+    {
+        ++static_cast<Played *>(self)->segments.back().audio;
+        return 0;
+    };
+    backend.disable_audio = backend.drain = [](void *) { return 0; };
+    backend.discontinuity = [](void *self)
+    {
+        ++static_cast<Played *>(self)->discontinuities;
+        return 0;
+    };
+    backend.close = [](void *) {};
+    iptv_stream_session_t session{};
+    iptv_stream_init(&session);
+    EXPECT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+    EXPECT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+    std::vector<std::size_t> bounds = memory.segments;
+    bounds.push_back(memory.transport.size());
+    std::size_t at = 0;
+    for (std::size_t i = 0; i < bounds.size(); ++i)
+    {
+        if (i)
+        {
+            EXPECT_EQ(iptv_stream_discontinuity(&session), IPTV_STREAM_OK);
+            played.segments.emplace_back();
+        }
+        EXPECT_EQ(bounds[i] % 188, 0u);
+        EXPECT_EQ(iptv_stream_push(&session, memory.transport.data() + at, bounds[i] - at),
+                  IPTV_STREAM_OK)
+            << session.telemetry.last_error;
+        at = bounds[i];
+    }
+    EXPECT_EQ(iptv_stream_stop(&session), IPTV_STREAM_OK) << session.telemetry.last_error;
+    played.continuity_errors = session.telemetry.continuity_errors;
+    EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+    return played;
+}
+void expect_fresh_tables(const Memory &memory)
+{
+    std::vector<std::size_t> starts{0};
+    starts.insert(starts.end(), memory.segments.begin(), memory.segments.end());
+    for (const auto start : starts)
+    {
+        SCOPED_TRACE("transport at " + std::to_string(start));
+        bool pat = false, pmt = false;
+        for (std::size_t at = start; at < start + 4 * 188 && at + 188 <= memory.transport.size();
+             at += 188)
+        {
+            const auto *p = memory.transport.data() + at;
+            ASSERT_EQ(p[0], 0x47);
+            const unsigned pid = (p[1] & 0x1f) << 8 | p[2];
+            pat |= pid == 0 && (p[3] & 15) == 0;
+            pmt |= pid == 0x1000 && (p[3] & 15) == 0;
+        }
+        EXPECT_TRUE(pat && pmt);
+    }
+}
+
+void expect_keyframe_landing(std::uint64_t first_pts, std::int64_t target)
+{
+    const auto at = static_cast<std::uint64_t>(target) + 2000000;
+    EXPECT_LE(first_pts, at + 25000);
+    EXPECT_GT(first_pts + 1000000, at);
+}
+
+TEST(Media, SeeksInsideTheOpenVideoForwardAndBackOnEveryContainer)
+{
+    for (const auto *name : {"chapters.mp4", "chapters.mkv", "seek.ts", "hls-seek/master.m3u8"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        ASSERT_FALSE(memory.bytes.empty());
+        memory.seek_script = {{40, 4400000}, {60, 400000}};
+        std::string error;
+        ASSERT_EQ(memory.run(&error, 1500000), 0) << error;
+        EXPECT_EQ(memory.armings, 1u);
+        EXPECT_EQ(memory.begins, 2u);
+        EXPECT_EQ(memory.committed, (std::vector<std::int64_t>{4400000, 400000}));
+        EXPECT_TRUE(memory.failed.empty());
+        EXPECT_EQ(memory.opened, memory.closed);
+        if (!memory.url.empty())
+            EXPECT_GT(memory.opened, 2u);
+        expect_fresh_tables(memory);
+        const auto played = play_segments(memory);
+        EXPECT_EQ(played.opens, 1u);
+        EXPECT_EQ(played.discontinuities, 2u);
+        EXPECT_EQ(played.continuity_errors, 0u);
+        ASSERT_EQ(played.segments.size(), 3u);
+        const std::uint64_t starts[] = {1500000, 4400000, 400000};
+        for (std::size_t i = 0; i < played.segments.size(); ++i)
+        {
+            SCOPED_TRACE(i);
+            const auto &segment = played.segments[i];
+            ASSERT_FALSE(segment.pts.empty());
+            EXPECT_GT(segment.audio, 0u);
+            const auto first = *std::min_element(segment.pts.begin(), segment.pts.end());
+            expect_keyframe_landing(first, starts[i]);
+            EXPECT_EQ(segment.pts.front(), first);
+            std::vector<std::uint8_t> pixels;
+            decode_picture(AV_CODEC_ID_H264, segment.first_picture, &pixels);
+            EXPECT_EQ(pixels.size(), 320u * 180u * 3u / 2u);
+        }
+        ASSERT_FALSE(played.segments.back().pts.empty());
+        EXPECT_NEAR(played.segments.back().pts.size(), 140u, 25u);
+        EXPECT_NEAR(
+            *std::max_element(played.segments.back().pts.begin(), played.segments.back().pts.end()),
+            7960000, 100000);
+    }
+}
+
+TEST(Media, ASeekEndsTheReadInProgressInsteadOfWaitingForIt)
+{
+    for (const auto *name : {"chapters.mp4", "chapters.mkv", "seek.ts", "hls-seek/master.m3u8"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        ASSERT_FALSE(memory.bytes.empty());
+        memory.piece = 4096;
+        memory.seek_script = {{0, 4400000}};
+        memory.seek_after_bytes = 20000;
+        std::string error;
+        ASSERT_EQ(memory.run(&error), 0) << error;
+        EXPECT_EQ(memory.ended_reads, 1u);
+        EXPECT_EQ(memory.committed, std::vector<std::int64_t>{4400000});
+        EXPECT_TRUE(memory.failed.empty());
+        EXPECT_EQ(memory.opened, memory.closed);
+        expect_fresh_tables(memory);
+        const auto played = play_segments(memory);
+        EXPECT_EQ(played.opens, 1u);
+        EXPECT_EQ(played.continuity_errors, 0u);
+        ASSERT_EQ(played.segments.size(), 2u);
+        ASSERT_FALSE(played.segments[1].pts.empty());
+        expect_keyframe_landing(played.segments[1].pts.front(), 4400000);
+        EXPECT_NEAR(played.segments[1].pts.back(), 7960000, 100000);
+        std::vector<std::uint8_t> pixels;
+        decode_picture(AV_CODEC_ID_H264, played.segments[1].first_picture, &pixels);
+        EXPECT_FALSE(pixels.empty());
+    }
+    Memory reopen("chapters.mkv");
+    reopen.seek_script = {{0, 4400000}};
+    reopen.seek_after_bytes = 20000;
+    reopen.refuse_waiting_seek = true;
+    std::string error;
+    EXPECT_EQ(reopen.run(&error), 1);
+    EXPECT_EQ(reopen.ended_reads, 1u);
+    EXPECT_TRUE(reopen.committed.empty());
+}
+
+TEST(Media, SeekToTheBeginningAndRapidSeeksStayDecodable)
+{
+    for (const auto *name : {"chapters.mp4", "seek.ts", "hls-seek/master.m3u8"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        memory.seek_script = {{30, 0}, {60, 3000000}, {61, 5500000}, {90, 2000000}};
+        std::string error;
+        ASSERT_EQ(memory.run(&error, 2400000), 0) << error;
+        EXPECT_EQ(memory.committed, (std::vector<std::int64_t>{0, 3000000, 5500000, 2000000}));
+        EXPECT_EQ(memory.opened, memory.closed);
+        expect_fresh_tables(memory);
+        const auto played = play_segments(memory);
+        EXPECT_EQ(played.opens, 1u);
+        EXPECT_EQ(played.continuity_errors, 0u);
+        ASSERT_EQ(played.segments.size(), 5u);
+        ASSERT_FALSE(played.segments[1].pts.empty());
+        expect_keyframe_landing(played.segments[1].pts.front(), 0);
+        ASSERT_FALSE(played.segments[3].pts.empty());
+        expect_keyframe_landing(played.segments[3].pts.front(), 5500000);
+        ASSERT_FALSE(played.segments.back().pts.empty());
+        expect_keyframe_landing(played.segments.back().pts.front(), 2000000);
+        EXPECT_NEAR(played.segments.back().pts.back(), 7960000, 100000);
+        for (const auto &segment : played.segments)
+            if (!segment.first_picture.empty())
+            {
+                std::vector<std::uint8_t> pixels;
+                decode_picture(AV_CODEC_ID_H264, segment.first_picture, &pixels);
+                EXPECT_FALSE(pixels.empty());
+            }
+    }
+}
+
+TEST(Media, SubtitlesAfterAnInlineSeekKeepTheVideoTimeline)
+{
+    for (const auto *name : {"subtitles.mp4", "subtitles.mkv", "hls-mpegts/subtitles-master.m3u8"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        ASSERT_FALSE(memory.bytes.empty());
+        iptv::Subtitles subtitles;
+        memory.subtitles = &subtitles;
+        memory.seek_script = {{50, 0}};
+        std::string error;
+        ASSERT_EQ(memory.run(&error), 0) << error;
+        ASSERT_EQ(memory.committed.size(), 1u);
+        EXPECT_EQ(memory.opened, memory.closed);
+        SCOPED_TRACE(::testing::PrintToString(memory.subtitle_times));
+        ASSERT_EQ(memory.subtitle_segments.size(), 1u);
+        const auto split = memory.subtitle_segments[0];
+        ASSERT_GE(split, 2u);
+        const auto &times = memory.subtitle_times;
+        const auto again = std::min(split, times.size() - split);
+        ASSERT_GE(again, 2u);
+        EXPECT_TRUE(std::equal(times.begin(), times.begin() + again, times.begin() + split));
+        const auto played = play_segments(memory);
+        ASSERT_EQ(played.segments.size(), 2u);
+        ASSERT_FALSE(played.segments[1].pts.empty());
+        const auto first_pts = played.segments[1].pts.front();
+        EXPECT_TRUE(subtitles.at(first_pts).empty());
+        const auto cues = subtitles.at(first_pts + 250000);
+        ASSERT_EQ(cues.size(), 1u);
+        EXPECT_EQ(cues[0]->text, "Hello, world!");
+    }
+}
+
+TEST(Media, FailedInlineSeekAsksForAReopenAndNullCallbacksKeepTodaysPath)
+{
+    std::string error;
+    Memory failing("seek.ts");
+    failing.seek_script = {{5, 1000000}};
+    failing.fail_seeks_after_open = true;
+    EXPECT_EQ(failing.run(&error, 5000000), 1);
+    EXPECT_EQ(failing.begins, 1u);
+    EXPECT_TRUE(failing.committed.empty());
+    EXPECT_EQ(failing.failed, std::vector<std::int64_t>{1000000});
+    Memory unreported("seek.ts");
+    unreported.seek_script = {{5, 1000000}};
+    unreported.fail_seeks_after_open = true;
+    unreported.report_failures = false;
+    EXPECT_EQ(unreported.run(&error, 5000000), -1);
+    EXPECT_EQ(error, "The video could not seek to that position.");
+    Memory end("hls-seek/master.m3u8");
+    end.seek_script = {{5, 5999999}};
+    EXPECT_EQ(end.run(&error, 1000000), 1);
+    EXPECT_TRUE(end.committed.empty());
+    EXPECT_EQ(end.failed, std::vector<std::int64_t>{5999999});
+    EXPECT_EQ(end.opened, end.closed);
+    for (const auto *name : {"chapters.mp4", "chapters.mkv", "seek.ts", "hls-seek/master.m3u8"})
+    {
+        SCOPED_TRACE(name);
+        Memory plain(name);
+        ASSERT_EQ(plain.run(&error, 1000000), 0) << error;
+        Memory no_input(name);
+        no_input.seek_script = {{20, 4400000}};
+        no_input.take_seeks = false;
+        ASSERT_EQ(no_input.run(&error, 1000000), 0) << error;
+        EXPECT_EQ(no_input.armings, 0u);
+        EXPECT_EQ(no_input.transport, plain.transport);
+        Memory no_output(name);
+        no_output.seek_script = {{20, 4400000}};
+        no_output.seek_outputs = false;
+        ASSERT_EQ(no_output.run(&error, 1000000), 0) << error;
+        EXPECT_EQ(no_output.asked, 0u);
+        EXPECT_EQ(no_output.transport, plain.transport);
+        Memory unused(name);
+        unused.seek_script = {{UINT32_MAX, 0}};
+        ASSERT_EQ(unused.run(&error, 1000000), 0) << error;
+        EXPECT_GT(unused.asked, 50u);
+        EXPECT_EQ(unused.transport, plain.transport);
+    }
 }
 } // namespace
 

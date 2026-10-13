@@ -266,6 +266,40 @@ int main() {
             self.assertIn("direct_" + field + "_total_us=%llu", player)
             self.assertIn("direct_" + field + "_max_us=%llu", player)
 
+    def test_inline_media_seek_falls_back_and_never_waits_forever(self):
+        player = (ROOT / "src/iptv_player.cpp").read_text()
+        runner = player.split("class StreamRunner", 1)[1]
+        commit = runner.split("    bool CommitMediaSeek(", 1)[1].split("    void FailMediaSeek(", 1)[0]
+        wait = commit.split("while (", 1)[1].split("sceKernelUsleep", 1)[0]
+        for condition in ("StopRequested()", "read_ahead_done_", "deadline"):
+            self.assertIn(condition, wait)
+        self.assertNotIn("iptv_stream_", commit)
+        loop = runner.split("    void ReadAheadLoop()", 1)[1].split("    int StopReadAhead", 1)[0]
+        self.assertLess(loop.index("RestartMediaTimeline()"), loop.index("iptv_stream_push"))
+        restart = runner.split("    void RestartMediaTimeline()", 1)[1].split("    void ReportSeek()", 1)[0]
+        self.assertLess(restart.index("read_ahead_read_.store"), restart.index("iptv_stream_discontinuity"))
+        self.assertLess(restart.index("iptv_stream_discontinuity"), restart.index("seek_hint"))
+        arm = runner.split("    void ArmMediaSeek(bool armed)", 1)[1].split("    std::int64_t TakeMediaSeek()", 1)[0]
+        for condition in ("!live_", "!history_", "RunnerMode::transport_stream", "kInlineMediaSeek"):
+            self.assertIn(condition, arm)
+        stop = runner.split("    bool StopRequested()", 1)[1].split("    const iptv_stream_telemetry_t", 1)[0]
+        self.assertIn("gMediaSeekRequest.load(std::memory_order_acquire) >= 0 && !TakesSeekInline()", stop)
+        speed = player.split("int iptv_player_set_speed(", 1)[1].split("int iptv_player_pause_media(", 1)[0]
+        self.assertLess(speed.index("gMediaSeekReopen.store(true"), speed.index("iptv_player_seek_media("))
+        fail = runner.split("    void FailMediaSeek(", 1)[1].split("    bool SeekAwaitingPicture()", 1)[0]
+        self.assertLess(fail.index("PlaybackStopRequested()"), fail.index("gMediaSeekReopen.store(true"))
+        container = player.split("int RunContainer(const char *url, StreamRunner *runner, "
+                                 "const iptv::http::RequestHeaders *headers,\n                 "
+                                 "const std::string *manifest)\n{", 1)[1]
+        self.assertIn("runner->SeekAwaitingPicture() && !runner->PlaybackStopRequested()", container)
+        waits = player.split("struct NetworkWaitsFollowControls", 1)[1].split("};", 1)[0]
+        self.assertIn("NetworkWaitEnds()", waits)
+        waiting = runner.split("    bool SeekWaiting() const", 1)[1].split("    bool NetworkWaitEnds()", 1)[0]
+        self.assertIn("!media_seek_pending_", waiting)
+        self.assertIn("TakesSeekInline()", waiting)
+        replay = player.split("static int RunPlayer(", 1)[1]
+        self.assertLess(replay.index("gMediaSeekRequest.exchange(-1"), replay.index("gMediaSeekReopen.store(false"))
+
     def test_input_ring_empty_does_not_restart_startup_buffering(self):
         player = (ROOT / "src/iptv_player.cpp").read_text()
         loop = player.split("    void ReadAheadLoop()", 1)[1].split("    int StopReadAhead", 1)[0]

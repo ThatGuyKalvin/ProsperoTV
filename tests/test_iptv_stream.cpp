@@ -1117,6 +1117,80 @@ TEST(IptvStreamTest, ResetsTransportTimelineWithoutReopeningBackend)
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
 }
 
+TEST_F(AudioSelectionTest, SeekWithTheSameProgrammeKeepsTheChosenLanguageAndResetsSubtitles)
+{
+    const std::vector<iptv_stream_audio_track_t> tracks{{0x111, 0x0f, "eng", 0},
+                                                        {0x112, 0x0f, "spa", 0}};
+    ASSERT_EQ(pmt(tracks, true), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0x112), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.audio_selections.size(), 1u);
+    ASSERT_EQ(audio(0x112, 0), IPTV_STREAM_OK);
+    const auto audios = fake.audios;
+    ASSERT_EQ(iptv_stream_discontinuity(&session), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.subtitle_resets, 1u);
+    EXPECT_EQ(fake.discontinuities, 1u);
+    pmt_counter = 0;
+    ASSERT_EQ(pmt(tracks, true), IPTV_STREAM_OK);
+    ASSERT_EQ(audio(0x112, 0), IPTV_STREAM_OK);
+    ASSERT_EQ(audio(0x111, 0), IPTV_STREAM_OK);
+    std::uint32_t selected = 0;
+    iptv_stream_audio_track_t listed[2]{};
+    EXPECT_EQ(iptv_stream_audio_tracks(&session, listed, 2, &selected), 2u);
+    EXPECT_EQ(selected, 0x112u);
+    EXPECT_GT(fake.audios, audios);
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.audio_selections.size(), 1u);
+    EXPECT_EQ(fake.disables, 0u);
+    EXPECT_EQ(fake.programme_boundaries, 0u);
+    EXPECT_EQ(session.telemetry.continuity_errors, 0u);
+}
+
+TEST(IptvStreamTest, FreshMuxAfterASeekParsesWithoutReopeningTheBackend)
+{
+    FakeBackend fake;
+    iptv_stream_backend_t backend{};
+    backend.context = &fake;
+    backend.open = FakeOpen;
+    backend.submit_video = FakeVideo;
+    backend.submit_audio = FakeAudio;
+    backend.disable_audio = FakeDisableAudio;
+    backend.discontinuity = FakeDiscontinuity;
+    backend.drain = FakeDrain;
+    backend.close = FakeClose;
+    iptv_stream_session_t session{};
+    iptv_stream_init(&session);
+    ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+    const auto play = [&](std::uint64_t second, bool keyframe_first)
+    {
+        std::vector<std::uint8_t> bytes;
+        AppendPacket(&bytes, PsiPacket(0, PatSection()));
+        AppendPacket(&bytes, PsiPacket(0x100, PmtSection(0x0f)));
+        if (!keyframe_first)
+            AppendPacket(&bytes, StampedPacket(H264Packet(0, false, 0x41), second * 90000));
+        for (std::uint8_t counter = keyframe_first ? 0 : 1; counter < 4; ++counter)
+            AppendPacket(&bytes,
+                         StampedPacket(H264Packet(counter, counter == (keyframe_first ? 0 : 1)),
+                                       second * 90000 + counter * 3600));
+        return iptv_stream_push(&session, bytes.data(), bytes.size());
+    };
+    ASSERT_EQ(play(10, true), IPTV_STREAM_OK);
+    const auto before = fake.videos;
+    ASSERT_GT(before, 0u);
+    ASSERT_EQ(iptv_stream_discontinuity(&session), IPTV_STREAM_OK);
+    ASSERT_EQ(play(4, false), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_stop(&session), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.discontinuities, 1u);
+    EXPECT_EQ(session.telemetry.continuity_errors, 0u);
+    ASSERT_GT(fake.videos, before);
+    const auto &first = fake.video_packets[before];
+    const std::uint8_t sps[] = {0, 0, 0, 1, 0x67};
+    EXPECT_NE(std::search(first.begin(), first.end(), std::begin(sps), std::end(sps)), first.end());
+    EXPECT_EQ(fake.videos - before, 3u);
+    EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+}
+
 TEST_F(AudioSelectionTest, RepositionRestoresMissingParametersOnlyOnTheFirstPicture)
 {
     ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}}, true), IPTV_STREAM_OK);
