@@ -123,6 +123,9 @@
 
 - Browse movies, shows, seasons, and episodes from an Xtream account or a
   classified M3U playlist in **On demand**, next to Live TV.
+- See the provider's newest movies and shows first in every category, by the
+  date an Xtream provider added them; titles it gives no date follow by title,
+  so an M3U playlist is listed by title.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
 
 ### While watching
@@ -575,4 +578,4 @@ In multiview, Touchpad keeps the selected live channel playing in a corner while
 
 Live TV also offers Recently added (first seen by this app) and Most watched (successful viewing sessions), with history saved separately for each profile and source.
 
-On Demand: Square opens provider title details; R3 filters loaded metadata by genre/year or changes sorting. Movie details are fetched when opened and retained in the local cache.
+On Demand: Square opens provider title details; R3 filters loaded metadata by genre/year or changes sorting (Recently added, the default, or Title A-Z, Title Z-A, Newest year, Highest rating; a show's episodes default to episode order). Movie details are fetched when opened and retained in the local cache.

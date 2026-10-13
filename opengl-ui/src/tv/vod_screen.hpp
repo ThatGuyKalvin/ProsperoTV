@@ -29,6 +29,7 @@ class VodScreen
         return filters_open_;
     }
     unsigned result_count() const;
+    std::vector<std::string> result_titles() const; // in the order they are listed
 
   private:
     enum class Kind

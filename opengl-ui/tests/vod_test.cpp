@@ -1065,7 +1065,8 @@ TEST_F(VodTest, ControllerFiltersByProviderGenreAndYearSortsAndOpensDetails)
     move(hui::Direction::down);
     move(hui::Direction::right);
     move(hui::Direction::right);
-    EXPECT_EQ(model.view.vod_sort, 2);
+    move(hui::Direction::right);
+    EXPECT_EQ(model.view.vod_sort, 3); // Newest year
     press(hui::Action::confirm);
     press(hui::Action::west);
     EXPECT_TRUE(screen.details_open());
@@ -1079,6 +1080,98 @@ TEST_F(VodTest, ControllerFiltersByProviderGenreAndYearSortsAndOpensDetails)
     model.close();
 }
 
+TEST_F(VodTest, NewestAdditionsComeFirstAndUndatedTitlesFollowByTitle)
+{
+    response("get_vod_streams",
+             R"([{"stream_id":1,"name":"Undated","category_id":3},)"
+             R"({"stream_id":2,"name":"Old","added":"1500000000","category_id":3},)"
+             R"({"stream_id":3,"name":"Newest","added":1700000000,"category_id":2},)"
+             R"({"stream_id":4,"name":"Zed tie","added":"1600000000","category_id":3},)"
+             R"({"stream_id":5,"name":"Words","added":"yesterday","category_id":3},)"
+             R"({"stream_id":6,"name":"Ace tie","added":"1600000000.0","category_id":3},)"
+             R"({"stream_id":7,"name":"Negative","added":-5,"category_id":3},)"
+             R"({"stream_id":8,"name":"Far off","added":"99999999999","category_id":3},)"
+             R"({"stream_id":9,"name":"Null","added":null,"category_id":3},)"
+             R"({"stream_id":10,"name":"Object","added":{"at":1},"category_id":3},)"
+             R"({"stream_id":11,"name":"Overlong","added":"1600000000000000000000000000000000",)"
+             R"("category_id":3},)"
+             R"({"stream_id":12,"name":"Middle","added":"1650000000","category_id":3}])");
+    response("get_series",
+             R"([{"series_id":20,"name":"Old show","last_modified":"1500000000","category_id":4},)"
+             R"({"series_id":21,"name":"Added only","added":"1600000000","category_id":4},)"
+             R"({"series_id":22,"name":"New show","last_modified":1690000000,"added":"1",)"
+             R"("category_id":4},{"series_id":23,"name":"A undated show","category_id":4}])");
+    const std::vector<std::string> newest{"Newest", "Middle",   "Zed tie",  "Ace tie",
+                                          "Old",    "Far off",  "Negative", "Null",
+                                          "Object", "Overlong", "Undated",  "Words"};
+    {
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        const hui::ui::Fonts fonts{};
+        ptv::Shared shared(model, fonts, {});
+        ptv::VodScreen screen(shared);
+        model.view.vod_kind = static_cast<int>(ptv::VodKind::movies);
+        model.view.vod_all = true;
+        screen.enter();
+        ASSERT_TRUE(settle(model));
+        screen.update();
+        // The catalog keeps the provider's order; only the list shown is sorted.
+        const auto &catalog = model.vod().catalog();
+        ASSERT_EQ(catalog.size(), 12u);
+        EXPECT_EQ(catalog[0].name, "Undated");
+        EXPECT_EQ(model.vod().added(0), 0u);
+        EXPECT_EQ(model.vod().added(1), 1500000000u);
+        EXPECT_EQ(model.vod().added(2), 1700000000u);
+        EXPECT_EQ(model.vod().added(5), 1600000000u);
+        for (const unsigned undated : {4u, 6u, 7u, 8u, 9u, 10u})
+            EXPECT_EQ(model.vod().added(undated), 0u) << catalog[undated].name;
+        EXPECT_EQ(model.vod().added(99), 0u);
+        EXPECT_EQ(model.view.vod_sort, 0);
+        EXPECT_EQ(screen.result_titles(), newest);
+        // One category, and a search, are in the same order.
+        model.view.vod_all = false;
+        model.view.vod_category = "US / Movies / Kids";
+        screen.enter();
+        auto kids = newest;
+        kids.erase(kids.begin());
+        EXPECT_EQ(screen.result_titles(), kids);
+        model.view.vod_category.clear();
+        model.view.vod_query = "tie";
+        screen.enter();
+        EXPECT_EQ(screen.result_titles(), (std::vector<std::string>{"Zed tie", "Ace tie"}));
+        model.view.vod_query.clear();
+        // Title order is still one choice away.
+        model.view.vod_all = true;
+        model.view.vod_sort = 1;
+        screen.enter();
+        auto titles = newest;
+        std::sort(titles.begin(), titles.end());
+        EXPECT_EQ(screen.result_titles(), titles);
+        model.view.vod_sort = 0;
+        // A show's date is when its list entry last changed, or else when it was added.
+        model.view.vod_kind = static_cast<int>(ptv::VodKind::series);
+        screen.enter();
+        ASSERT_TRUE(settle(model));
+        screen.update();
+        EXPECT_EQ(screen.result_titles(), (std::vector<std::string>{"New show", "Added only",
+                                                                    "Old show", "A undated show"}));
+        model.close();
+    }
+    // The dates are kept with the saved list.
+    host::set_network(false, "");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    const hui::ui::Fonts fonts{};
+    ptv::Shared shared(model, fonts, {});
+    ptv::VodScreen screen(shared);
+    model.view.vod_kind = static_cast<int>(ptv::VodKind::movies);
+    model.view.vod_all = true;
+    screen.enter();
+    ASSERT_TRUE(settle(model));
+    screen.update();
+    EXPECT_EQ(screen.result_titles(), newest);
+    model.close();
+}
 TEST_F(VodTest, MalformedMovieDetailsKeepPreviousMetadataAndDoNotComplete)
 {
     std::string info;

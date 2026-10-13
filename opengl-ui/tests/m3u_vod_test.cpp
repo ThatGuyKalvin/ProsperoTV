@@ -90,6 +90,9 @@ TEST(M3uVod, ImportsMixedPlusPlaylistAndKeepsMoviesAndEpisodesOutOfLiveAfterRest
         ASSERT_TRUE(vod.loaded());
         ASSERT_EQ(vod.catalog().size(), 1u);
         EXPECT_EQ(vod.catalog()[0].name, "Film");
+        // A playlist gives no dates: its line numbers are not taken for one.
+        EXPECT_NE(vod.catalog()[0].source_line, 0u);
+        EXPECT_EQ(vod.added(0), 0u);
         EXPECT_FALSE(model.play_channel(vod.catalog()[0].id));
         EXPECT_FALSE(model.preview_request(vod.catalog()[0].id).has_value());
         ASSERT_TRUE(model.play_vod(0));

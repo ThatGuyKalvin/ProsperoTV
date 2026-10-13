@@ -36,6 +36,22 @@ unsigned integer(std::string_view text)
     const auto value = std::from_chars(text.data(), text.data() + text.size(), out);
     return value.ec == std::errc{} && value.ptr == text.data() + text.size() ? out : 0;
 }
+// When the provider added a title, in Unix seconds, as a number or a string of one. Anything
+// else (words, a negative or far-off time, a value too long) is no date, never a failed list.
+bool date_field(JsonReader *value, std::string &text)
+{
+    if (value->Peek() == '{' || value->Peek() == '[')
+        return value->SkipValue();
+    return value->OptionalStringOrScalar(&text, 24);
+}
+std::uint32_t added_time(std::string_view text)
+{
+    if (const auto dot = text.find('.');
+        dot != std::string_view::npos &&
+        text.find_first_not_of("0123456789", dot + 1) == std::string_view::npos)
+        text = text.substr(0, dot);
+    return integer(text);
+}
 bool fetch(const std::string &url, std::string *reply, const iptv::http::RequestControl *control,
            const iptv::http::RequestHeaders *headers)
 {
@@ -193,6 +209,7 @@ struct Parser
     bool item(JsonReader *reader, std::string_view season = {})
     {
         std::string id, name, logo, category, extension, episode, season_number(season), adult;
+        std::string added, modified;
         VodDetails details;
         if (!ReadObject(reader,
                         [&](const std::string &key, JsonReader *value)
@@ -216,6 +233,8 @@ struct Parser
                                 return value->StringOrScalar(&episode, 12);
                             if (key == "season")
                                 return value->StringOrScalar(&season_number, 12);
+                            if (key == "added" || key == "last_modified")
+                                return date_field(value, key == "added" ? added : modified);
                             return detail_field(key, value, details);
                         }))
             return false;
@@ -255,6 +274,12 @@ struct Parser
             item.source_line = season_id * 100000u + episode_id;
             if (episode_id)
                 item.name = "Episode " + std::to_string(episode_id) + " · " + item.name;
+        }
+        else
+        {
+            // A show's list entry changes when episodes are added to it; a film has only `added`.
+            const auto changed = kind == VodKind::series ? added_time(modified) : 0u;
+            item.source_line = changed ? changed : added_time(added);
         }
         const auto bytes = item.id.size() + item.name.size() + item.url.size() +
                            item.tvg_logo.size() + item.group_title.size();
@@ -409,6 +434,13 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
     return ok;
 }
 
+std::uint32_t VodLibrary::added(unsigned index) const
+{
+    // A playlist row's source_line is where it was in the file, and an episode's its number.
+    return playlist_ || kind_ == VodKind::episodes || index >= catalog_.size()
+               ? 0
+               : catalog_[index].source_line;
+}
 const VodDetails &VodLibrary::details(std::string_view id) const
 {
     static const VodDetails empty;

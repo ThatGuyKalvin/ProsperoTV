@@ -10,14 +10,17 @@
 #include <map>
 #include <set>
 #include <cstdlib>
+#include <iterator>
 
 namespace ptv
 {
 namespace
 {
 constexpr int kRows = 7;
-constexpr const char *kSorts[] = {"Title / episode order", "Title Z-A", "Newest year",
+// The first is the default: the provider's newest additions, or a show's episodes in order.
+constexpr const char *kSorts[] = {"Recently added", "Title A-Z", "Title Z-A", "Newest year",
                                   "Highest rating"};
+constexpr int kSortCount = static_cast<int>(std::size(kSorts));
 } // namespace
 void VodScreen::enter()
 {
@@ -92,20 +95,33 @@ void VodScreen::sync()
                       });
         for (const auto &[path, name] : ordered)
             rows_.push_back({Kind::category, name, path, 0});
+        const bool episodes = view.vod_kind == static_cast<int>(VodKind::episodes);
         std::stable_sort(items.begin(), items.end(),
                          [&](const Row &left, const Row &right)
                          {
                              const auto &a = vod.details(catalog[left.item].id);
                              const auto &b = vod.details(catalog[right.item].id);
-                             if (view.vod_sort == 1)
+                             // Newest first, and titles added together keep the provider's
+                             // order. Titles without a date (0) follow by title, so a playlist,
+                             // which gives no dates, is listed by title as before.
+                             if (view.vod_sort == 0 && !episodes)
+                             {
+                                 const auto older = vod.added(left.item);
+                                 const auto newer = vod.added(right.item);
+                                 if (older != newer)
+                                     return older > newer;
+                                 if (older)
+                                     return false;
+                             }
+                             if (view.vod_sort == 2)
                                  return left.text > right.text;
-                             if (view.vod_sort == 2 && a.year != b.year)
+                             if (view.vod_sort == 3 && a.year != b.year)
                                  return a.year > b.year;
-                             if (view.vod_sort == 3 && std::strtof(a.rating.c_str(), nullptr) !=
+                             if (view.vod_sort == 4 && std::strtof(a.rating.c_str(), nullptr) !=
                                                            std::strtof(b.rating.c_str(), nullptr))
                                  return std::strtof(a.rating.c_str(), nullptr) >
                                         std::strtof(b.rating.c_str(), nullptr);
-                             if (view.vod_kind == static_cast<int>(VodKind::episodes))
+                             if (episodes && view.vod_sort != 1)
                                  return catalog[left.item].source_line <
                                         catalog[right.item].source_line;
                              return left.text < right.text;
@@ -497,6 +513,14 @@ unsigned VodScreen::result_count() const
     return static_cast<unsigned>(std::count_if(rows_.begin(), rows_.end(), [](const Row &row)
                                                { return row.kind == Kind::item; }));
 }
+std::vector<std::string> VodScreen::result_titles() const
+{
+    std::vector<std::string> titles;
+    for (const auto &row : rows_)
+        if (row.kind == Kind::item)
+            titles.push_back(row.text);
+    return titles;
+}
 void VodScreen::handle_filters(const InputFrame &input)
 {
     auto &view = shared_.model.view;
@@ -522,7 +546,7 @@ void VodScreen::handle_filters(const InputFrame &input)
     if (!direction)
         return;
     if (filter_focus_ == 2)
-        view.vod_sort = (view.vod_sort + direction + 4) % 4;
+        view.vod_sort = (view.vod_sort + direction + kSortCount) % kSortCount;
     else
     {
         std::set<std::string> facets;
@@ -558,10 +582,13 @@ void VodScreen::draw_filters(ui::Canvas &canvas) const
     const auto &view = shared_.model.view;
     list.rounded_rect({220, 190, 1480, 650}, 24, Color::rgb(0x11121c));
     ui::text(list, canvas.fonts.semibold, tr("Filter and sort"), 280, 265, 38, kWhite);
+    const int sort = std::clamp(view.vod_sort, 0, kSortCount - 1);
+    const bool episodes = view.vod_kind == static_cast<int>(VodKind::episodes);
     const std::string values[] = {
         std::string(tr("Genre")) + ": " + (view.vod_genre.empty() ? tr("All") : view.vod_genre),
         std::string(tr("Year")) + ": " + (view.vod_year.empty() ? tr("All") : view.vod_year),
-        std::string(tr("Sort")) + ": " + tr(kSorts[std::clamp(view.vod_sort, 0, 3)])};
+        std::string(tr("Sort")) + ": " +
+            tr(sort == 0 && episodes ? "Episode order" : kSorts[sort])};
     for (int i = 0; i < 3; ++i)
     {
         const float y = 310 + i * 105.0f;
