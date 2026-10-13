@@ -341,7 +341,7 @@ float Font::shaped_layout(std::string_view text, float x, float y, float size, A
                           float(glyph->x) / header_.atlas_width,
                           float(glyph->y) / header_.atlas_height,
                           float(glyph->x + glyph->w) / header_.atlas_width,
-                          float(glyph->y + glyph->h) / header_.atlas_height});
+                          float(glyph->y + glyph->h) / header_.atlas_height, 0, sdf_range(size)});
     }
     return width;
 }

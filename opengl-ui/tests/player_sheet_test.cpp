@@ -382,6 +382,7 @@ TEST(PlayerSheet, ProviderRowsUseBothScriptFallbackFonts)
     {
         if (instance.params[3] != static_cast<float>(hui::gfx::Shape::glyph))
             continue;
+        EXPECT_GT(instance.params[0], 0.0f); // zero spread turns every glyph into a solid box
         has_asian |= instance.params[2] == 5.0f;
         has_korean |= instance.params[2] == 6.0f;
     }
