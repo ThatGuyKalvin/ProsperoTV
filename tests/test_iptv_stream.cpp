@@ -1022,9 +1022,27 @@ TEST(IptvStreamTest, PlaysDtsCoresAndPassesOverDtsHdExtensions)
     put(extension, 51, 16, 15);
     std::vector<std::uint8_t> both = core;
     both.insert(both.end(), extension.begin(), extension.end());
-    const std::vector<std::vector<std::uint8_t>> descriptors{
-        {}, {0x7b, 0}, {0x05, 4, 'D', 'T', 'S', '1'}};
-    for (const auto &descriptor : descriptors)
+    // Stream type 0x82 is DTS only where the programme or the track says so: a DTS descriptor,
+    // a DTS registration, or the Blu-ray registration "HDMV" on the track or the programme.
+    // Bare, it is what North American broadcasts use for SCTE-27 subtitles, and is not sound.
+    struct Case
+    {
+        std::uint8_t type;
+        std::vector<std::uint8_t> descriptor;
+        bool programme_is_hdmv;
+        bool dts;
+    };
+    const std::vector<Case> cases{
+        {0x06, {0x7b, 0}, false, true},
+        {0x06, {0x05, 4, 'D', 'T', 'S', '1'}, false, true},
+        {0x82, {0x7b, 0}, false, true},
+        {0x82, {0x05, 4, 'D', 'T', 'S', '2'}, false, true},
+        {0x82, {0x05, 4, 'H', 'D', 'M', 'V'}, false, true},
+        {0x82, {}, true, true},
+        {0x82, {}, false, false},
+        {0x82, {0x05, 4, 'C', 'U', 'E', 'I'}, false, false},
+    };
+    for (const auto &[type, descriptor, programme_is_hdmv, dts] : cases)
     {
         FakeBackend fake;
         iptv_stream_backend_t backend{};
@@ -1041,8 +1059,17 @@ TEST(IptvStreamTest, PlaysDtsCoresAndPassesOverDtsHdExtensions)
         ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
         std::vector<std::uint8_t> bytes;
         AppendPacket(&bytes, PsiPacket(0, PatSection()));
-        AppendPacket(&bytes, PsiPacket(0x100, PmtSection(descriptor.empty() ? 0x82 : 0x06, 0x111,
-                                                         0x1b, descriptor)));
+        auto pmt = PmtSection(type, 0x111, 0x1b, descriptor);
+        if (programme_is_hdmv)
+        {
+            const std::uint8_t registration[] = {0x05, 4, 'H', 'D', 'M', 'V'};
+            pmt.resize(pmt.size() - 4u); // without its CRC
+            pmt.insert(pmt.begin() + 12, std::begin(registration), std::end(registration));
+            pmt[11] = sizeof(registration);
+            pmt[2] += sizeof(registration);
+            AppendCrc(&pmt);
+        }
+        AppendPacket(&bytes, PsiPacket(0x100, pmt));
         AppendPacket(&bytes, H264Packet(0, true));
         AppendPacket(&bytes, PesPacket(0x111, 0, 0xbd, core));
         AppendPacket(&bytes, PesPacket(0x111, 1, 0xbd, both));
@@ -1050,11 +1077,12 @@ TEST(IptvStreamTest, PlaysDtsCoresAndPassesOverDtsHdExtensions)
         for (const auto byte : bytes)
             ASSERT_EQ(iptv_stream_push(&session, &byte, 1), IPTV_STREAM_OK);
         const auto *telemetry = iptv_stream_telemetry(&session);
-        EXPECT_EQ(telemetry->format.audio_stream_type, 0x82u);
-        EXPECT_EQ(telemetry->format.audio_sample_rate, 48000u);
-        EXPECT_EQ(telemetry->format.audio_channels, 6u);
+        EXPECT_EQ(telemetry->format.audio_stream_type, dts ? 0x82u : 0u);
+        EXPECT_EQ(telemetry->format.audio_sample_rate, dts ? 48000u : 0u);
+        EXPECT_EQ(telemetry->format.audio_channels, dts ? 6u : 0u);
         EXPECT_EQ(telemetry->dropped_payloads, 0u);
-        EXPECT_EQ(fake.audios, 3u);
+        EXPECT_EQ(fake.audios, dts ? 3u : 0u);
+        EXPECT_EQ(telemetry->first_other_stream_type, dts ? 0u : 0x82u);
         EXPECT_EQ(fake.disables, 0u);
         EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
     }
