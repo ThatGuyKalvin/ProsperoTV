@@ -1297,6 +1297,71 @@ TEST_F(AppTest, GuideCapturesControllerNavigationAndCanOpenAChannel)
     EXPECT_FALSE(app_->guide_open());
 }
 
+// A row of hints keeps its size while it fits and shrinks as a whole when not.
+TEST(HintRows, ShrinkOnlyWhenTheyWouldRunPastTheirWidth)
+{
+    using hui::ui::Button;
+    const auto &fonts = font_set().fonts;
+    const hui::ui::Hint hints[] = {
+        {Button::options, "Record / Remind / Scheduled programmes / Update / Match XMLTV"},
+        {Button::l1, "Day", Button::r1}};
+    hui::ui::HintLayout layout;
+    layout.size = 30.0f;
+    layout.text_size = 21.0f;
+    layout.cy = 983.0f;
+    const float natural = hui::ui::measure_hints(fonts, hints, 2, layout);
+    const auto roomy = ptv::fit_hints(fonts, hints, 2, layout, natural + 1.0f);
+    EXPECT_EQ(roomy.size, layout.size);
+    EXPECT_EQ(roomy.text_size, layout.text_size);
+    const auto narrow = ptv::fit_hints(fonts, hints, 2, layout, natural * 0.6f);
+    EXPECT_LE(hui::ui::measure_hints(fonts, hints, 2, narrow), natural * 0.6f);
+    EXPECT_LT(narrow.size, layout.size);
+    EXPECT_LT(narrow.text_size, layout.text_size);
+    EXPECT_EQ(narrow.cy, layout.cy);
+}
+
+// The sheets' legends draw the buttons' shapes, not their names, and stay
+// inside their panels in a long language and right to left as well.
+TEST_F(AppTest, SheetLegendsAreButtonShapesInsideTheirPanels)
+{
+    struct Reset
+    {
+        ~Reset()
+        {
+            ptv::set_console_language(1);
+        }
+    } reset;
+    // What lies wholly between top and bottom: its shapes are counted, and
+    // nothing may reach past left or right.
+    const auto shapes_in = [this](float top, float bottom, float left, float right)
+    {
+        int shapes = 0;
+        for (const hui::gfx::Instance &instance : frame_.overlay.instances())
+        {
+            if (instance.rect[1] < top || instance.rect[1] + instance.rect[3] > bottom)
+                continue;
+            EXPECT_GE(instance.rect[0], left - 8.0f);
+            EXPECT_LE(instance.rect[0] + instance.rect[2], right + 8.0f);
+            shapes += static_cast<int>(instance.params[3] + 0.5f) !=
+                      static_cast<int>(hui::gfx::Shape::glyph);
+        }
+        return shapes;
+    };
+    for (const unsigned language : {1u, 4u, 8u}) // English, German, Arabic
+    {
+        ptv::set_interface_language(language);
+        make_app();
+        press(Action::r3);
+        ASSERT_TRUE(app_->guide_open());
+        EXPECT_GT(shapes_in(960.0f, 1045.0f, ptv::kMargin, ptv::kWidth - ptv::kMargin), 20)
+            << language;
+        press(Action::back);
+        press(Action::touch); // the provider categories
+        EXPECT_GT(shapes_in(890.0f, 930.0f, 360.0f, 1560.0f), 6) << language;
+        press(Action::back);
+    }
+}
+
 TEST_F(AppTest, OptionsStartsAnUpdateOnce)
 {
     host::set_network(true, playlist_, 200);

@@ -682,7 +682,7 @@ void BrowseScreen::update(float dt)
         else if (favorites_)
         {
             empty_.title = tr("No favorites yet");
-            empty_.body = tr("Press Square on any channel to keep it here.");
+            empty_.body = tr("Favorite a channel in Live TV to keep it here.");
             empty_.action = tr("Browse Live TV");
         }
         else if (model.parental().kids_only() && model.group() != Group::recent &&

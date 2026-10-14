@@ -81,6 +81,10 @@ extern "C"
     /* When the picture iptv_native_agc_present_finish_frame last saw reach the screen, as
      * CLOCK_MONOTONIC microseconds from the flip's own time; 0 when unknown. */
     uint64_t iptv_native_agc_last_flip_us(void);
+    /* How long the presenter's last start took, in microseconds: [0] in all, [1] the shaders,
+     * [2] opening the video output, [3] the framebuffers, [4] the controls' planes. Zeros
+     * until it has started once. */
+    void iptv_native_agc_last_startup_us(uint32_t steps[5]);
     int32_t iptv_native_agc_loading_start(void);
     void iptv_native_agc_loading_stop(void);
     void iptv_native_agc_set_overlay_enabled(int enabled);

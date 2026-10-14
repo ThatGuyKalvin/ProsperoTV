@@ -261,14 +261,24 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         ui::text(list, fonts.regular,
                  tr("No channels match the current category, folder or search."), kMargin, 400, 26,
                  theme.text_muted);
-    ui::text(
-        list, fonts.regular,
-        tr("Cross: Watch   D-pad: Channel / programme   L1/R1: Day   L2/R2: Page   Square: Now   "
-           "Triangle: Search   Circle: Back"),
-        kMargin, 990, 21, theme.text_muted);
-    ui::text(list, fonts.regular,
-             tr("Options: Record / Remind / Scheduled programmes / Update / Match XMLTV"), kMargin,
-             1030, 21, theme.text_muted);
+    // What the buttons do, in two rows along the bottom.
+    const ui::Hint keys[] = {{ui::Button::cross, tr("Watch")},
+                             {ui::Button::dpad, tr("Channel / programme")},
+                             {ui::Button::l1, tr("Day"), ui::Button::r1},
+                             {ui::Button::l2, tr("Page"), ui::Button::r2},
+                             {ui::Button::square, tr("Now")},
+                             {ui::Button::triangle, tr("Search")},
+                             {ui::Button::circle, tr("Back")}};
+    const ui::Hint options[] = {
+        {ui::Button::options, tr("Record / Remind / Scheduled programmes / Update / Match XMLTV")}};
+    ui::HintLayout layout;
+    layout.size = 30.0f;
+    layout.text_size = 21.0f;
+    layout.item_gap = 30.0f;
+    layout.cy = 983.0f;
+    draw_hint_row(list, fonts, keys, 7, kMargin, kWidth - 2 * kMargin, layout);
+    layout.cy = 1023.0f;
+    draw_hint_row(list, fonts, options, 1, kMargin, kWidth - 2 * kMargin, layout);
     if (actions_ || jobs_)
     {
         list.rounded_rect({420, 230, 1140, 650}, 16, tone::night);
@@ -302,10 +312,15 @@ void GuideSheet::draw(ui::Canvas &canvas) const
             ui::text(list, fonts.regular,
                      fonts.regular.font->fit(tr(jobs[action_row_].result.c_str()), 21, 1040), 460,
                      760, 21, theme.text_muted);
-        ui::text(list, fonts.regular,
-                 tr(jobs_ ? "Cross: Remove / stop selected job   Circle: Back"
-                          : "Cross: Select   Circle: Back"),
-                 460, 806, 22, theme.text_muted);
+        const ui::Hint hints[] = {
+            {ui::Button::cross, jobs_ ? tr("Remove / stop selected job") : tr("Select")},
+            {ui::Button::circle, tr("Back")}};
+        ui::HintLayout row;
+        row.size = 30.0f;
+        row.text_size = 22.0f;
+        row.item_gap = 30.0f;
+        row.cy = 798.0f;
+        draw_hint_row(list, fonts, hints, 2, 460, 1060, row);
         ui::text(list, fonts.regular, tr("Keep ProsperoTV running for recordings and reminders."),
                  460, 850, 22, theme.text_muted);
     }

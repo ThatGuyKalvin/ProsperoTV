@@ -48,6 +48,9 @@ class VodLibrary
     void poll(bool can_download);
     void stop();
     const VodDetails &details(std::string_view id) const;
+    // When the provider added a movie or show (Unix seconds), kept in the row's otherwise
+    // unused source_line so a large list costs nothing more; 0 when the provider did not say.
+    std::uint32_t added(unsigned index) const;
     void request_details(unsigned index);
     bool available() const
     {
