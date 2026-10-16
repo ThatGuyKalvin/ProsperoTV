@@ -168,6 +168,18 @@ This completes the HDR rendering implementation. Physical HDMI luminance/gamut
 measurements and custom mastering metadata forwarding remain unverified; the
 application retains that metadata in its per-picture state and receipts.
 
+The "documented HDR RGB packing" those framebuffer comparisons required was
+wrong on the screen: [issue #57](https://github.com/blackbearreloaded/ProsperoTV/issues/57)
+showed every HDR10/HLG picture with red and blue swapped while 8-bit and SDR
+Main10 pictures were right. The HDR VideoOut format (`0x8100070400000000`) is
+the BGR variant like the SDR one, blue in bits 0-9 and red in bits 20-29 (the
+RGB variants of both formats carry the `0x22000000` bits instead); cases 65/66
+only confirmed that the shader wrote what the comparison expected, not what the
+display decodes. The
+shader now exports blue, green, red, alpha in every mode, the host check
+expects that order in every mode, and the native readback comparison must take
+red from bits 20-29 of an HDR word. Native re-acceptance on a display is pending.
+
 ## Live pause and rewind foundations
 
 The transport history retains up to five minutes or 512 MiB, whichever limit is
