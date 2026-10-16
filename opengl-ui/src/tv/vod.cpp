@@ -173,6 +173,59 @@ bool detail_field(const std::string &key, JsonReader *value, VodDetails &details
         *target = std::move(text);
     return true;
 }
+std::string unescape(std::string_view text)
+{
+    std::string out;
+    for (std::size_t i = 0; i < text.size(); ++i)
+    {
+        const auto digit = [](char c)
+        {
+            return c >= '0' && c <= '9'   ? c - '0'
+                   : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                   : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                          : -1;
+        };
+        if (text[i] == '%' && i + 2 < text.size() && digit(text[i + 1]) >= 0 &&
+            digit(text[i + 2]) >= 0)
+        {
+            out += static_cast<char>(digit(text[i + 1]) * 16 + digit(text[i + 2]));
+            i += 2;
+        }
+        else
+            out += text[i];
+    }
+    return out;
+}
+// <server>/movie/<username>/<password>/<id>.<extension>: how an Xtream server's playlist
+// names a film. The details come from the same server, with the same account.
+bool xtream_movie_address(std::string_view url, iptv::XtreamCredentials *account,
+                          std::string *id)
+{
+    if (const auto query = url.find_first_of("?#"); query != std::string_view::npos)
+        url = url.substr(0, query);
+    const auto scheme = url.find("://");
+    const auto movie = url.rfind("/movie/");
+    if (scheme == std::string_view::npos || movie == std::string_view::npos ||
+        movie <= scheme + 3)
+        return false;
+    auto rest = url.substr(movie + 7);
+    const auto user_end = rest.find('/');
+    if (user_end == std::string_view::npos)
+        return false;
+    const auto password_end = rest.find('/', user_end + 1);
+    if (password_end == std::string_view::npos)
+        return false;
+    auto file = rest.substr(password_end + 1);
+    file = file.substr(0, file.find('.'));
+    if (file.empty() || file.size() > 20 ||
+        file.find_first_not_of("0123456789") != std::string_view::npos)
+        return false;
+    account->server_url = std::string(url.substr(0, movie));
+    account->username = unescape(rest.substr(0, user_end));
+    account->password = unescape(rest.substr(user_end + 1, password_end - user_end - 1));
+    *id = std::string(file);
+    return iptv::ValidateXtreamCredentials(*account);
+}
 void fill_missing(VodDetails &value, const VodDetails &fallback)
 {
     if (value.plot.empty())
@@ -449,15 +502,26 @@ const VodDetails &VodLibrary::details(std::string_view id) const
 }
 void VodLibrary::request_details(unsigned index)
 {
-    if (playlist_ || kind_ != VodKind::movies || busy() || requested_ || index >= catalog_.size())
+    if (kind_ != VodKind::movies || index >= catalog_.size())
         return;
     const auto item = catalog_[index];
     if (details(item.id).complete)
         return;
-    detail_id_ = item.id;
-    detail_provider_id_ = item.tvg_id;
-    requested_ = true;
+    // Kept until nothing else downloads: asked for during a list update or the guide's, the
+    // details used to be dropped and the panel said the provider gave none.
+    iptv::XtreamCredentials account = account_;
+    std::string provider_id(item.tvg_id);
+    if (playlist_ && !xtream_movie_address(item.url, &account, &provider_id))
+        return; // a playlist from anywhere else has no details to ask for
+    wanted_id_ = item.id;
+    wanted_provider_id_ = std::move(provider_id);
+    wanted_account_ = std::move(account);
     status_ = tr("Loading title details...");
+    ++revision_;
+}
+bool VodLibrary::details_loading(std::string_view id) const
+{
+    return !id.empty() && (id == wanted_id_ || (thread_ && id == detail_id_));
 }
 
 VodLibrary::~VodLibrary()
@@ -695,9 +759,31 @@ void VodLibrary::poll(bool can_download)
         detail_provider_id_.clear();
         ++revision_;
     }
-    if (!can_download || thread_ || !requested_)
+    if (thread_)
+        return;
+    // One title's details are a small answer: they go ahead of a list and do not wait for
+    // the guide.
+    if (!wanted_id_.empty())
+    {
+        if (details(wanted_id_).complete)
+            wanted_id_.clear();
+        else
+        {
+            detail_id_ = std::move(wanted_id_);
+            detail_provider_id_ = std::move(wanted_provider_id_);
+            detail_account_ = std::move(wanted_account_);
+            wanted_id_.clear();
+            start();
+            return;
+        }
+    }
+    if (!can_download || !requested_)
         return;
     requested_ = false;
+    start();
+}
+void VodLibrary::start()
+{
     ok_ = saved_ok_ = false;
     stop_.store(false);
     done_.store(false);
@@ -713,6 +799,7 @@ void VodLibrary::poll(bool can_download)
 void VodLibrary::stop()
 {
     requested_ = false;
+    wanted_id_.clear();
     if (!thread_)
     {
         detail_id_.clear();
@@ -741,7 +828,8 @@ void *VodLibrary::work(void *self)
         {
             v.pending_metadata_ = v.metadata_;
             std::string url, reply;
-            iptv::BuildXtreamApiUrl(v.account_, "get_vod_info", &url);
+            iptv::BuildXtreamApiUrl(v.detail_account_, "get_vod_info", &url);
+            headers.credential_origin = v.detail_account_.server_url.c_str();
             url += "&vod_id=";
             constexpr char hex[] = "0123456789ABCDEF";
             for (const unsigned char c : v.detail_provider_id_)
@@ -788,8 +876,9 @@ void *VodLibrary::work(void *self)
                     v.ok_ = false;
                     v.error_ = tr("The provider metadata cache is full.");
                 }
-                else
-                    v.saved_ok_ = save_vod_metadata(v.file(), v.pending_metadata_);
+                else // a playlist's titles are rebuilt from it: their details stay in memory
+                    v.saved_ok_ =
+                        v.playlist_ || save_vod_metadata(v.file(), v.pending_metadata_);
             }
             else
                 v.error_ = tr("Title details could not be downloaded.");

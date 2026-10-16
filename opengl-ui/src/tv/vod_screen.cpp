@@ -641,8 +641,10 @@ void VodScreen::draw_details(ui::Canvas &canvas) const
     }
     list.push_clip({510, 270, 1240, 540});
     float y = 302 - detail_scroll_;
-    const std::string plot =
-        details.plot.empty() ? tr("No synopsis supplied by the provider.") : details.plot;
+    const std::string plot = !details.plot.empty() ? details.plot
+                             : model.vod().details_loading(item.id)
+                                 ? tr("Loading title details...")
+                                 : tr("No synopsis supplied by the provider.");
     const auto &plot_face = face_for(canvas.fonts, canvas.fonts.regular, plot);
     y = ui::paragraph(list, plot_face, readable(plot_face, plot), 510, y, 27, 1210, 39, kWhite,
                       200) +

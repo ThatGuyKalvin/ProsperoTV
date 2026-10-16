@@ -62,8 +62,10 @@ class VodLibrary
     }
     bool requested() const
     {
-        return requested_;
+        return requested_ || !wanted_id_.empty();
     }
+    // The details of this title are on their way (asked for, or being downloaded).
+    bool details_loading(std::string_view id) const;
     bool loaded() const
     {
         return loaded_;
@@ -109,6 +111,10 @@ class VodLibrary
     iptv::Catalog catalog_, pending_;
     VodMetadata metadata_, pending_metadata_;
     std::string detail_id_, detail_provider_id_;
+    // The details asked for last, fetched as soon as nothing else is downloading.
+    std::string wanted_id_, wanted_provider_id_;
+    iptv::XtreamCredentials detail_account_, wanted_account_;
+    void start();
     std::uint64_t saved_ = 0;
     unsigned revision_ = 0;
     bool requested_ = false, loaded_ = false, ok_ = false, saved_ok_ = false;

@@ -1050,6 +1050,82 @@ TEST_F(VodTest, MovieDetailsFetchLazilyAndRemainAvailableOfflineAfterRefresh)
     EXPECT_EQ(model.vod().details(id).poster, "https://image.invalid/poster.jpg");
     model.close();
 }
+TEST_F(VodTest, DetailsAskedWhileTheListUpdatesArriveInsteadOfBeingDropped)
+{
+    // Issue 67: details asked for while the list was due an update, or while it or the guide
+    // downloaded, were dropped, and the panel said the provider gave no synopsis.
+    std::string info;
+    ASSERT_TRUE(iptv::BuildXtreamApiUrl(account, "get_vod_info", &info));
+    reply(info + "&vod_id=10", R"({"info":{"plot":"Arrives anyway"},"movie_data":{"stream_id":10}})");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    const std::string id(model.vod().catalog()[0].id);
+    model.vod().select(ptv::VodKind::movies, {}, true); // an update of the list is now due
+    ASSERT_TRUE(model.vod().requested());
+    model.vod().request_details(0);
+    EXPECT_TRUE(model.vod().details_loading(id));
+    EXPECT_FALSE(model.vod().details_loading(std::string(model.vod().catalog()[1].id)));
+    ASSERT_TRUE(settle(model));
+    EXPECT_TRUE(model.vod().details(id).complete);
+    EXPECT_EQ(model.vod().details(id).plot, "Arrives anyway");
+    EXPECT_FALSE(model.vod().details_loading(id));
+    EXPECT_EQ(model.vod().catalog().size(), 2u); // and the list update ran too
+    // Asked for again while a download runs: still kept, and fetched after it.
+    std::string other(model.vod().catalog()[1].id);
+    reply(info + "&vod_id=11", R"({"info":{"plot":"Second"}})");
+    model.vod().select(ptv::VodKind::movies, {}, true);
+    for (int i = 0; i < 200 && !model.vod().busy(); ++i)
+        model.poll();
+    model.vod().request_details(1);
+    EXPECT_TRUE(model.vod().details_loading(other));
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.vod().details(other).plot, "Second");
+    model.close();
+}
+TEST_F(VodTest, PlaylistFilmsFromAnXtreamServerGetTheirDetailsFromIt)
+{
+    // M3U Plus from an Xtream server names each film <server>/movie/<user>/<password>/<id>.<ext>;
+    // the same server answers get_vod_info for it with that account.
+    const std::string playlist = dir + "/plus.m3u";
+    std::ofstream(playlist)
+        << "#EXTM3U\n"
+           "#EXTINF:-1 group-title=\"Movies\",Film\n"
+           "https://provider.invalid/sub/movie/user%40home/p%26ss/42.mkv\n"
+           "#EXTINF:-1 group-title=\"Movies\",Elsewhere\n"
+           "https://cdn.invalid/films/elsewhere.mp4\n";
+    const std::string url =
+        "https://provider.invalid/sub/get.php?username=user%40home&password=p%26ss&type=m3u_plus";
+    host::set_network_response(url, playlist);
+    std::string info;
+    ASSERT_TRUE(iptv::BuildXtreamApiUrl(account, "get_vod_info", &info));
+    reply(info + "&vod_id=42", R"({"info":{"plot":"From the server","genre":"Drama"}})");
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource source{4, 1, "Plus", url, {}, {}, {}, ptv::RefreshSchedule::manual};
+        ASSERT_TRUE(library.save_source(&source));
+        ASSERT_TRUE(library.select_source(4));
+    }
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    ASSERT_TRUE(settle(model));
+    auto &vod = model.vod();
+    vod.select(ptv::VodKind::movies);
+    ASSERT_EQ(vod.catalog().size(), 2u);
+    for (unsigned i = 0; i < vod.catalog().size(); ++i)
+    {
+        const std::string id(vod.catalog()[i].id);
+        const bool from_server = vod.catalog()[i].name == std::string_view("Film");
+        vod.request_details(i);
+        EXPECT_EQ(vod.details_loading(id), from_server);
+        ASSERT_TRUE(settle(model));
+        EXPECT_EQ(vod.details(id).plot, from_server ? "From the server" : "");
+        EXPECT_EQ(vod.details(id).complete, from_server);
+    }
+    model.close();
+}
 TEST_F(VodTest, ControllerFiltersByProviderGenreAndYearSortsAndOpensDetails)
 {
     response(
