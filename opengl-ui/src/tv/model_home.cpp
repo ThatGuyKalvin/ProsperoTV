@@ -167,7 +167,7 @@ bool Model::play_home(std::string_view id, bool on_demand)
             home_playback_ = item;
             home_source_ = selected_source_id_;
             home_fingerprint_ = source_id(active_source_);
-            if (!home_series_.loaded() && home_series_.requested())
+            if (!home_series_.loaded() && (home_series_.requested() || home_series_.loading()))
             {
                 home_waiting_ = true;
                 home_deadline_ = home_clock() + 10000;

@@ -30,6 +30,9 @@ struct StoreLimits
     std::size_t max_alternate_urls = kDefaultMaxAlternateUrls;
     std::size_t max_alternate_groups = kDefaultMaxAlternateGroups;
     bool allow_empty = false;
+    // SQLite's quick_check of the whole file after the read: a tenth of a second for an
+    // 86 MB on-demand cache, which is rebuilt from the provider on any failure anyway.
+    bool quick_check = true;
 };
 
 enum class StoreStatus : std::uint8_t
