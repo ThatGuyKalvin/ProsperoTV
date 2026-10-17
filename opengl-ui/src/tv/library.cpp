@@ -90,6 +90,40 @@ bool valid_resume(const iptv::ChannelView &channel, std::string_view series)
     return true;
 }
 
+// One resume row: the twenty saved columns, then the position and duration
+// joined from playback_progress. Empty when the row no longer makes sense.
+std::optional<ResumeItem> read_resume(const Statement &query, std::uint64_t fingerprint)
+{
+    ResumeItem item;
+    auto &channel = item.channel;
+    channel.id = query.string(0);
+    channel.source_id = fingerprint;
+    channel.name = query.string(4);
+    channel.url = query.string(5);
+    channel.tvg_logo = query.string(6);
+    channel.group_title = query.string(7);
+    channel.adult = sqlite3_column_int(query.stmt, 8) != 0;
+    item.series = query.string(9);
+    channel.http_user_agent = query.string(10);
+    channel.http_referrer = query.string(11);
+    channel.tvg_id = query.string(12);
+    channel.media_kind = item.series.empty() ? iptv::MediaKind::movie : iptv::MediaKind::episode;
+    for (int i = 13; i < 16; ++i)
+        if (auto value = query.string(i); !value.empty())
+            channel.alternate_urls.push_back(std::move(value));
+    for (int i = 16; i < 20; ++i)
+        if (auto value = query.string(i); !value.empty())
+            channel.alternate_group_titles.push_back(std::move(value));
+    const auto position = sqlite3_column_int64(query.stmt, 20);
+    const auto duration = sqlite3_column_int64(query.stmt, 21);
+    if (position < 0 || duration < 0 || position > INT64_MAX / 4 || duration > INT64_MAX / 4 ||
+        !valid_resume(channel, item.series))
+        return std::nullopt;
+    item.position_us = static_cast<std::uint64_t>(position);
+    item.duration_us = static_cast<std::uint64_t>(duration);
+    return item;
+}
+
 } // namespace
 
 int account_expiry_notice(const AccountInfo &info, std::uint64_t now)
@@ -536,38 +570,25 @@ std::vector<ResumeItem> Library::unfinished_vod(std::int64_t source,
     if (!query.integer(1, source) || !query.text(2, std::to_string(fingerprint)))
         return result;
     while (query.row())
-    {
-        ResumeItem item;
-        auto &channel = item.channel;
-        channel.id = query.string(0);
-        channel.source_id = fingerprint;
-        channel.name = query.string(4);
-        channel.url = query.string(5);
-        channel.tvg_logo = query.string(6);
-        channel.group_title = query.string(7);
-        channel.adult = sqlite3_column_int(query.stmt, 8) != 0;
-        item.series = query.string(9);
-        channel.http_user_agent = query.string(10);
-        channel.http_referrer = query.string(11);
-        channel.tvg_id = query.string(12);
-        channel.media_kind =
-            item.series.empty() ? iptv::MediaKind::movie : iptv::MediaKind::episode;
-        for (int i = 13; i < 16; ++i)
-            if (auto value = query.string(i); !value.empty())
-                channel.alternate_urls.push_back(std::move(value));
-        for (int i = 16; i < 20; ++i)
-            if (auto value = query.string(i); !value.empty())
-                channel.alternate_group_titles.push_back(std::move(value));
-        const auto position = sqlite3_column_int64(query.stmt, 20);
-        const auto duration = sqlite3_column_int64(query.stmt, 21);
-        if (position <= 0 || duration < 0 || position > INT64_MAX / 4 || duration > INT64_MAX / 4 ||
-            !valid_resume(channel, item.series))
-            continue;
-        item.position_us = static_cast<std::uint64_t>(position);
-        item.duration_us = static_cast<std::uint64_t>(duration);
-        result.push_back(std::move(item));
-    }
+        if (auto item = read_resume(query, fingerprint))
+            result.push_back(std::move(*item));
     return result;
+}
+
+std::optional<ResumeItem> Library::last_series_episode(std::int64_t source,
+                                                       std::uint64_t fingerprint,
+                                                       std::string_view series) const
+{
+    // A finished episode keeps its row and loses its position, so the position
+    // is left-joined: 0 means "from the start".
+    Statement query(db_, "SELECT r.*,IFNULL(p.position,0),IFNULL(p.duration,0) FROM resume_items r "
+                         "LEFT JOIN playback_progress p ON p.channel=r.channel WHERE r.source=?1 "
+                         "AND r.fingerprint=?2 AND r.series=?3 ORDER BY r.updated DESC,r.rowid "
+                         "DESC LIMIT 1");
+    if (series.empty() || !query.integer(1, source) ||
+        !query.text(2, std::to_string(fingerprint)) || !query.text(3, series) || !query.row())
+        return std::nullopt;
+    return read_resume(query, fingerprint);
 }
 
 bool Library::select_source(std::int64_t id)

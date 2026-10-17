@@ -129,6 +129,8 @@
 - Open Movies or TV shows from the saved copy, read in the background while
   the status line says so; the On demand menu counts both without loading
   either, and switching between them keeps the list left at hand.
+- Carry on with a show from **Continue**, at the top of its episode list: the
+  episode watched last, from the time it was left at.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
 
 ### While watching

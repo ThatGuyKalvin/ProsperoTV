@@ -553,6 +553,28 @@ bool Model::play_vod(unsigned index)
     const auto item = vod_.catalog()[index];
     return queue_vod(item, vod_.kind() == VodKind::episodes ? vod_.series() : std::string());
 }
+std::optional<Model::SeriesResume> Model::series_resume() const
+{
+    if (vod_.kind() != VodKind::episodes)
+        return std::nullopt;
+    const auto saved =
+        library_.last_series_episode(selected_source_id_, source_id(active_source_), vod_.series());
+    // What Home asks of the same snapshot: a hidden category or channel takes the
+    // show out of reach even from inside its episode list.
+    if (!saved || !home_vod_allowed(*saved))
+        return std::nullopt;
+    // An episode watched to its end keeps no position, and so does the next one
+    // an autoplay queued: either way the show carries on from a start.
+    const auto at = vod_.catalog().Find(saved->channel.id);
+    if (at == iptv::Catalog::npos || !vod_allowed(static_cast<unsigned>(at)))
+        return std::nullopt;
+    return SeriesResume{static_cast<unsigned>(at), saved->position_us};
+}
+bool Model::play_series_resume()
+{
+    const auto resume = series_resume();
+    return resume && play_vod(resume->index);
+}
 bool Model::queue_vod(const iptv::ChannelView &item, const std::string &series, bool inherit_series)
 {
     if (!playback_allowed())
