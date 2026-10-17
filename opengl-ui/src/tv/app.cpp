@@ -664,9 +664,12 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             feedback.play(audio::Cue::back);
             return;
         }
-        // Back undoes the nearest thing: a search, then a place in the
-        // screen, then the tab.
-        if (browsing() && model.filtering())
+        // Back undoes the nearest thing: a level of the chips, a search, then
+        // a place in the screen, then the tab.
+        if (browsing() && browse_.step_up(feedback))
+        {
+        }
+        else if (browsing() && model.filtering())
         {
             model.clear_filters();
             feedback.play(audio::Cue::back);

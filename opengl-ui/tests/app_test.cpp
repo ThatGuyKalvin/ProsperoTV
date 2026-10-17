@@ -652,27 +652,52 @@ TEST_F(AppTest, TheListsAreReachedFromTheTopRow)
     move(Direction::right);
     EXPECT_EQ(model_->group(), ptv::Group::most_watched);
     EXPECT_EQ(model_->visible_count(), 0u);
-    // Provider categories follow the four built-in lists.
-    ASSERT_FALSE(model_->provider_categories().empty());
-    const std::string first = model_->provider_categories().front().value;
-    const unsigned held = model_->provider_categories().front().count;
+    // News, Sports and Kids, then the places the list names (tvg-country here).
+    move(Direction::right);
+    EXPECT_EQ(model_->group(), ptv::Group::news);
+    EXPECT_EQ(model_->visible_count(), 12u);
+    move(Direction::right);
+    move(Direction::right);
+    EXPECT_EQ(model_->group(), ptv::Group::kids);
+    ASSERT_FALSE(model_->countries().empty());
+    const std::string place = model_->countries().front().value;
+    const unsigned held = model_->countries().front().count;
     move(Direction::right);
     EXPECT_EQ(model_->group(), ptv::Group::all);
-    EXPECT_EQ(model_->provider_category(), first);
+    EXPECT_EQ(model_->country(), place);
     EXPECT_EQ(model_->visible_count(), held);
-    move(Direction::down); // back into the grid
+    // Cross on the place: the row becomes its provider categories, in the
+    // provider's order, after a chip for the whole place.
+    ASSERT_FALSE(model_->country_categories().empty());
+    const std::string first = model_->country_categories().front().value;
+    const unsigned in_first = model_->country_categories().front().count;
+    press(Action::confirm);
+    EXPECT_EQ(model_->visible_count(), held);
+    move(Direction::right);
+    EXPECT_EQ(model_->provider_category(), first);
+    EXPECT_EQ(model_->country(), place);
+    EXPECT_EQ(model_->visible_count(), in_first);
+    move(Direction::down); // into the grid
     press(Action::confirm);
     ptv::PlayRequest request;
     ASSERT_TRUE(model_->take_play_request(&request));
     EXPECT_EQ(request.channel_id, model_->channel(model_->visible(0)).id);
     EXPECT_EQ(model_->view.live_group, ptv::Group::all);
-    // Left four times is All again, and the whole list.
+    // Back walks the levels in reverse: the whole place, the row of places
+    // on the place, then the whole source.
     move(Direction::up);
-    move(Direction::left);
-    move(Direction::left);
-    move(Direction::left);
-    move(Direction::left);
+    press(Action::back);
     EXPECT_TRUE(model_->provider_category().empty());
+    EXPECT_EQ(model_->country(), place);
+    EXPECT_EQ(model_->visible_count(), held);
+    press(Action::back);
+    EXPECT_EQ(model_->country(), place);
+    EXPECT_EQ(model_->visible_count(), held);
+    move(Direction::left); // the place before it, or Kids
+    EXPECT_TRUE(model_->group() == ptv::Group::kids || model_->country() != place);
+    press(Action::back);
+    EXPECT_TRUE(model_->country().empty());
+    EXPECT_EQ(model_->group(), ptv::Group::all);
     EXPECT_EQ(model_->visible_count(), 60u);
 }
 
@@ -682,14 +707,14 @@ TEST_F(AppTest, BackGoesToTheTopThenToTheFirstList)
     move(Direction::right);
     move(Direction::right); // Recently added
     move(Direction::right); // Most watched
-    move(Direction::right); // the list's first category
-    ASSERT_FALSE(model_->provider_category().empty());
+    move(Direction::right); // News
+    ASSERT_EQ(model_->group(), ptv::Group::news);
     ASSERT_GT(model_->visible_count(), 6u);
     move(Direction::down);
     move(Direction::down);
     move(Direction::right);
     EXPECT_EQ(model_->view.focused_channel, model_->channel(model_->visible(6)).id);
-    for (int presses = 0; presses < 4 && !model_->provider_category().empty(); ++presses)
+    for (int presses = 0; presses < 4 && model_->group() != ptv::Group::all; ++presses)
         press(Action::back); // to the top of the list, onto the chips, to All
     EXPECT_TRUE(model_->provider_category().empty());
     EXPECT_EQ(model_->group(), ptv::Group::all);

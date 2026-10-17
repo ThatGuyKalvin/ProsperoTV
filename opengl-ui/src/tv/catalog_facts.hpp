@@ -379,6 +379,8 @@ struct NameFacts
 
 GroupFacts parse_group(std::string_view title, iptv::MediaKind kind);
 NameFacts parse_name(std::string_view name, std::string_view group_title);
+// "##### SPORTS #####" without its hashes and spaces: "SPORTS".
+std::string_view heading_title(std::string_view name);
 // The bytes of a known prefix at the front of a name: what parse_name() finds, alone.
 unsigned name_prefix_bytes(std::string_view name, std::string_view group_title);
 

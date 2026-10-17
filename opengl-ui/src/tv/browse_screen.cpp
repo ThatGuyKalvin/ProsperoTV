@@ -62,6 +62,12 @@ int chip_of(Group group)
     return 0;
 }
 
+// "FRANCE HD" for a path "FR| FRANCE HD": the provider's leaf as a chip.
+std::string chip_label(std::string_view path)
+{
+    return label_text(category_leaf(path));
+}
+
 } // namespace
 
 BrowseScreen::BrowseScreen(Shared &shared) : shared_(shared)
@@ -94,6 +100,8 @@ BrowseScreen::BrowseScreen(Shared &shared) : shared_(shared)
         }
         draw_channel_tile(canvas, shared_, cell,
                           model.channel(model.visible(static_cast<unsigned>(index))), focus);
+        if (const std::string *section = model.section_at(static_cast<unsigned>(index)))
+            draw_section(canvas, cell, *section);
     };
     grid_.accent = [this](int index)
     {
@@ -273,36 +281,83 @@ void BrowseScreen::restart_list()
     empty_.enter();
 }
 
-// The provider's categories, in its order, without the hidden ones. A
-// category inside another ("US / Sports") is a chip too, under its own name:
-// the sheet (Touchpad) is where the levels are browsed.
+// The row of chips. A source whose words name places lists them after the
+// fixed lists; inside a place chosen from a chip the row is that place's
+// provider categories, in the provider's order, after a chip back to the
+// whole place. A source without places shows the provider's categories, or
+// News, Sports and Kids when it has none. Hidden categories are left out.
 void BrowseScreen::rebuild_chips()
 {
     const Model &model = shared_.model;
+    Row row = Row::legacy;
+    std::vector<std::string> places;
     std::vector<std::string> categories;
-    for (const auto &facet : model.provider_categories())
+    if (!favorites_ && !model.countries().empty())
     {
-        if (facet.value.empty() || facet.count == 0 || model.category_hidden(facet.value))
-            continue;
-        categories.push_back(facet.value);
-        if (categories.size() == 200)
-            break;
+        if (in_country_ && !model.country().empty() && model.country() == chip_country_)
+        {
+            row = Row::country;
+            for (const auto &facet : model.country_categories())
+            {
+                if (facet.count == 0 || model.category_hidden(facet.value))
+                    continue;
+                categories.push_back(facet.value);
+                if (categories.size() == 200)
+                    break;
+            }
+        }
+        else
+        {
+            row = Row::places;
+            for (const auto &facet : model.countries())
+                places.push_back(facet.value);
+        }
     }
-    if (categories == chip_categories_ && !groups_.tabs().empty())
+    else
+    {
+        for (const auto &facet : model.provider_categories())
+        {
+            if (facet.value.empty() || facet.count == 0 || model.category_hidden(facet.value))
+                continue;
+            categories.push_back(facet.value);
+            if (categories.size() == 200)
+                break;
+        }
+    }
+    if (row == row_ && places == chip_places_ && categories == chip_categories_ &&
+        !groups_.tabs().empty())
         return;
     const int active = groups_.active();
+    row_ = row;
+    chip_places_ = std::move(places);
     chip_categories_ = std::move(categories);
     std::vector<ui::TabItem> chips;
-    chips.push_back({tr(Model::group_name(Group::all))});
-    chips.push_back({tr(Model::group_name(Group::recent))});
-    chips.push_back({tr(Model::group_name(Group::recently_added))});
-    chips.push_back({tr(Model::group_name(Group::most_watched))});
-    if (chip_categories_.empty())
-        for (const Group group : {Group::news, Group::sports, Group::kids})
-            chips.push_back({tr(Model::group_name(group))});
-    else
+    switch (row_)
+    {
+    case Row::country:
+        chips.push_back({"\xE2\x80\xB9 " + std::string(tr(model.country().c_str()))});
         for (const auto &category : chip_categories_)
-            chips.push_back({label_text(category_leaf(category))});
+            chips.push_back({chip_label(category)});
+        break;
+    case Row::places:
+        for (const Group group : kChips)
+            chips.push_back({tr(Model::group_name(group))});
+        for (const auto &place : chip_places_)
+            chips.push_back({tr(place.c_str())});
+        break;
+    case Row::legacy:
+        chips.push_back({tr(Model::group_name(Group::all))});
+        chips.push_back({tr(Model::group_name(Group::recent))});
+        chips.push_back({tr(Model::group_name(Group::recently_added))});
+        chips.push_back({tr(Model::group_name(Group::most_watched))});
+        if (chip_categories_.empty())
+            for (const Group group : {Group::news, Group::sports, Group::kids})
+                chips.push_back({tr(Model::group_name(group))});
+        else
+            for (const auto &category : chip_categories_)
+                chips.push_back({chip_label(category)});
+        break;
+    }
     groups_.set_tabs(std::move(chips));
     groups_.set_active(std::min(active, static_cast<int>(groups_.tabs().size()) - 1), true);
 }
@@ -313,38 +368,137 @@ void BrowseScreen::rebuild_chips()
 int BrowseScreen::current_chip() const
 {
     const Model &model = shared_.model;
-    if (!chip_categories_.empty())
+    const auto find = [](const std::vector<std::string> &values, const std::string &value)
     {
-        const auto at =
-            std::find(chip_categories_.begin(), chip_categories_.end(), model.provider_category());
-        if (at != chip_categories_.end())
-            return 4 + static_cast<int>(at - chip_categories_.begin());
-        return chip_of(model.view.live_group);
+        const auto at = std::find(values.begin(), values.end(), value);
+        return at == values.end() ? -1 : static_cast<int>(at - values.begin());
+    };
+    switch (row_)
+    {
+    case Row::country:
+    {
+        const int at = find(chip_categories_, model.provider_category());
+        return at >= 0 ? 1 + at : 0;
     }
-    return chip_of(model.view.live_group);
+    case Row::places:
+    {
+        const int at = model.country().empty() ? -1 : find(chip_places_, model.country());
+        return at >= 0 && model.country() == chip_country_ ? kChipCount + at
+                                                           : chip_of(model.view.live_group);
+    }
+    case Row::legacy:
+    {
+        const int at = find(chip_categories_, model.provider_category());
+        return at >= 0 ? 4 + at : chip_of(model.view.live_group);
+    }
+    }
+    return 0;
 }
 
 void BrowseScreen::apply_group(int chip)
 {
     Model &model = shared_.model;
     chip = std::clamp(chip, 0, static_cast<int>(groups_.tabs().size()) - 1);
-    if (!chip_categories_.empty())
+    switch (row_)
     {
-        // All and Recent are lists of the whole source; a provider's chip is
-        // the whole source narrowed to that category and what is under it.
-        const Group group = chip < 4 ? kChips[chip] : Group::all;
-        model.view.live_group = group;
-        model.set_group(group);
+    case Row::country:
+        // The first chip is the whole place; the others one of its categories.
+        model.view.live_group = Group::all;
+        model.set_group(Group::all);
         model.set_provider_category(
-            chip >= 4 ? std::string_view(chip_categories_[static_cast<std::size_t>(chip - 4)])
+            chip >= 1 ? std::string_view(chip_categories_[static_cast<std::size_t>(chip - 1)])
                       : std::string_view());
         restart_list();
         return;
+    case Row::places:
+        if (chip < kChipCount)
+        {
+            const Group group = kChips[chip];
+            model.view.live_group = group;
+            model.set_group(group);
+            model.set_provider_category({});
+            if (model.country() == chip_country_)
+                model.set_country({});
+            chip_country_.clear();
+            restart_list();
+            return;
+        }
+        // A place: the whole source narrowed to it. Cross opens its categories.
+        model.view.live_group = Group::all;
+        model.set_group(Group::all);
+        model.set_provider_category({});
+        chip_country_ = chip_places_[static_cast<std::size_t>(chip - kChipCount)];
+        model.set_country(chip_country_);
+        restart_list();
+        return;
+    case Row::legacy:
+        if (!chip_categories_.empty())
+        {
+            // All and Recent are lists of the whole source; a provider's chip is
+            // the whole source narrowed to that category and what is under it.
+            const Group group = chip < 4 ? kChips[chip] : Group::all;
+            model.view.live_group = group;
+            model.set_group(group);
+            model.set_provider_category(
+                chip >= 4 ? std::string_view(chip_categories_[static_cast<std::size_t>(chip - 4)])
+                          : std::string_view());
+            restart_list();
+            return;
+        }
+        break;
     }
     const Group group = kChips[std::clamp(chip, 0, kChipCount - 1)];
     model.view.live_group = group;
     model.set_group(group);
     restart_list();
+}
+
+bool BrowseScreen::step_up(ui::Feedback &feedback)
+{
+    Model &model = shared_.model;
+    if (favorites_ || chip_country_.empty() || model.country() != chip_country_)
+        return false;
+    if (row_ == Row::country)
+    {
+        if (!model.provider_category().empty())
+        {
+            // A category of the place: back to the whole place.
+            groups_.set_active(0, true);
+            apply_group(0);
+        }
+        else
+        {
+            // The whole place: back to the row of places, on the place, still narrowed to it.
+            in_country_ = false;
+            rebuild_chips();
+            groups_.set_active(current_chip(), true);
+        }
+        zone_ = Zone::groups;
+        feedback.play(audio::Cue::back);
+        return true;
+    }
+    // A place lit on the row of places: back to the whole source.
+    chip_country_.clear();
+    model.set_country({});
+    groups_.set_active(0, true);
+    apply_group(0);
+    zone_ = Zone::groups;
+    feedback.play(audio::Cue::back);
+    return true;
+}
+
+// Cross on a lit place: the row becomes that place's categories.
+bool BrowseScreen::open_place(ui::Feedback &feedback)
+{
+    const Model &model = shared_.model;
+    if (row_ != Row::places || groups_.active() < kChipCount || model.country().empty() ||
+        model.country() != chip_country_ || model.country_categories().empty())
+        return false;
+    in_country_ = true;
+    rebuild_chips();
+    groups_.set_active(0, true);
+    feedback.play(audio::Cue::open);
+    return true;
 }
 
 BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback &feedback)
@@ -369,6 +523,8 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
 
     if (zone_ == Zone::groups)
     {
+        if (input.is_pressed(Action::confirm) && open_place(feedback))
+            return Result::none;
         if (input.nav == Direction::down || input.is_pressed(Action::confirm))
         {
             if (grid_.count() > 0)
@@ -526,6 +682,8 @@ bool BrowseScreen::back(ui::Feedback &feedback)
     }
     if (zone_ == Zone::groups)
     {
+        if (step_up(feedback))
+            return true;
         if (groups_.active() != 0)
         {
             groups_.set_active(0);
@@ -618,30 +776,71 @@ void BrowseScreen::update(float dt)
         page_hold_ += dt;
 
     // ---- the chips say how many each list holds ----
+    if (model.country() != chip_country_)
+    {
+        chip_country_.clear(); // the place was changed or cleared elsewhere
+        in_country_ = false;
+    }
     rebuild_chips();
     if (!favorites_ && groups_.active() != current_chip())
         groups_.set_active(current_chip()); // the category was chosen or cleared elsewhere
-    if (chip_categories_.empty())
-        for (int i = 0; i < kChipCount; ++i)
-            groups_.tab(i).label = std::string(tr(Model::group_name(kChips[i]))) + "  " +
-                                   group_digits(model.group_size(kChips[i]));
-    else
+    const auto fixed = [&](int chip, Group group)
     {
-        groups_.tab(0).label = std::string(tr(Model::group_name(Group::all))) + "  " +
-                               group_digits(model.group_size(Group::all));
-        groups_.tab(1).label = std::string(tr(Model::group_name(Group::recent))) + "  " +
-                               group_digits(model.group_size(Group::recent));
-        for (int i = 2; i < 4; ++i)
-            groups_.tab(i).label = std::string(tr(Model::group_name(kChips[i]))) + "  " +
-                                   group_digits(model.group_size(kChips[i]));
+        groups_.tab(chip).label = std::string(tr(Model::group_name(group))) + "  " +
+                                  group_digits(model.group_size(group));
+    };
+    switch (row_)
+    {
+    case Row::country:
+    {
+        unsigned total = 0;
+        std::size_t chip = 0;
+        for (const auto &facet : model.country_categories())
+        {
+            total += facet.count;
+            if (chip < chip_categories_.size() && facet.value == chip_categories_[chip])
+            {
+                groups_.tab(static_cast<int>(chip) + 1).label =
+                    chip_label(facet.value) + "  " + group_digits(facet.count);
+                ++chip;
+            }
+        }
+        groups_.tab(0).label =
+            "\xE2\x80\xB9 " + std::string(tr(model.country().c_str())) + "  " + group_digits(total);
+        break;
+    }
+    case Row::places:
+    {
+        for (int i = 0; i < kChipCount; ++i)
+            fixed(i, kChips[i]);
+        std::size_t chip = 0;
+        for (const auto &facet : model.countries())
+            if (chip < chip_places_.size() && facet.value == chip_places_[chip])
+            {
+                groups_.tab(static_cast<int>(chip) + kChipCount).label =
+                    std::string(tr(facet.value.c_str())) + "  " + group_digits(facet.count);
+                ++chip;
+            }
+        break;
+    }
+    case Row::legacy:
+        if (chip_categories_.empty())
+        {
+            for (int i = 0; i < kChipCount; ++i)
+                fixed(i, kChips[i]);
+            break;
+        }
+        for (int i = 0; i < 4; ++i)
+            fixed(i, kChips[i]);
         std::size_t chip = 0;
         for (const auto &facet : model.provider_categories())
             if (chip < chip_categories_.size() && facet.value == chip_categories_[chip])
             {
                 groups_.tab(static_cast<int>(chip) + 4).label =
-                    label_text(category_leaf(facet.value)) + "  " + group_digits(facet.count);
+                    chip_label(facet.value) + "  " + group_digits(facet.count);
                 ++chip;
             }
+        break;
     }
 
     // One focus on screen: the part that is not in use shows no ring at all.
@@ -917,6 +1116,16 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
     list.pop_opacity();
 }
 
+// The provider's own heading row, as a caption over the tile that starts the section.
+void BrowseScreen::draw_section(ui::Canvas &canvas, const Rect &cell,
+                                const std::string &title) const
+{
+    const ui::Fonts &fonts = canvas.fonts;
+    const std::string text = ui::upper(readable(fonts.semibold, title));
+    ui::text(canvas.list, fonts.semibold, fonts.semibold.font->fit(text, 14.0f, cell.w - 24.0f),
+             cell.x + 12.0f, cell.y - 8.0f, 14.0f, tone::accent, gfx::Align::left, 2.5f);
+}
+
 void BrowseScreen::draw_waiting(ui::Canvas &canvas) const
 {
     // The shape of the screen while the saved catalog is read.
@@ -1068,6 +1277,11 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
     if (zone_ == Zone::groups)
     {
         add({ui::Button::dpad, tr("Choose a list")});
+        if (row_ == Row::places && groups_.active() >= kChipCount &&
+            !model.country_categories().empty())
+            add({ui::Button::cross, tr("Its categories")});
+        else if (row_ == Row::country)
+            add({ui::Button::circle, tr("Back to the places")});
     }
     else if (zone_ == Zone::rail)
     {

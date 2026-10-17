@@ -2683,6 +2683,17 @@ NameFacts parse_name(std::string_view name, std::string_view group_title)
     return facts;
 }
 
+std::string_view heading_title(std::string_view name)
+{
+    const auto bare = [](char c)
+    { return c == '#' || c == ' ' || c == '-' || c == '=' || c == '*'; };
+    while (!name.empty() && bare(name.front()))
+        name.remove_prefix(1);
+    while (!name.empty() && bare(name.back()))
+        name.remove_suffix(1);
+    return name;
+}
+
 unsigned name_prefix_bytes(std::string_view name, std::string_view group_title)
 {
     // A name is not read for its marks here: the lists ask this of every row.

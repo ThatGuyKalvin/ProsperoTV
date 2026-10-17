@@ -167,7 +167,23 @@ void CatalogIndex::build(const iptv::Catalog &catalog,
     Tally country_tally;
     Tally category_tally;
     Tally language_tally;
-    std::map<std::string_view, unsigned> provider_tally;
+    // The provider's categories in the order it lists them: where each was
+    // first seen, with its count and the place its title names.
+    std::unordered_map<std::string_view, std::size_t> provider_at;
+    std::vector<std::pair<std::string_view, Facet>> provider_order;
+    const auto count_provider = [&](std::string_view title, Place place)
+    {
+        if (title.empty())
+            return;
+        auto found = provider_at.find(title);
+        if (found == provider_at.end())
+        {
+            found = provider_at.emplace(title, provider_order.size()).first;
+            provider_order.emplace_back(
+                title, Facet{std::string(title), 0u, static_cast<unsigned>(place)});
+        }
+        ++provider_order[found->second].second.count;
+    };
     // A group title is read once, however many channels share it.
     std::unordered_map<std::string_view, GroupFacts> group_facts;
     for (std::uint32_t index = 0; index < count; ++index)
@@ -255,13 +271,12 @@ void CatalogIndex::build(const iptv::Catalog &catalog,
             category_tally.add(category_leaf(channel.group_title));
         else
             category_tally.add(channel.group_title);
-        if (!channel.group_title.empty())
-            ++provider_tally[channel.group_title];
+        count_provider(channel.group_title, group.place);
         for (const std::string_view category : channel.alternate_group_titles)
         {
             category_tally.add(category);
-            if (!category.empty() && category != channel.group_title)
-                ++provider_tally[category];
+            if (category != channel.group_title)
+                count_provider(category, Place::none);
         }
 
         if (!east_asian || !korean)
@@ -283,8 +298,9 @@ void CatalogIndex::build(const iptv::Catalog &catalog,
     country_tally.store(&countries, &country_count);
     category_tally.store(&categories, &category_count);
     language_tally.store(&languages, &language_count);
-    for (const auto &[name, size] : provider_tally)
-        provider_categories.push_back({std::string(name), size, 0u});
+    provider_categories.reserve(provider_order.size());
+    for (auto &entry : provider_order)
+        provider_categories.push_back(std::move(entry.second));
 }
 
 } // namespace ptv

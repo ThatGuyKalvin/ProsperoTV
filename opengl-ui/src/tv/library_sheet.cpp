@@ -105,7 +105,9 @@ void LibrarySheet::sync()
     }
     else
     {
-        std::map<std::string, std::pair<unsigned, bool>> children;
+        // In the provider's order: a level is where its first category was.
+        std::vector<std::pair<std::string, std::pair<unsigned, bool>>> children;
+        std::map<std::string, std::size_t, std::less<>> child_at;
         for (const auto &category : model.provider_categories())
         {
             std::string_view child = category.value;
@@ -117,7 +119,13 @@ void LibrarySheet::sync()
             }
             if (child.empty())
                 continue;
-            auto &row = children[std::string(child)];
+            auto found = child_at.find(child);
+            if (found == child_at.end())
+            {
+                found = child_at.emplace(std::string(child), children.size()).first;
+                children.emplace_back(std::string(child), std::make_pair(0u, false));
+            }
+            auto &row = children[found->second].second;
             row.first += category.count;
             row.second = row.second || branch;
         }

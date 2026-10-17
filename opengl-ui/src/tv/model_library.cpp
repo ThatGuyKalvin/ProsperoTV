@@ -12,6 +12,7 @@
 #include "iptv_ime.h"
 
 #include <algorithm>
+#include <unordered_map>
 
 namespace ptv
 {
@@ -25,8 +26,8 @@ bool Model::export_shared_library(SharedLibrary &out)
         if (source.kind == 1 && usb_playlist_path(source.url))
             ++out.skipped_local;
         else if (portable_source(source))
-            out.sources.push_back({source, library_.guide_url(source.id),
-                                   library_.guide_mapping(source.id)});
+            out.sources.push_back(
+                {source, library_.guide_url(source.id), library_.guide_mapping(source.id)});
     }
     out.favorites = user_.favorite_ids;
     for (const auto &folder : library_.folders())
@@ -692,7 +693,20 @@ void Model::mark_visibility()
     protected_categories_.clear();
     if (marks_.size() != catalog_.size())
         return;
-    std::map<std::string, unsigned> categories;
+    // In the provider's order, as index_.provider_categories is.
+    std::unordered_map<std::string_view, std::size_t> at;
+    const auto count = [&](std::string_view title)
+    {
+        if (title.empty())
+            return;
+        auto found = at.find(title);
+        if (found == at.end())
+        {
+            found = at.emplace(title, protected_categories_.size()).first;
+            protected_categories_.push_back({std::string(title), 0u, 0u});
+        }
+        ++protected_categories_[found->second].count;
+    };
     for (std::size_t i = 0; i < catalog_.size(); ++i)
     {
         marks_[i] &= static_cast<std::uint8_t>(~4u);
@@ -701,11 +715,10 @@ void Model::mark_visibility()
             channel.media_kind == iptv::MediaKind::live && content_allowed(channel);
         if (allowed && !parental_.unlocked())
         {
-            if (!channel.group_title.empty())
-                ++categories[std::string(channel.group_title)];
+            count(channel.group_title);
             for (const auto group : channel.alternate_group_titles)
-                if (!group.empty() && group != channel.group_title)
-                    ++categories[std::string(group)];
+                if (group != channel.group_title)
+                    count(group);
         }
         bool hidden = !allowed || hidden_channels_.contains(std::string(channel.id)) ||
                       (hide_failed_ && channel.playback_status == iptv::PlaybackStatus::failed);
@@ -718,8 +731,6 @@ void Model::mark_visibility()
         if (hidden)
             marks_[i] |= 4u;
     }
-    for (auto &[category, count] : categories)
-        protected_categories_.push_back({std::move(category), count});
 }
 
 bool Model::move_channel(std::string_view id, int direction)

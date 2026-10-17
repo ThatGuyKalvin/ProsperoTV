@@ -5,6 +5,7 @@
 #include "tv/i18n.hpp"
 #include "tv/model.hpp"
 #include "tv/usb_playlist.hpp"
+#include "tv/catalog_facts.hpp"
 #include "tv/category_path.hpp"
 
 #include "iptv_ime.h"
@@ -574,6 +575,7 @@ void Model::adopt_catalog()
         language_.clear();
     mark_lists();
     recount_groups();
+    recount_country_categories();
     rebuild_visible();
 }
 
@@ -672,14 +674,23 @@ void Model::rebuild_visible()
                         facet_id(languages(), language_)};
     const auto guide_time = static_cast<std::int64_t>(platform::unix_time());
 
+    const auto &saved_order = group_ == Group::favorites ? favorite_order_ : channel_order_;
+    const bool ranked = group_ == Group::recently_added || group_ == Group::most_watched;
+    // One of the provider's categories reads in the provider's order, with
+    // its heading rows as the names of sections; every other list in the
+    // order of the alphabet.
+    catalog_order_ = !provider_category_.empty() && !ranked && saved_order.empty();
+    sections_.clear();
+    std::string section;
     visible_.clear();
     letter_starts_.fill(-1);
-    for (const std::uint32_t index : index_.order)
+    const std::uint32_t total = static_cast<std::uint32_t>(catalog_.size());
+    for (std::uint32_t at = 0; at < total; ++at)
     {
+        const std::uint32_t index = catalog_order_ ? at : index_.order[at];
         if ((marks_[index] & 4u) != 0)
             continue;
-        if ((index_.traits[index] & CatalogIndex::kHeading) != 0)
-            continue; // "##### SPORTS #####" is a line between groups
+        const bool heading = (index_.traits[index] & CatalogIndex::kHeading) != 0;
         if (!provider_category_.empty())
         {
             const auto channel = catalog_[index];
@@ -688,6 +699,13 @@ void Model::rebuild_visible()
                 matches = matches || category_belongs(category, provider_category_);
             if (!matches)
                 continue;
+        }
+        if (heading)
+        {
+            // "##### SPORTS #####": the next channel starts a section of that name.
+            if (catalog_order_)
+                section = label_text(heading_title(catalog_[index].name));
+            continue;
         }
         if (group_ == Group::favorites && !folder_.empty() &&
             !folder_channels_.contains(std::string(catalog_[index].id)))
@@ -709,10 +727,13 @@ void Model::rebuild_visible()
         int &start = letter_starts_[index_.letters[index]];
         if (start < 0)
             start = static_cast<int>(visible_.size());
+        if (!section.empty())
+        {
+            sections_.emplace(static_cast<unsigned>(visible_.size()), std::move(section));
+            section.clear();
+        }
         visible_.push_back(index);
     }
-    const auto &saved_order = group_ == Group::favorites ? favorite_order_ : channel_order_;
-    const bool ranked = group_ == Group::recently_added || group_ == Group::most_watched;
     if (ranked)
     {
         const auto rank = [this](unsigned index)
@@ -747,6 +768,42 @@ void Model::rebuild_visible()
     }
     visible_count_ = static_cast<unsigned>(visible_.size());
     ++revision_;
+}
+
+const std::string *Model::section_at(unsigned position) const
+{
+    const auto found = sections_.find(position);
+    return found == sections_.end() ? nullptr : &found->second;
+}
+
+// The categories the country filter leaves channels in, counted once per
+// country chosen: the chip row of a country is made of them.
+void Model::recount_country_categories()
+{
+    country_categories_.clear();
+    if (country_.empty())
+        return;
+    const FilterIds ids{facet_id(countries(), country_), 0u, 0u};
+    std::unordered_map<std::string_view, std::size_t> at;
+    const std::uint32_t total = static_cast<std::uint32_t>(catalog_.size());
+    for (std::uint32_t index = 0; index < total; ++index)
+    {
+        if (marks_.size() == catalog_.size() && (marks_[index] & 4u) != 0)
+            continue;
+        if (index < index_.traits.size() && (index_.traits[index] & CatalogIndex::kHeading) != 0)
+            continue;
+        const iptv::ChannelView channel = catalog_[index];
+        if (channel.media_kind != iptv::MediaKind::live || channel.group_title.empty() ||
+            !matches_filters(channel, index_, index, country_, {}, {}, ids))
+            continue;
+        auto found = at.find(channel.group_title);
+        if (found == at.end())
+        {
+            found = at.emplace(channel.group_title, country_categories_.size()).first;
+            country_categories_.push_back({std::string(channel.group_title), 0u, 0u});
+        }
+        ++country_categories_[found->second].count;
+    }
 }
 
 int Model::letter_at(unsigned position) const
@@ -788,6 +845,14 @@ int Model::position_of(std::string_view channel_id) const
     {
         const auto found = std::find(visible_.begin(), visible_.end(), index);
         return found == visible_.end() ? -1 : static_cast<int>(found - visible_.begin());
+    }
+    if (catalog_order_)
+    {
+        // The list is in the order of the catalog: the channel is where its index falls.
+        const auto first = visible_.begin();
+        const auto last = first + visible_count_;
+        const auto found = std::lower_bound(first, last, static_cast<std::uint32_t>(index));
+        return found != last && *found == index ? static_cast<int>(found - first) : -1;
     }
     // The list is in the order of the alphabet, and so are the ranks: the
     // channel is where its rank falls.
@@ -841,6 +906,7 @@ void Model::set_country(std::string_view value)
     if (country_ == value)
         return;
     country_ = value;
+    recount_country_categories();
     rebuild_visible();
 }
 
@@ -885,6 +951,7 @@ void Model::clear_filters()
     category_.clear();
     language_.clear();
     quality_ = kQualityAny;
+    country_categories_.clear();
     rebuild_visible();
 }
 

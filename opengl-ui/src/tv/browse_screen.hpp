@@ -40,6 +40,10 @@ class BrowseScreen
     Result handle(const InputFrame &input, ui::Feedback &feedback);
     // One step back inside the screen. False when there is nowhere to go.
     bool back(ui::Feedback &feedback);
+    // Back one level of the chips: a category to its place, a place to the
+    // row of places. False when the chips are at their first level.
+    bool step_up(ui::Feedback &feedback);
+    bool open_place(ui::Feedback &feedback);
     void update(float dt);
     void draw(ui::Canvas &canvas) const;
     int hints(ui::Hint *out, int capacity) const;
@@ -91,11 +95,24 @@ class BrowseScreen
     Shared &shared_;
     ui::GridView grid_;
     ui::TabBar groups_;
-    // The chips after All and Recent: the provider's own top categories when
-    // the source has any, otherwise News, Sports and Kids.
-    std::vector<std::string> chip_categories_;
+    // What the chip row holds after its fixed lists. A source whose words
+    // name places shows the places (`places`), and inside one place that
+    // place's provider categories (`country`); otherwise the provider's
+    // categories themselves, or News, Sports and Kids (`legacy`).
+    enum class Row
+    {
+        legacy,
+        places,
+        country,
+    };
+    Row row_ = Row::legacy;
+    std::vector<std::string> chip_places_;     // the places row: facet values
+    std::vector<std::string> chip_categories_; // provider category paths
+    std::string chip_country_;                 // the place chosen from a chip
+    bool in_country_ = false;                  // the row is that place's categories
     void rebuild_chips();
     int current_chip() const;
+    void draw_section(ui::Canvas &canvas, const Rect &cell, const std::string &title) const;
     ui::EmptyState empty_;
     bool favorites_ = false;
     bool selection_mode_ = false;

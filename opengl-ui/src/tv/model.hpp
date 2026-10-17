@@ -28,6 +28,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -360,6 +361,19 @@ class Model
     }
     // Where a channel is in that list, or -1.
     int position_of(std::string_view channel_id) const;
+    // Inside one provider category the list keeps the provider's order, and
+    // the provider's own heading rows name the section a channel starts.
+    bool provider_order() const
+    {
+        return catalog_order_;
+    }
+    const std::string *section_at(unsigned position) const;
+    // The provider's categories the country filter leaves channels in, in the
+    // provider's order, with their counts.
+    const std::vector<Facet> &country_categories() const
+    {
+        return country_categories_;
+    }
     std::optional<iptv::ChannelView> find(std::string_view channel_id) const;
     // The letter (0 for '#', 1 to 26) the channel at a position is filed under.
     int letter_at(unsigned position) const;
@@ -800,6 +814,10 @@ class Model
     std::vector<std::uint32_t> visible_;
     unsigned visible_count_ = 0;
     std::array<int, kLetterCount> letter_starts_{};
+    bool catalog_order_ = false;                         // visible_ is in catalog order
+    std::unordered_map<unsigned, std::string> sections_; // by position: the heading before it
+    std::vector<Facet> country_categories_;
+    void recount_country_categories();
     unsigned revision_ = 0;
     Group group_ = Group::all;
     std::array<unsigned, kGroupCount> group_sizes_{};

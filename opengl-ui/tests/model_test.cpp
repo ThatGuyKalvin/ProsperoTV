@@ -233,6 +233,62 @@ TEST_F(ModelTest, PlacesLanguagesAndKindsAreReadFromTheProvidersWords)
     EXPECT_EQ(ptv::place_line(model.channel(zdf)), "Germany  \xC2\xB7  German");
 }
 
+// Inside one of the provider's categories the list keeps the provider's
+// order, and the provider's heading rows name the sections.
+constexpr const char *kOrderedPlaylist =
+    "#EXTM3U\n"
+    "#EXTINF:-1 tvg-id=\"z\" group-title=\"UK| GENERAL\",Zeta One\n"
+    "https://streams.example.invalid/z/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"h\" group-title=\"UK| GENERAL\",##### LOCAL #####\n"
+    "https://streams.example.invalid/h/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"m\" group-title=\"UK| GENERAL\",Mid Two\n"
+    "https://streams.example.invalid/m/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"a\" group-title=\"UK| GENERAL\",Alpha Three\n"
+    "https://streams.example.invalid/a/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"s\" group-title=\"UK| SPORTS\",Sport Four\n"
+    "https://streams.example.invalid/s/index.m3u8\n";
+
+TEST_F(ModelTest, AProvidersCategoryKeepsItsOrderAndItsSections)
+{
+    std::ofstream(playlist_) << kOrderedPlaylist;
+    ptv::Model model(dir_);
+    load(model);
+    ASSERT_EQ(model.channel_count(), 5u);
+    // Every list but a category's reads in the order of the alphabet.
+    EXPECT_FALSE(model.provider_order());
+    EXPECT_EQ(model.visible_count(), 4u);
+    EXPECT_EQ(model.channel(model.visible(0)).name, "Alpha Three");
+    // The provider's categories come in the provider's order.
+    ASSERT_EQ(model.provider_categories().size(), 2u);
+    EXPECT_EQ(model.provider_categories()[0].value, "UK| GENERAL");
+    EXPECT_EQ(model.provider_categories()[0].id, static_cast<unsigned>(ptv::Place::united_kingdom));
+    model.set_provider_category("UK| GENERAL");
+    EXPECT_TRUE(model.provider_order());
+    ASSERT_EQ(model.visible_count(), 3u);
+    EXPECT_EQ(model.channel(model.visible(0)).name, "Zeta One");
+    EXPECT_EQ(model.channel(model.visible(1)).name, "Mid Two");
+    EXPECT_EQ(model.channel(model.visible(2)).name, "Alpha Three");
+    EXPECT_EQ(model.position_of(model.channel(model.visible(1)).id), 1);
+    EXPECT_EQ(model.position_of(model.channel(model.visible(2)).id), 2);
+    EXPECT_EQ(model.position_of(model.channel(1).id), -1); // the heading row
+    EXPECT_EQ(model.section_at(0), nullptr);
+    ASSERT_NE(model.section_at(1), nullptr);
+    EXPECT_EQ(*model.section_at(1), "LOCAL");
+    EXPECT_EQ(model.section_at(2), nullptr);
+    // The letters still lead to the first channel under each.
+    EXPECT_EQ(model.letter_start(26), 0);
+    EXPECT_EQ(model.letter_start(1), 2);
+    // The categories of a place, for its row of chips.
+    model.set_provider_category("");
+    model.set_country("United Kingdom");
+    ASSERT_EQ(model.country_categories().size(), 2u);
+    EXPECT_EQ(model.country_categories()[0].value, "UK| GENERAL");
+    EXPECT_EQ(model.country_categories()[0].count, 3u);
+    EXPECT_EQ(model.country_categories()[1].value, "UK| SPORTS");
+    model.set_country("");
+    EXPECT_TRUE(model.country_categories().empty());
+}
+
 TEST_F(ModelTest, SaysWhichScriptsAListIsWrittenIn)
 {
     {
