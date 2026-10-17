@@ -29,6 +29,10 @@ void VodScreen::enter()
         shared_.model.vod().select(static_cast<VodKind>(view.vod_kind), view.vod_series);
     sync();
 }
+bool VodScreen::shows_a_title(const Row &row)
+{
+    return row.kind == Kind::item || row.kind == Kind::resume;
+}
 const VodScreen::Row *VodScreen::focused() const
 {
     const int focus = shared_.model.view.vod_focus;
@@ -80,8 +84,23 @@ void VodScreen::sync()
                 contains_nocase(item.name, view.vod_query))
                 items.push_back({Kind::item, std::string(item.name), {}, i});
         }
-        if (!view.vod_all && view.vod_query.empty() && view.vod_genre.empty() &&
-            view.vod_year.empty() && !catalog.empty())
+        const bool plain = !view.vod_all && view.vod_query.empty() && view.vod_genre.empty() &&
+                           view.vod_year.empty();
+        // Where the show was left, above its seasons.
+        const auto resume = plain && view.vod_category.empty() &&
+                                    view.vod_kind == static_cast<int>(VodKind::episodes)
+                                ? model.series_resume()
+                                : std::nullopt;
+        if (resume)
+        {
+            auto label =
+                std::string(tr("Continue")) + " · " + std::string(catalog[resume->index].name);
+            if (resume->position_us)
+                label += " (" + std::to_string(resume->position_us / 60000000) +
+                         tr(" min watched") + ")";
+            rows_.push_back({Kind::resume, std::move(label), {}, resume->index});
+        }
+        if (plain && !catalog.empty())
             rows_.push_back({Kind::all, tr("Browse all"), {}, 0});
         std::vector<std::pair<std::string, std::string>> ordered(categories.begin(),
                                                                  categories.end());
@@ -328,6 +347,12 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
             static_cast<int>(row.kind == Kind::movies ? VodKind::movies : VodKind::series);
         model.vod().select(static_cast<VodKind>(view.vod_kind));
     }
+    else if (row.kind == Kind::resume)
+    {
+        if (model.play_series_resume())
+            feedback.play(audio::Cue::select);
+        return;
+    }
     else if (row.kind == Kind::category)
         view.vod_category = row.category;
     else if (row.kind == Kind::all)
@@ -364,7 +389,7 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
 std::vector<std::string> VodScreen::image_urls() const
 {
     const auto *row = focused();
-    if (row && row->kind == Kind::item)
+    if (row && shows_a_title(*row))
     {
         const auto item = shared_.model.vod().catalog()[row->item];
         const auto &details = shared_.model.vod().details(item.id);
@@ -432,7 +457,8 @@ void VodScreen::draw(ui::Canvas &canvas) const
         const auto shown = readable(font, label);
         ui::text(draw, font, font.font->fit(shown.empty() ? tr("Untitled") : shown, 27, 960),
                  kMargin + 24, y + 47, 27, disabled ? theme.text_muted : theme.text);
-        if (!disabled && (row.kind != Kind::item || view.vod_kind == 1))
+        const bool opens = row.kind == Kind::item ? view.vod_kind == 1 : row.kind != Kind::resume;
+        if (!disabled && opens)
             ui::text(draw, fonts.regular, ">", kMargin + 1020, y + 47, 27, tone::accent);
     }
     if (rows_.empty())
@@ -441,7 +467,7 @@ void VodScreen::draw(ui::Canvas &canvas) const
                                                                : tr("No matching titles"),
                  kMargin, 370, 30, theme.text_muted);
     const auto *row = focused();
-    if (row && row->kind == Kind::item)
+    if (row && shows_a_title(*row))
     {
         const auto item = model.vod().catalog()[row->item];
         const Rect cover{1260, 310, 350, 480};

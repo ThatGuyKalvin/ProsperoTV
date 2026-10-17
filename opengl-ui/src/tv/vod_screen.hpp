@@ -38,7 +38,8 @@ class VodScreen
         shows,
         all,
         category,
-        item
+        item,
+        resume // carry on with a show, at the top of its episode list
     };
     struct Row
     {
@@ -51,6 +52,8 @@ class VodScreen
     void draw_details(ui::Canvas &) const;
     void draw_filters(ui::Canvas &) const;
     void handle_filters(const InputFrame &);
+    // A row that stands for one movie or episode, with its artwork beside it.
+    static bool shows_a_title(const Row &row);
     const Row *focused() const;
     Shared &shared_;
     std::vector<Row> rows_;

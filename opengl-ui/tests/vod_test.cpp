@@ -352,6 +352,14 @@ TEST_F(VodTest, HomeSnapshotBoundAndSourceFingerprintSurviveRestart)
     EXPECT_EQ(rows.front().channel.http_user_agent, "Test player");
     EXPECT_EQ(rows.front().channel.alternate_urls.size(), 1u);
     EXPECT_EQ(rows.front().series, "series-1");
+    const auto started = library.last_series_episode(3, 42, "series-1");
+    ASSERT_TRUE(started.has_value());
+    EXPECT_EQ(started->channel.id, "movie-54");
+    EXPECT_EQ(started->position_us, 10u);
+    EXPECT_FALSE(library.last_series_episode(3, 42, "series-2").has_value());
+    EXPECT_FALSE(library.last_series_episode(3, 43, "series-1").has_value());
+    EXPECT_FALSE(library.last_series_episode(2, 42, "series-1").has_value());
+    EXPECT_FALSE(library.last_series_episode(3, 42, "").has_value());
     EXPECT_TRUE(library.unfinished_vod(3, 43).empty());
     EXPECT_TRUE(library.unfinished_vod(2, 42).empty());
     iptv::Channel bad = rows.front().channel;
@@ -362,11 +370,18 @@ TEST_F(VodTest, HomeSnapshotBoundAndSourceFingerprintSurviveRestart)
     EXPECT_FALSE(library.remember_vod(3, 42, bad, "", 2000));
     ASSERT_TRUE(library.save_playback_progress("movie-54", 0, 100));
     EXPECT_EQ(library.unfinished_vod(3, 42).size(), 49u);
+    // Watched to its end: still the show's last episode, now without a position.
+    const auto finished = library.last_series_episode(3, 42, "series-1");
+    ASSERT_TRUE(finished.has_value());
+    EXPECT_EQ(finished->channel.id, "movie-54");
+    EXPECT_EQ(finished->position_us, 0u);
+    EXPECT_EQ(finished->duration_us, 0u);
     auto source = library.sources().front();
     ASSERT_EQ(source.id, 3);
     source.password = "changed";
     ASSERT_TRUE(library.save_source(&source));
     EXPECT_TRUE(library.unfinished_vod(3, 42).empty());
+    EXPECT_FALSE(library.last_series_episode(3, 42, "series-1").has_value());
     library.close();
 }
 
@@ -970,6 +985,61 @@ TEST_F(VodTest, ResumeSurvivesRestartAndCompletedEpisodesAdvanceInNumericOrder)
     ASSERT_TRUE(model.take_play_request(&request));
     EXPECT_TRUE(request.urls[0].ends_with("/200.mp4")); // Season 10.
     EXPECT_FALSE(model.finish_vod(request, 99000000, 100000000, true));
+    EXPECT_FALSE(model.take_play_request(&request));
+    model.close();
+}
+
+TEST_F(VodTest, ContinueAtTheTopOfAShowOpensTheEpisodeAndTimeWatchedLast)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.view.vod_kind = static_cast<int>(ptv::VodKind::series);
+    const hui::ui::Fonts fonts{};
+    ptv::Shared shared(model, fonts, {});
+    ptv::VodScreen screen(shared);
+    hui::ui::Feedback feedback;
+    const auto confirm = [&]
+    {
+        hui::InputFrame input;
+        input.pressed = hui::action_bit(hui::Action::confirm);
+        screen.handle(input, feedback);
+    };
+    screen.enter();
+    ASSERT_TRUE(settle(model));
+    screen.update();
+    confirm(); // Browse all shows.
+    confirm(); // A show.
+    ASSERT_EQ(model.view.vod_kind, static_cast<int>(ptv::VodKind::episodes));
+    ASSERT_TRUE(settle(model));
+    screen.update();
+    // Nothing watched yet, so the first row is still Browse all.
+    confirm();
+    ASSERT_TRUE(model.view.vod_all);
+    ASSERT_TRUE(screen.back());
+    ASSERT_TRUE(model.play_vod(2)); // Season 2, episode 2.
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_FALSE(model.finish_vod(request, 12000000, 100000000, false));
+    screen.update();
+    confirm();
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.channel_name, "Episode 2 · Earlier");
+    EXPECT_EQ(request.start_position_us, 12000000u);
+    // Finishing it starts the next episode, which Continue then offers from its start.
+    ASSERT_TRUE(model.finish_vod(request, 99000000, 100000000, true));
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.channel_name, "Episode 10 · Later");
+    screen.update();
+    confirm();
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.channel_name, "Episode 10 · Later");
+    EXPECT_EQ(request.start_position_us, 0u);
+    // A locked show keeps its episodes, and Continue, out of reach: the first
+    // row is Browse all again.
+    ASSERT_TRUE(model.hide_category("Comedy", true));
+    screen.update();
+    confirm();
+    EXPECT_TRUE(model.view.vod_all);
     EXPECT_FALSE(model.take_play_request(&request));
     model.close();
 }
