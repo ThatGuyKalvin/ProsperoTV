@@ -19,6 +19,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 #include <thread>
 
@@ -138,6 +139,99 @@ class ModelTest : public ::testing::Test
     std::string playlist_;
     std::uint64_t now_ = 0;
 };
+
+// A provider that puts the country, the language and the kind into its words.
+constexpr const char *kCodedPlaylist =
+    "#EXTM3U\n"
+    "#EXTINF:-1 tvg-id=\"a\" group-title=\"FR| FRANCE HD\",FR| TFX HD\n"
+    "https://streams.example.invalid/a/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"b\" group-title=\"FR| SPORTS HD\",FR| RMC SPORT 2 HD\n"
+    "https://streams.example.invalid/b/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"c\" group-title=\"AR| BEIN SPORTS\",AR| BEIN SPORTS 1 FHD\n"
+    "https://streams.example.invalid/c/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"d\" group-title=\"AR| KIDS\",AR| MBC 3\n"
+    "https://streams.example.invalid/d/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"e\" group-title=\"GR| ΓΕΝΙΚΆ/GENERAL\",ERT1 HD\n"
+    "https://streams.example.invalid/e/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"f\" group-title=\"TR| HABER KANALLARI\",TR| TRT HABER HD\n"
+    "https://streams.example.invalid/f/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"g\" group-title=\"Live TV\",de: ZDF HD\n"
+    "https://streams.example.invalid/g/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"h\" group-title=\"Live TV\",##### SPORTS #####\n"
+    "https://streams.example.invalid/h/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"i\" group-title=\"IR| IRELAND\",RTE ONE FHD\n"
+    "https://streams.example.invalid/i/index.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"j\" group-title=\"NEW XXX\",Late Night\n"
+    "https://streams.example.invalid/j/index.m3u8\n";
+
+TEST_F(ModelTest, PlacesLanguagesAndKindsAreReadFromTheProvidersWords)
+{
+    std::ofstream(playlist_) << kCodedPlaylist;
+    ptv::Model model(dir_);
+    load(model);
+    ASSERT_EQ(model.channel_count(), 10u);
+    // The heading row is not a channel.
+    EXPECT_EQ(model.visible_count(), 9u);
+
+    const auto facet = [](std::span<const ptv::Facet> facets, const char *value)
+    {
+        for (const auto &entry : facets)
+            if (entry.value == value)
+                return entry.count;
+        return 0u;
+    };
+    EXPECT_EQ(facet(model.countries(), "France"), 2u);
+    EXPECT_EQ(facet(model.countries(), "Arab world"), 2u);
+    EXPECT_EQ(facet(model.countries(), "Greece"), 1u);
+    EXPECT_EQ(facet(model.countries(), "Germany"), 1u); // from "de:" on the name
+    EXPECT_EQ(facet(model.countries(), "Ireland"), 1u);
+    EXPECT_EQ(facet(model.countries(), "Iran"), 0u);
+    EXPECT_EQ(facet(model.languages(), "French"), 2u);
+    EXPECT_EQ(facet(model.languages(), "Arabic"), 2u);
+    EXPECT_EQ(facet(model.languages(), "Greek"), 1u);
+    EXPECT_EQ(facet(model.languages(), "German"), 1u);
+    EXPECT_EQ(facet(model.languages(), "English"), 1u);
+    EXPECT_EQ(facet(model.categories(), "Sports"), 2u);
+    EXPECT_EQ(facet(model.categories(), "Kids"), 1u);
+    EXPECT_EQ(facet(model.categories(), "News"), 1u);
+    EXPECT_EQ(facet(model.categories(), "General"), 4u); // France, Greece, Ireland, Live TV
+    EXPECT_EQ(facet(model.categories(), "Adult"), 1u);
+    EXPECT_EQ(model.group_size(ptv::Group::sports), 2u);
+    EXPECT_EQ(model.group_size(ptv::Group::news), 1u);
+    EXPECT_EQ(model.group_size(ptv::Group::kids), 1u);
+
+    // The filters narrow by what was read, and the name loses its code.
+    model.set_country("France");
+    EXPECT_EQ(model.visible_count(), 2u);
+    EXPECT_EQ(ptv::display_name(model.channel(model.visible(0))), "RMC SPORT 2 HD");
+    EXPECT_EQ(ptv::display_name(model.channel(model.visible(1))), "TFX HD");
+    EXPECT_EQ(ptv::place_line(model.channel(model.visible(1))), "France  \xC2\xB7  French");
+    EXPECT_EQ(ptv::category_of(model.channel(model.visible(1))), "General");
+    // The drawer lists them too, with nothing typed.
+    bool truncated = true;
+    EXPECT_EQ(model.search_results("", &truncated).size(), 2u);
+    EXPECT_FALSE(truncated);
+    model.set_country("");
+    EXPECT_TRUE(model.search_results("", &truncated).empty());
+    model.set_language("Arabic");
+    EXPECT_EQ(model.visible_count(), 2u);
+    model.set_category("Kids");
+    EXPECT_EQ(model.visible_count(), 1u);
+    EXPECT_EQ(ptv::display_name(model.channel(model.visible(0))), "MBC 3");
+    model.clear_filters();
+    EXPECT_EQ(model.visible_count(), 9u);
+    // A search finds the word that was read as much as the provider's own.
+    model.set_query("Greek");
+    EXPECT_EQ(model.visible_count(), 1u);
+    model.set_query("fr|");
+    EXPECT_EQ(model.visible_count(), 2u);
+    model.set_query("");
+    // The channel of "de: ZDF HD" sorts under Z.
+    const auto zdf = index_of(model, "g");
+    EXPECT_EQ(ptv::display_name(model.channel(zdf)), "ZDF HD");
+    EXPECT_EQ(ptv::sort_key(model.channel(zdf)), "ZZDF HD");
+    EXPECT_EQ(ptv::place_line(model.channel(zdf)), "Germany  \xC2\xB7  German");
+}
 
 TEST_F(ModelTest, SaysWhichScriptsAListIsWrittenIn)
 {
@@ -573,8 +667,11 @@ TEST_F(ModelTest, AListOfMoreThanAHundredThousandChannelsIsBrowsedLikeAnyOther)
         EXPECT_EQ(model.group_size(ptv::Group::kids), kChannels / 8);
         ASSERT_EQ(model.countries().size(), 4u);
         EXPECT_EQ(model.countries()[0].count, kChannels / 4);
-        EXPECT_EQ(model.categories().size(), ptv::Model::kFacetMax);
-        EXPECT_EQ(model.categories()[0].count, kChannels / 8);
+        // "General 0".."General 499" are one kind; Sports, News and Kids the others.
+        ASSERT_EQ(model.categories().size(), 4u);
+        EXPECT_EQ(model.categories()[0].value, "General");
+        EXPECT_EQ(model.categories()[0].count, kChannels * 5 / 8);
+        EXPECT_EQ(model.categories()[1].count, kChannels / 8);
 
         // The order of the alphabet, the letters, and where a channel is.
         EXPECT_EQ(model.channel(model.visible(0)).name, "A-Net 000000 FHD");

@@ -75,8 +75,11 @@ bool valid_credential(const char *value)
     return true;
 }
 
-// `quality` is the channel's picture size, as its index has it.
-bool matches_query(const iptv::ChannelView &channel, std::string_view query, unsigned quality)
+// `quality` is the channel's picture size, as its index has it; `at` is the
+// channel's place in the index, whose words ("France", "Greek", "Sports")
+// are searched like the provider's own.
+bool matches_query(const iptv::ChannelView &channel, const CatalogIndex &index, unsigned at,
+                   std::string_view query, unsigned quality)
 {
     if (query.empty())
         return true;
@@ -88,6 +91,11 @@ bool matches_query(const iptv::ChannelView &channel, std::string_view query, uns
     for (const std::string_view group : channel.alternate_group_titles)
         if (contains_nocase(group, query))
             return true;
+    if (at < index.places.size() &&
+        (contains_nocase(place_name(static_cast<Place>(index.places[at])), query) ||
+         contains_nocase(language_name(static_cast<Language>(index.audios[at])), query) ||
+         contains_nocase(category_name(static_cast<Category>(index.kinds[at])), query)))
+        return true;
     // "hd", "1080p" and the like find the channels of that size.
     switch (quality)
     {
@@ -104,16 +112,41 @@ bool matches_query(const iptv::ChannelView &channel, std::string_view query, uns
     }
 }
 
-bool matches_filters(const iptv::ChannelView &channel, const std::string &country,
-                     const std::string &category, const std::string &language)
+// The numbers the chosen filter values were read as; 0 for a playlist's own word.
+struct FilterIds
 {
-    if (!country.empty() && !field_has_value(channel.tvg_country, country))
+    unsigned place = 0;
+    unsigned category = 0;
+    unsigned language = 0;
+};
+
+unsigned facet_id(std::span<const Facet> facets, const std::string &value)
+{
+    if (value.empty())
+        return 0;
+    for (const Facet &facet : facets)
+        if (equals_nocase(facet.value, value))
+            return facet.id;
+    return 0;
+}
+
+// A filter read from the words matches by number; one the playlist wrote
+// matches its field. Both are tried: a word can be either.
+bool matches_filters(const iptv::ChannelView &channel, const CatalogIndex &index, unsigned at,
+                     const std::string &country, const std::string &category,
+                     const std::string &language, const FilterIds &ids)
+{
+    const bool indexed = at < index.places.size();
+    if (!country.empty() && !(indexed && ids.place != 0 && index.places[at] == ids.place) &&
+        !field_has_value(channel.tvg_country, country))
         return false;
-    if (!language.empty() && !field_has_value(channel.tvg_language, language))
+    if (!language.empty() && !(indexed && ids.language != 0 && index.audios[at] == ids.language) &&
+        !field_has_value(channel.tvg_language, language))
         return false;
     if (!category.empty())
     {
-        bool found = field_has_value(channel.group_title, category);
+        bool found = (indexed && ids.category != 0 && index.kinds[at] == ids.category) ||
+                     field_has_value(channel.group_title, category);
         for (const std::string_view alternate : channel.alternate_group_titles)
             found = found || field_has_value(alternate, category);
         if (!found)
@@ -577,7 +610,7 @@ void Model::recount_groups()
     {
         const std::uint8_t trait = index_.traits[index];
         const std::uint8_t mark = marks_[index];
-        if ((mark & 4u) != 0)
+        if ((mark & 4u) != 0 || (trait & CatalogIndex::kHeading) != 0)
             continue;
         ++shown;
         if (index < channel_history_.size())
@@ -635,6 +668,8 @@ void Model::rebuild_visible()
     }
     const bool by_word =
         !query_.empty() || !country_.empty() || !category_.empty() || !language_.empty();
+    const FilterIds ids{facet_id(countries(), country_), facet_id(categories(), category_),
+                        facet_id(languages(), language_)};
     const auto guide_time = static_cast<std::int64_t>(platform::unix_time());
 
     visible_.clear();
@@ -643,6 +678,8 @@ void Model::rebuild_visible()
     {
         if ((marks_[index] & 4u) != 0)
             continue;
+        if ((index_.traits[index] & CatalogIndex::kHeading) != 0)
+            continue; // "##### SPORTS #####" is a line between groups
         if (!provider_category_.empty())
         {
             const auto channel = catalog_[index];
@@ -664,8 +701,8 @@ void Model::rebuild_visible()
         if (by_word)
         {
             const iptv::ChannelView channel = this->channel(index);
-            if (!matches_filters(channel, country_, category_, language_) ||
-                (!matches_query(channel, query_, quality) &&
+            if (!matches_filters(channel, index_, index, country_, category_, language_, ids) ||
+                (!matches_query(channel, index_, index, query_, quality) &&
                  !guide_.matches_now(channel.id, query_, guide_time)))
                 continue;
         }
@@ -1475,8 +1512,7 @@ void Model::run_refresh()
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
         const iptv::http::RequestControl control{
-            [](void *context)
-            {
+            [](void *context) {
                 return static_cast<const Model *>(context)->stop_requested_.load(
                     std::memory_order_acquire);
             },
@@ -1805,7 +1841,11 @@ std::vector<Model::SearchResult> Model::search_results(std::string_view query,
     std::vector<SearchResult> rows;
     if (truncated)
         *truncated = false;
-    if (query.empty())
+    // A filter alone lists the channels it leaves; a title or a programme
+    // needs words to look for.
+    const bool filtered =
+        !country_.empty() || !category_.empty() || !language_.empty() || quality_ != kQualityAny;
+    if (query.empty() && !filtered)
         return rows;
     constexpr unsigned limit = 250;
     const auto source = source_id(active_source_);
@@ -1817,22 +1857,26 @@ std::vector<Model::SearchResult> Model::search_results(std::string_view query,
             *truncated = true;
     };
     unsigned count = 0;
+    const FilterIds ids{facet_id(countries(), country_), facet_id(categories(), category_),
+                        facet_id(languages(), language_)};
     for (unsigned at : index_.order)
     {
-        if (!channel_visible(at))
+        if (!channel_visible(at) || (index_.traits[at] & CatalogIndex::kHeading) != 0)
             continue;
         const auto item = channel(at);
         const unsigned quality = index_.traits[at] & CatalogIndex::kQualityMask;
         if ((quality_ != kQualityAny && quality_ != quality) ||
-            !matches_filters(item, country_, category_, language_))
+            !matches_filters(item, index_, at, country_, category_, language_, ids))
             continue;
-        if (matches_query(item, query, quality))
+        if (matches_query(item, index_, at, query, quality))
             append({SearchResult::Kind::channel, std::string(item.id), std::string(item.name),
                     std::string(item.group_title), 0, source},
                    count);
         if (count > limit)
             break;
     }
+    if (query.empty())
+        return rows;
     for (const auto *library : {&search_movies_, &search_shows_})
     {
         if (!searching_)

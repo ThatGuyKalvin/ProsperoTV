@@ -29,7 +29,7 @@ std::vector<ui::SelectOption> options_of(const char *any, std::span<const Facet>
     options.reserve(facets.size() + 1);
     options.emplace_back(any);
     for (const Facet &facet : facets)
-        options.emplace_back(facet.value,
+        options.emplace_back(facet.id != 0 ? std::string(tr(facet.value.c_str())) : facet.value,
                              group_digits(facet.count) +
                                  (facet.count == 1 ? tr(" channel") : tr(" channels")));
     return options;

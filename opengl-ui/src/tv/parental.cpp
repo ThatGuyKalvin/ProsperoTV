@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/parental.hpp"
 #include "tv/platform.hpp"
-#include "tv/category_path.hpp"
+#include "tv/catalog_facts.hpp"
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -22,26 +22,10 @@ namespace ptv
 {
 namespace
 {
-std::string lower(std::string_view text)
-{
-    std::string out(text);
-    for (auto &c : out)
-        if (c >= 'A' && c <= 'Z')
-            c += 'a' - 'A';
-    return out;
-}
+// "NEW XXX", "US / Adult HD", "KIDS/FAMILY": the words of any level.
 bool category_has(std::string_view category, bool adult)
 {
-    for (category = category_trim(category); !category.empty();
-         category = category_parent(category))
-    {
-        const auto leaf = lower(category_leaf(category));
-        if (adult ? leaf == "adult" || leaf == "adults" || leaf == "xxx" || leaf == "18+" ||
-                        leaf == "+18"
-                  : leaf == "kids" || leaf == "children" || leaf == "children's")
-            return true;
-    }
-    return false;
+    return category_words_say(category, adult);
 }
 std::string hex(const auto &bytes)
 {

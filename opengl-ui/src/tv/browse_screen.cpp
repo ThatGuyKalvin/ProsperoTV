@@ -900,10 +900,10 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
         };
         if (!model.query().empty())
             add("\"" + model.query() + "\"");
-        add(model.country());
+        add(tr(model.country().c_str()));
         add(label_text(model.provider_category()));
-        add(model.category());
-        add(model.language());
+        add(tr(model.category().c_str()));
+        add(tr(model.language().c_str()));
         if (model.quality() != kQualityAny)
             add(quality_filter_name(model.quality()));
         const float room = right - (favorites_ ? 420.0f : 980.0f);

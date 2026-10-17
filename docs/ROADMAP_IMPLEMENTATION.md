@@ -23,6 +23,11 @@ applies to browsing, favorites, search and the guide.
 Provider parent IDs and category names separated by `/`, `|` or `::` form
 hierarchies such as US → Sports → Football. A name without hierarchy metadata
 remains one category; the app does not guess a country's parent from its name.
+Beside the tree, the words of every group title and channel name are read once
+per catalog for the country, the language, the kind of channel and the marks
+on it ("AR| BEIN SPORTS HD", "GR| ΓΕΝΙΚΆ/GENERAL", "fr: TF1"): these fill the
+country, language and category filters and the place line, label a code level
+("|EN|" reads English) and leave the provider's names as they are.
 
 MAC portals take the provider's portal address and MAC code. The app performs
 the provider handshake and profile check, reads live genres and channels,

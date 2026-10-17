@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/i18n.hpp"
 #include "tv/vod_screen.hpp"
+#include "tv/catalog_facts.hpp"
 #include "tv/category_path.hpp"
 #include "tv/draw.hpp"
 #include <chrono>
 #include <algorithm>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <cstdlib>
 #include <iterator>
@@ -29,6 +31,38 @@ void VodScreen::enter()
         shared_.model.vod().select(static_cast<VodKind>(view.vod_kind), view.vod_series);
     sync();
 }
+namespace
+{
+// The genres of a title: the provider's own field, then those its category
+// names ("|FR| HORREUR/EPOUVANTE" says Horror). A category is read once.
+class GenreReader
+{
+  public:
+    std::vector<std::string> of(const VodLibrary &vod, const iptv::ChannelView &item)
+    {
+        std::vector<std::string> genres = vod_genres(vod.details(item.id).genre);
+        auto found = bits_.find(item.group_title);
+        if (found == bits_.end())
+            found = bits_
+                        .emplace(item.group_title,
+                                 parse_group(item.group_title, item.media_kind).genres)
+                        .first;
+        for (unsigned bit = 0; bit < kGenreCount; ++bit)
+        {
+            if ((found->second & (1u << bit)) == 0)
+                continue;
+            const std::string name = tr(genre_name(bit));
+            if (std::find(genres.begin(), genres.end(), name) == genres.end())
+                genres.push_back(name);
+        }
+        return genres;
+    }
+
+  private:
+    std::unordered_map<std::string_view, std::uint32_t> bits_;
+};
+} // namespace
+
 const VodScreen::Row *VodScreen::focused() const
 {
     const int focus = shared_.model.view.vod_focus;
@@ -49,6 +83,7 @@ void VodScreen::sync()
         const auto &catalog = vod.catalog();
         std::map<std::string, std::string> categories;
         std::vector<Row> items;
+        GenreReader genres_of;
         for (unsigned i = 0; i < catalog.size(); ++i)
         {
             const auto item = catalog[i];
@@ -58,7 +93,8 @@ void VodScreen::sync()
                 !category_belongs(item.group_title, view.vod_category))
                 continue;
             const auto &details = vod.details(item.id);
-            const auto genres = vod_genres(details.genre);
+            const auto genres =
+                view.vod_genre.empty() ? std::vector<std::string>() : genres_of.of(vod, item);
             if ((!view.vod_genre.empty() &&
                  std::find(genres.begin(), genres.end(), view.vod_genre) == genres.end()) ||
                 (!view.vod_year.empty() && details.year != view.vod_year))
@@ -72,7 +108,8 @@ void VodScreen::sync()
                     child = category_parent(child);
                 if (!child.empty() && child != view.vod_category)
                 {
-                    categories.emplace(std::string(child), std::string(category_leaf(child)));
+                    categories.emplace(std::string(child),
+                                       category_level_label(category_leaf(child)));
                     continue;
                 }
             }
@@ -391,7 +428,7 @@ void VodScreen::draw(ui::Canvas &canvas) const
     ui::text(draw, face, face.font->fit(readable(face, heading), 54, kWidth - 2 * kMargin), kMargin,
              224, 54, theme.text);
     const std::string location =
-        view.vod_category.empty() ? tr("All categories") : view.vod_category;
+        view.vod_category.empty() ? tr("All categories") : category_path_label(view.vod_category);
     const std::string breadcrumb =
         location + (view.vod_query.empty() ? "" : tr(" / Search: ") + view.vod_query) +
         (view.vod_genre.empty() ? "" : " / " + view.vod_genre) +
@@ -549,6 +586,7 @@ void VodScreen::handle_filters(const InputFrame &input)
     {
         std::set<std::string> facets;
         const auto &vod = shared_.model.vod();
+        GenreReader genres_of;
         for (unsigned i = 0; i < vod.catalog().size(); ++i)
         {
             if (!shared_.model.vod_allowed(i))
@@ -556,7 +594,7 @@ void VodScreen::handle_filters(const InputFrame &input)
             const auto &details = vod.details(vod.catalog()[i].id);
             if (filter_focus_ == 0)
             {
-                for (auto &genre : vod_genres(details.genre))
+                for (auto &genre : genres_of.of(vod, vod.catalog()[i]))
                     if (facets.size() < 256)
                         facets.insert(std::move(genre));
             }

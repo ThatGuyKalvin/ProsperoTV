@@ -117,6 +117,23 @@ TEST_F(ParentalTest, CorruptLinkedAndUnwritableSettingsFailClosed)
     EXPECT_FALSE(pin.unlocked());
 }
 
+TEST(ParentalWords, AdultAndKidsAreReadFromAnyLevelOfACategory)
+{
+    EXPECT_TRUE(ptv::adult_category("US / Adult"));
+    EXPECT_TRUE(ptv::adult_category("NEW XXX"));
+    EXPECT_TRUE(ptv::adult_category("ONE PLAY XXX ( NEW)"));
+    EXPECT_TRUE(ptv::adult_category("Adult Movies"));
+    EXPECT_TRUE(ptv::adult_category("|AR| +18"));
+    EXPECT_TRUE(ptv::adult_category("US / Adult / HD"));
+    EXPECT_FALSE(ptv::adult_category("Adulting 101"));
+    EXPECT_FALSE(ptv::adult_category("US / Kids / Cartoons"));
+    EXPECT_TRUE(ptv::kids_category("US / Kids / Cartoons"));
+    EXPECT_TRUE(ptv::kids_category("24/7 KIDS/FAMILY VIP"));
+    EXPECT_TRUE(ptv::kids_category("Children's"));
+    EXPECT_TRUE(ptv::kids_category("BE| KINDEREN"));
+    EXPECT_FALSE(ptv::kids_category("General"));
+}
+
 TEST_F(ParentalTest, PinAndKidsPolicyCoverListsFavoritesDirectPlayPreviewGuideResumeAndPhone)
 {
     const auto playlist = dir + "/list.m3u";

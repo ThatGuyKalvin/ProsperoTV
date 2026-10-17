@@ -4,6 +4,7 @@
 
 #include "tv/catalog_index.hpp"
 
+#include "tv/category_path.hpp"
 #include "tv/channel_text.hpp"
 
 #include <algorithm>
@@ -31,63 +32,79 @@ class Tally
         if (known != by_text_.end())
         {
             if (known->second != kNothing)
-                ++entries_[known->second].second;
+                ++entries_[known->second].count;
             return;
         }
         const std::string value = first_value(field).substr(0, 47);
         std::uint32_t entry = kNothing;
         if (!value.empty())
-        {
-            std::string folded = value;
-            for (char &byte : folded)
-                if (byte >= 'A' && byte <= 'Z')
-                    byte = static_cast<char>(byte + 32);
-            const auto found = by_value_.find(folded);
-            if (found != by_value_.end())
-            {
-                entry = found->second;
-            }
-            else
-            {
-                entry = static_cast<std::uint32_t>(entries_.size());
-                entries_.emplace_back(value, 0u);
-                by_value_.emplace(std::move(folded), entry);
-            }
-            ++entries_[entry].second;
-        }
+            entry = count(value, 0);
         if (by_text_.size() < kRemembered)
             by_text_.emplace(field.data(), entry);
+    }
+
+    // A value read from the words ("France", "Sports"), by its number.
+    void add_known(const char *value, unsigned id)
+    {
+        if (id >= by_id_.size())
+            by_id_.resize(id + 1u, kNothing);
+        if (by_id_[id] == kNothing)
+            by_id_[id] = count(value, id);
+        else
+            ++entries_[by_id_[id]].count;
     }
 
     // The most common values, at most kFacetMax of them.
     void store(std::array<Facet, CatalogIndex::kFacetMax> *facets, unsigned *count)
     {
         std::sort(entries_.begin(), entries_.end(),
-                  [](const Entry &left, const Entry &right)
+                  [](const Facet &left, const Facet &right)
                   {
-                      if (left.second != right.second)
-                          return left.second > right.second;
-                      return left.first < right.first;
+                      if (left.count != right.count)
+                          return left.count > right.count;
+                      return left.value < right.value;
                   });
         *count =
             static_cast<unsigned>(std::min<std::size_t>(entries_.size(), CatalogIndex::kFacetMax));
         for (unsigned index = 0; index < *count; ++index)
-        {
-            (*facets)[index].value = entries_[index].first;
-            (*facets)[index].count = entries_[index].second;
-        }
+            (*facets)[index] = entries_[index];
         for (unsigned index = *count; index < CatalogIndex::kFacetMax; ++index)
             (*facets)[index] = {};
     }
 
   private:
-    using Entry = std::pair<std::string, unsigned>;
     static constexpr std::uint32_t kNothing = 0xffffffffu;
     static constexpr std::size_t kRemembered = 65536;
 
-    std::vector<Entry> entries_;
+    // One more of `value`; the entry it is counted in.
+    std::uint32_t count(std::string_view value, unsigned id)
+    {
+        std::string folded(value);
+        for (char &byte : folded)
+            if (byte >= 'A' && byte <= 'Z')
+                byte = static_cast<char>(byte + 32);
+        const auto found = by_value_.find(folded);
+        std::uint32_t entry;
+        if (found != by_value_.end())
+        {
+            entry = found->second;
+            if (entries_[entry].id == 0)
+                entries_[entry].id = id;
+        }
+        else
+        {
+            entry = static_cast<std::uint32_t>(entries_.size());
+            entries_.push_back({std::string(value), 0u, id});
+            by_value_.emplace(std::move(folded), entry);
+        }
+        ++entries_[entry].count;
+        return entry;
+    }
+
+    std::vector<Facet> entries_;
     std::unordered_map<std::string, std::uint32_t> by_value_;
     std::unordered_map<const char *, std::uint32_t> by_text_;
+    std::vector<std::uint32_t> by_id_;
 };
 
 bool in_named_group(const iptv::ChannelView &channel, std::string_view term)
@@ -139,6 +156,9 @@ void CatalogIndex::build(const iptv::Catalog &catalog,
     ranks.resize(count);
     letters.resize(count);
     traits.resize(count);
+    places.assign(count, 0);
+    audios.assign(count, 0);
+    kinds.assign(count, 0);
 
     // What each channel is sorted by, back to back in one piece of memory.
     std::string keys;
@@ -148,6 +168,8 @@ void CatalogIndex::build(const iptv::Catalog &catalog,
     Tally category_tally;
     Tally language_tally;
     std::map<std::string_view, unsigned> provider_tally;
+    // A group title is read once, however many channels share it.
+    std::unordered_map<std::string_view, GroupFacts> group_facts;
     for (std::uint32_t index = 0; index < count; ++index)
     {
         iptv::ChannelView channel = catalog[index];
@@ -160,21 +182,81 @@ void CatalogIndex::build(const iptv::Catalog &catalog,
         order[index] = index;
 
         std::uint8_t trait = static_cast<std::uint8_t>(quality_of(channel)) & kQualityMask;
-        if (in_named_group(channel, "news"))
-            trait |= kNews;
-        if (in_named_group(channel, "sport"))
-            trait |= kSports;
-        if (in_named_group(channel, "kid"))
-            trait |= kKids;
-        traits[index] = trait;
-
         if (channel.media_kind != iptv::MediaKind::live)
+        {
+            traits[index] = trait;
             continue;
-        country_tally.add(channel.tvg_country);
-        category_tally.add(channel.group_title);
+        }
+
+        auto facts = group_facts.find(channel.group_title);
+        if (facts == group_facts.end())
+            facts = group_facts
+                        .emplace(channel.group_title,
+                                 parse_group(channel.group_title, channel.media_kind))
+                        .first;
+        const GroupFacts &group = facts->second;
+        const NameFacts name = parse_name(channel.name, channel.group_title);
+        // A code on the name says where a channel is when its group did not,
+        // or named only a region.
+        Place place = group.place;
+        if (name.place != Place::none &&
+            (place == Place::none ||
+             (place < Place::afghanistan && name.place >= Place::afghanistan)))
+            place = name.place;
+        const Language audio = group.audio != Language::none ? group.audio : name.audio;
+        places[index] = static_cast<std::uint16_t>(place);
+        audios[index] = static_cast<std::uint8_t>(audio);
+        kinds[index] = static_cast<std::uint8_t>(group.category);
+
+        switch (group.category)
+        {
+        case Category::news:
+            trait |= kNews;
+            break;
+        case Category::sports:
+        case Category::events:
+            trait |= kSports;
+            break;
+        case Category::kids:
+            trait |= kKids;
+            break;
+        case Category::none:
+            // Words the tables do not know: the old three substrings.
+            if (in_named_group(channel, "news"))
+                trait |= kNews;
+            if (in_named_group(channel, "sport"))
+                trait |= kSports;
+            if (in_named_group(channel, "kid"))
+                trait |= kKids;
+            break;
+        default:
+            break;
+        }
+        traits[index] = trait;
+        if (name.row == RowKind::heading)
+        {
+            traits[index] |= kHeading; // not a channel: counted nowhere
+            continue;
+        }
+
+        // The playlist's own fields first; the words when it has none.
+        if (!channel.tvg_country.empty())
+            country_tally.add(channel.tvg_country);
+        else if (place != Place::none)
+            country_tally.add_known(place_name(place), static_cast<unsigned>(place));
+        if (!channel.tvg_language.empty())
+            language_tally.add(channel.tvg_language);
+        else if (audio != Language::none && audio != Language::original)
+            language_tally.add_known(language_name(audio), static_cast<unsigned>(audio));
+        if (group.category != Category::none)
+            category_tally.add_known(category_name(group.category),
+                                     static_cast<unsigned>(group.category));
+        else if (group.coded && group.levels > 1)
+            category_tally.add(category_leaf(channel.group_title));
+        else
+            category_tally.add(channel.group_title);
         if (!channel.group_title.empty())
             ++provider_tally[channel.group_title];
-        language_tally.add(channel.tvg_language);
         for (const std::string_view category : channel.alternate_group_titles)
         {
             category_tally.add(category);
@@ -202,7 +284,7 @@ void CatalogIndex::build(const iptv::Catalog &catalog,
     category_tally.store(&categories, &category_count);
     language_tally.store(&languages, &language_count);
     for (const auto &[name, size] : provider_tally)
-        provider_categories.push_back({std::string(name), size});
+        provider_categories.push_back({std::string(name), size, 0u});
 }
 
 } // namespace ptv
