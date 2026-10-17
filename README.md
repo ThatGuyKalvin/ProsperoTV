@@ -99,7 +99,9 @@
 - Browse Live TV by the provider's own categories and subcategories, shown as
   the row of filters above the channels, beside Favorites and Recent.
 - Search by channel name, and filter by country, language, category, and
-  advertised quality, with the native PS5 keyboard.
+  advertised quality, with the native PS5 keyboard. Country, language and
+  category are also read from the provider's own group titles and channel
+  names ("FR| TF1 HD", "|EN| 4K MOVIES") when the playlist gives none.
 - See channel logos on the tiles and on the large television.
 - Preview the focused live channel, with sound, on the large television after
   a moment on it.

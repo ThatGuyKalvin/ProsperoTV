@@ -4,6 +4,10 @@
 
 #include "tv/channel_text.hpp"
 
+#include "tv/catalog_facts.hpp"
+#include "tv/category_path.hpp"
+#include "tv/i18n.hpp"
+
 #include <iterator>
 #include <algorithm>
 #include <array>
@@ -46,7 +50,8 @@ constexpr std::array<unsigned char, 256> kLower = []
 {
     std::array<unsigned char, 256> table{};
     for (unsigned value = 0; value < 256; ++value)
-        table[value] = static_cast<unsigned char>(value >= 'A' && value <= 'Z' ? value + 32 : value);
+        table[value] =
+            static_cast<unsigned char>(value >= 'A' && value <= 'Z' ? value + 32 : value);
     return table;
 }();
 
@@ -79,7 +84,8 @@ class Mentions
             text_[size_++] = '\n';
         const std::size_t count = std::min(text.size(), text_.size() - size_);
         for (std::size_t index = 0; index < count; ++index)
-            text_[size_ + index] = static_cast<char>(kLower[static_cast<unsigned char>(text[index])]);
+            text_[size_ + index] =
+                static_cast<char>(kLower[static_cast<unsigned char>(text[index])]);
         size_ += count;
     }
 
@@ -167,9 +173,9 @@ std::string plain_text(std::string_view text)
         else if (whole)
         {
             const auto *end = std::end(kDecorative);
-            const auto *at = std::lower_bound(
-                std::begin(kDecorative), end, code,
-                [](const Decorative &entry, std::uint32_t value) { return entry.code < value; });
+            const auto *at = std::lower_bound(std::begin(kDecorative), end, code,
+                                              [](const Decorative &entry, std::uint32_t value)
+                                              { return entry.code < value; });
             if (at != end && at->code == code)
                 found = at->plain;
         }
@@ -203,7 +209,8 @@ std::string label_text(std::string_view text)
         }
         // Arrows, shapes, signs, dingbats, variation selectors and pictures:
         // decoration around the words, and nothing the faces can write.
-        const bool symbol = (code >= 0x2190 && code <= 0x2BFF) || (code >= 0xFE00 && code <= 0xFE0F) ||
+        const bool symbol = (code >= 0x2190 && code <= 0x2BFF) ||
+                            (code >= 0xFE00 && code <= 0xFE0F) ||
                             (code >= 0x1F000 && code <= 0x1FAFF);
         if (symbol || code == ' ')
             space = !label.empty();
@@ -333,6 +340,11 @@ const char *codec_label(const iptv::ChannelView &channel)
 std::string display_name(const iptv::ChannelView &channel, std::vector<std::string> *notes)
 {
     std::string_view rest = trimmed(channel.name);
+    // "FR| TFX HD", "fr: TVR", "[Kayo] Fox Footy": the provider's code goes;
+    // the place line says what it said.
+    if (const unsigned prefix = name_prefix_bytes(channel.name, channel.group_title);
+        prefix != 0 && prefix < channel.name.size())
+        rest = trimmed(channel.name.substr(prefix));
     // Notes sit at the end, each in its own brackets: peel them off from the right.
     for (;;)
     {
@@ -411,16 +423,40 @@ std::string monogram(const iptv::ChannelView &channel)
 
 std::string category_of(const iptv::ChannelView &channel)
 {
+    const GroupFacts facts = parse_group(channel.group_title, channel.media_kind);
+    if (facts.category != Category::none)
+        return tr(category_name(facts.category));
+    // Words the tables do not know: the provider's own, without its code.
+    if (facts.coded && facts.levels > 1)
+        return label_text(category_leaf(channel.group_title));
     const std::string first = first_value(channel.group_title);
-    return first.empty() ? "Uncategorized" : first;
+    return first.empty() ? tr("Uncategorized") : first;
 }
 
 std::string place_line(const iptv::ChannelView &channel)
 {
     std::string line = first_value(channel.tvg_country);
+    std::string language = first_value(channel.tvg_language);
+    if (line.empty() || language.empty())
+    {
+        // The playlist said nothing: the words of the group and the name.
+        const GroupFacts group = parse_group(channel.group_title, channel.media_kind);
+        const NameFacts name = parse_name(channel.name, channel.group_title);
+        Place place = group.place;
+        if (name.place != Place::none &&
+            (place == Place::none ||
+             (place < Place::afghanistan && name.place >= Place::afghanistan)))
+            place = name.place;
+        const Language audio = group.audio != Language::none ? group.audio : name.audio;
+        if (line.empty() && place != Place::none)
+            line = tr(place_name(place));
+        if (language.empty() && audio != Language::none && audio != Language::original)
+            language = tr(language_name(audio));
+        if (language.empty() && group.subtitles != Language::none)
+            language = tr(language_name(group.subtitles)) + std::string(tr(" subtitles"));
+    }
     if (line.empty())
-        line = "World";
-    const std::string language = first_value(channel.tvg_language);
+        line = tr("World");
     if (!language.empty())
         line += "  \xC2\xB7  " + language;
     return line;

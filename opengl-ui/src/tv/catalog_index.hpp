@@ -11,6 +11,7 @@
 #pragma once
 
 #include "iptv_catalog.h"
+#include "tv/catalog_facts.hpp"
 
 #include <array>
 #include <cstddef>
@@ -27,17 +28,21 @@ struct Facet
 {
     std::string value;
     unsigned count = 0;
+    // What the value was read as: a Place, a Language or a Category, as a
+    // number; 0 for a value the playlist wrote itself (tvg-country "US").
+    unsigned id = 0;
 };
 
 struct CatalogIndex
 {
-    static constexpr unsigned kFacetMax = 24;
+    static constexpr unsigned kFacetMax = 64;
 
     // A channel in one byte: its picture size (a Quality) and the lists it is in.
     static constexpr std::uint8_t kQualityMask = 0x07;
     static constexpr std::uint8_t kNews = 0x08;
     static constexpr std::uint8_t kSports = 0x10;
     static constexpr std::uint8_t kKids = 0x20;
+    static constexpr std::uint8_t kHeading = 0x40; // "##### SPORTS #####": not a channel
 
     void build(const iptv::Catalog &catalog,
                const std::map<std::string, std::string, std::less<>> &names = {});
@@ -51,6 +56,11 @@ struct CatalogIndex
     std::vector<std::uint32_t> ranks;  // by catalog index: where it is in `order`
     std::vector<std::uint8_t> letters; // by catalog index: 0 for '#', 1 to 26
     std::vector<std::uint8_t> traits;  // by catalog index
+    // What the group title and the name said, by catalog index (live channels;
+    // the rest are left at none).
+    std::vector<std::uint16_t> places; // a Place
+    std::vector<std::uint8_t> audios;  // a Language
+    std::vector<std::uint8_t> kinds;   // a Category
     // The most common values of each kind, at most kFacetMax of them.
     std::array<Facet, kFacetMax> countries;
     std::array<Facet, kFacetMax> categories;
