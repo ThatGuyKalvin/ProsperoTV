@@ -23,6 +23,11 @@ namespace
 
 constexpr Rect kSettingsPanel{kMargin, 250.0f, 1010.0f, 640.0f};
 constexpr Rect kGlancePanel{1144.0f, 250.0f, kWidth - kMargin - 1144.0f, 640.0f};
+// A film or show count, or a dash while the source has none saved.
+std::string title_count(const std::optional<unsigned> &count)
+{
+    return count ? group_digits(*count) : std::string("—");
+}
 // The opening: the set stands in the middle; its moments, in seconds.
 constexpr Rect kIntroSet{(kWidth - 800.0f) * 0.5f, 250.0f, 800.0f, 520.0f};
 constexpr float kIntroArrive = 0.55f; // the set comes out of the dark
@@ -79,6 +84,8 @@ enum FormRow : int
     kRowLanguage,
     kRowAudioOutput,
     kRowStatsLine,
+    kRowMovies,
+    kRowShows,
 };
 
 constexpr unsigned kAllowances[] = {0, 15, 30, 60, 90, 120, 180};
@@ -222,6 +229,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_action(kRowForgetPhones, tr("Forget paired phones"));
     form_.add_header(tr("CHANNEL LIST"));
     form_.add_value(kRowChannels, tr("Channels"), "");
+    form_.add_value(kRowMovies, tr("Movies"), "");
+    form_.add_value(kRowShows, tr("TV shows"), "");
     form_.add_action(kRowUpdate, tr("Download it again now"));
     form_.add_toggle(kRowHideFailed, tr("Hide channels that failed"), settings.hide_failed);
     form_.add_toggle(kRowResume, tr("Start on the last channel"), settings.resume_last);
@@ -1109,8 +1118,10 @@ void App::step(const InputFrame &physical, float dt, ui::Feedback &feedback)
     form_.set_disabled(kRowKids, !parental.enabled());
     form_.set_disabled(kRowParentUnlock, !parental.enabled() || parental.unlocked());
     form_.set_disabled(kRowParentLock, !parental.enabled() || !parental.unlocked());
-    form_.set_value_text(kRowChannels, model.has_catalog() ? group_digits(model.channel_count())
+    form_.set_value_text(kRowChannels, model.has_catalog() ? group_digits(model.counts().channels)
                                                            : tr("None yet"));
+    form_.set_value_text(kRowMovies, title_count(model.counts().movies));
+    form_.set_value_text(kRowShows, title_count(model.counts().shows));
     follow_channel(dt);
 
     tabs_.update(dt);
@@ -1180,8 +1191,14 @@ void App::draw_status(ui::Canvas &canvas) const
         dot = tone::bad;
         break;
     case Level::ready:
-        text = group_digits(model.channel_count()) + tr(" channels");
+    {
+        // Everything the source holds: its channels, films and shows together.
+        const auto &counts = model.counts();
+        text =
+            group_digits(counts.channels + counts.movies.value_or(0) + counts.shows.value_or(0)) +
+            tr(" titles");
         break;
+    }
     }
     const bool busy = model.refreshing();
     const bool reduced = shared_.settings.reduced_motion;
@@ -1264,7 +1281,9 @@ void App::draw_settings(ui::Canvas &canvas) const
     };
     fact(tr("Source"), source_label(model.active_source()));
     fact(tr("Channels"),
-         model.has_catalog() ? group_digits(model.channel_count()) : tr("None yet"));
+         model.has_catalog() ? group_digits(model.counts().channels) : tr("None yet"));
+    fact(tr("Movies"), title_count(model.counts().movies));
+    fact(tr("TV shows"), title_count(model.counts().shows));
     fact(tr("Favorites"), group_digits(model.group_size(Group::favorites)));
     fact(tr("Recent channels"), group_digits(model.group_size(Group::recent)));
     ui::paragraph(list, fonts.regular,
