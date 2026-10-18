@@ -166,7 +166,10 @@ peak remains below 94 MiB, with no allocation failures observed.
 
 This completes the HDR rendering implementation. Physical HDMI luminance/gamut
 measurements and custom mastering metadata forwarding remain unverified; the
-application retains that metadata in its per-picture state and receipts.
+application retains that metadata in its per-picture state and receipts. The
+colour order of HDR10 and HLG output is checked on a console and an HDR
+television; the native readback comparison must take red from bits 20-29 of
+an HDR word.
 
 ## Live pause and rewind foundations
 
@@ -179,7 +182,7 @@ network writes from replacing data still being parsed. Expired positions are
 reported explicitly.
 
 History storage now uses its own bounded anonymous mapping instead of allocating
-512 MiB from the application's 512 MiB heap. Its lifetime remains scoped to the
+512 MiB from the application's own heap (now 1 GiB). Its lifetime remains scoped to the
 history owner, and allocation failure leaves it unavailable. All six existing
 history tests pass under ASan/UBSan with the mapped storage, and the native
 application build passes. Foreground integration and hardware acceptance remain

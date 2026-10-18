@@ -126,6 +126,11 @@
 - See the provider's newest movies and shows first in every category, by the
   date an Xtream provider added them; titles it gives no date follow by title,
   so an M3U playlist is listed by title.
+- Open Movies or TV shows from the saved copy, read in the background while
+  the status line says so; the On demand menu counts both without loading
+  either, and switching between them keeps the list left at hand.
+- Carry on with a show from **Continue**, at the top of its episode list: the
+  episode watched last, from the time it was left at.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
 
 ### While watching
@@ -541,6 +546,11 @@ warning.
 - A source may hold up to 250,000 channels; a larger one loads its first
   250,000 and says so. A list of that size takes about 75 MiB of memory and
   a minute or more to download from a slow provider.
+- An On Demand list (movies, or shows) may hold up to 250,000 titles; a
+  longer one keeps its first 250,000 and says so. A list of 200,000 films
+  takes about 300 MiB of memory while it is open and a minute and a half
+  to download; an entry the provider sends malformed is left out rather
+  than failing the list.
 - Catalog metadata describes a channel but cannot guarantee that its current
   stream is online, correctly labeled, or compatible with the PS5 decoder.
 

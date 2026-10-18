@@ -6,6 +6,7 @@
 
 #include "iptv_catalog.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -109,6 +110,10 @@ class Library
                       const iptv::ChannelView &channel, std::string_view series,
                       std::int64_t updated);
     std::vector<ResumeItem> unfinished_vod(std::int64_t source, std::uint64_t fingerprint) const;
+    // The episode of that show started last, whether or not it was finished;
+    // its position is 0 when it was watched to the end.
+    std::optional<ResumeItem> last_series_episode(std::int64_t source, std::uint64_t fingerprint,
+                                                  std::string_view series) const;
     bool save_playback_progress(std::string_view channel, std::uint64_t position_us,
                                 std::uint64_t duration_us);
     std::unordered_set<std::string> hidden_categories(std::uint64_t source) const;

@@ -318,6 +318,15 @@ class Model
     bool play_home(std::string_view id, bool on_demand);
     bool cancel_home_play();
     bool play_vod(unsigned index);
+    struct SeriesResume
+    {
+        unsigned index = 0; // into vod().catalog()
+        std::uint64_t position_us = 0;
+    };
+    // Where to carry on with the show whose episodes are loaded: the episode
+    // watched last, at the position it was left at.
+    std::optional<SeriesResume> series_resume() const;
+    bool play_series_resume();
     bool save_vod_progress(std::string_view id, std::uint64_t position_us,
                            std::uint64_t duration_us);
     bool finish_vod(const PlayRequest &request, std::uint64_t position_us,
@@ -760,8 +769,9 @@ class Model
     ResumeItem home_playback_;
     std::int64_t home_source_ = 0;
     std::uint64_t home_fingerprint_ = 0;
-    bool home_waiting_ = false;
+    bool home_waiting_ = false, home_notified_ = false;
     std::uint64_t home_deadline_ = 0;
+    void notify_home_download();
     void clear_home_playback();
     void poll_home_playback();
     bool next_home_episode(const PlayRequest &request);
