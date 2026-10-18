@@ -1302,6 +1302,29 @@ void App::draw_about(ui::Canvas &canvas) const
     const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
+    // Like words, but the lines level with a block on the right stop short of it.
+    const auto beside = [&](const char *value, float clear_x, float clear_bottom, float size)
+    {
+        const float step = size + 9.0f;
+        const gfx::Font &font = *fonts.regular.font;
+        std::vector<std::string> lines = font.wrap(value, size, clear_x - x);
+        std::size_t level = 0;
+        while (level < lines.size() &&
+               y + step * static_cast<float>(level) - size * 0.8f < clear_bottom)
+            ++level;
+        std::string rest;
+        for (std::size_t i = level; i < lines.size(); ++i)
+            rest += (rest.empty() ? "" : " ") + lines[i];
+        lines.resize(level);
+        if (!rest.empty())
+            for (std::string &line : font.wrap(rest, size, width))
+                lines.push_back(std::move(line));
+        for (const std::string &line : lines)
+        {
+            ui::text(list, fonts.regular, line, x, y, size, theme.text);
+            y += step;
+        }
+    };
     const auto rule = [&]()
     {
         list.rounded_rect({x, y - 6.0f, width, 1.0f}, 0.0f, rule_color);
@@ -1316,15 +1339,21 @@ void App::draw_about(ui::Canvas &canvas) const
     y = kCreditsPanel.y + 56.0f;
     ui::text(list, fonts.semibold, tr("PROJECT CREDITS"), x, y, 16.0f, tone::accent,
              gfx::Align::left, 3.0f);
-    draw_mark(list, x + 34.0f, y + 74.0f, 68.0f);
-    paint.heading("ProsperoTV", x + 88.0f, y + 74.0f, 40.0f);
-    ui::text(list, fonts.mono, tr("Version ") + version_, x + 90.0f, y + 108.0f, 20.0f,
-             theme.text_muted);
-    y += 164.0f;
-    words(
-        tr("Live television for PS5 homebrew, brought to you by BlackBearReloaded. Unofficial, and "
-           "free software under the GNU General Public License, version 3 or later."),
-        theme.text, 3, 23.0f);
+    // The mark, name and version sit top right, level with the kicker; the
+    // paragraph starts beside them and widens once past.
+    const float right = x + width;
+    const float name_left = right - paint.heading_width("ProsperoTV", 40.0f);
+    draw_mark(list, name_left - 54.0f, y + 20.0f, 68.0f);
+    paint.heading("ProsperoTV", right, y + 20.0f, 40.0f, gfx::Align::right);
+    ui::text(list, fonts.mono, tr("Version ") + version_, right, y + 54.0f, 20.0f, theme.text_muted,
+             gfx::Align::right);
+    const float clear_x = name_left - 116.0f;
+    const float clear_bottom = y + 62.0f;
+    y += 36.0f;
+    beside(tr("Live television for PS5 homebrew, brought to you by BlackBearReloaded and carried "
+              "on by ThatGuyKalvin. Unofficial, and free software under the GNU General Public "
+              "License, version 3 or later."),
+           clear_x, clear_bottom, 23.0f);
     rule();
     kicker(tr("CHANNEL LIST"));
     words(
@@ -1335,10 +1364,10 @@ void App::draw_about(ui::Canvas &canvas) const
     y += 31.0f;
     rule();
     kicker(tr("THANKS"));
-    words(
-        tr("Thanks to JMUtechnologies for testing and feedback, to the whole PS5 homebrew "
-           "community, and to every developer whose tools and libraries make ProsperoTV possible."),
-        theme.text, 3);
+    words(tr("Thanks to JMUtechnologies for testing and feedback, as well as Bastian-R-dotcom, to "
+             "the whole PS5 homebrew community, and to every developer whose tools and libraries "
+             "make ProsperoTV possible."),
+          theme.text, 3);
     ui::text(list, fonts.regular, tr("Menu sound effects made with ElevenLabs."), x,
              kCreditsPanel.y + kCreditsPanel.h - 36.0f, 19.0f, theme.text_muted);
     list.pop_opacity();

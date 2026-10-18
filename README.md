@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/blackbearreloaded/ProsperoTV/actions/workflows/tooling.yml"><img src="https://github.com/blackbearreloaded/ProsperoTV/actions/workflows/tooling.yml/badge.svg" alt="Build"></a>
-  <a href="https://github.com/blackbearreloaded/ProsperoTV/releases/latest"><img src="https://img.shields.io/github/v/release/blackbearreloaded/ProsperoTV?display_name=tag" alt="Latest release"></a>
+  <a href="https://github.com/ThatGuyKalvin/ProsperoTV/actions/workflows/tooling.yml"><img src="https://github.com/ThatGuyKalvin/ProsperoTV/actions/workflows/tooling.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/ThatGuyKalvin/ProsperoTV/releases/latest"><img src="https://img.shields.io/github/v/release/ThatGuyKalvin/ProsperoTV?display_name=tag" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg" alt="GPL-3.0-or-later"></a>
 </p>
 
@@ -63,7 +63,7 @@
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current version | `01.000.070` |
+| Current version | `01.000.080` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/data/prosperotv`; the title's own `/download0` when filesystem access is not available |
@@ -393,7 +393,7 @@ GitHub Releases provide `PPSA99003.zip`, which contains the complete
 [`opengl-ui/README.md`](opengl-ui/README.md) for how that build is put
 together. A release ZIP built by GitHub Actions can
 be checked with the GitHub CLI:
-`gh attestation verify PPSA99003.zip -R blackbearreloaded/ProsperoTV`
+`gh attestation verify PPSA99003.zip -R ThatGuyKalvin/ProsperoTV`
 (releases built from now on, not earlier ones).
 
 The repository root still builds the interface of 01.000.015 and earlier
@@ -567,7 +567,7 @@ scheduled or promised; issues asking for one, or for something else, are welcome
 
 Thank you to the people who test ProsperoTV on their own consoles and report what they find:
 
-- **Bastian-R-dotcom** ([GitHub](https://github.com/Bastian-R-dotcom)), for the reports and requests behind Movies and TV shows, the Xtream and M3U fixes, the handling of badly formatted media, the 4K colour report and newest-first On Demand.
+- **Bastian-R-dotcom** ([GitHub](https://github.com/Bastian-R-dotcom)), for the reports and requests behind Movies and TV shows, the Xtream and M3U fixes, the handling of badly formatted media, the 4K colour report, the film details report and newest-first On Demand.
 - **Cold** ([GitHub](https://github.com/JMUtechnologies)), for helping with testing, and for the channel-by-channel sound measurements that found 5.1 sound playing too quietly.
 - **Lighting999**, for the Jordan TV report that led to live playlists of any length.
 - **laurensramandt** ([GitHub](https://github.com/laurensramandt)), for asking for custom user agents.
@@ -577,7 +577,7 @@ Thank you to the people who test ProsperoTV on their own consoles and report wha
 
 And to the people who contribute code:
 
-- **Kalvin** ([GitHub](https://github.com/ThatGuyKalvin)), for the playback menu, channel list and controls drawn at the screen's resolution, DTS sound, lip sync timed by when each picture reaches the screen, the sound in the statistics line, pictures 0.4 s sooner at every start and seek, newest-first On Demand, PlayStation button shapes in every hint, and keeping whole lists when a provider sends oversized data.
+- **ThatGuyKalvin** ([GitHub](https://github.com/ThatGuyKalvin)), for the playback menu, channel list and controls drawn at the screen's resolution, DTS sound, lip sync timed by when each picture reaches the screen, the sound in the statistics line, pictures 0.4 s sooner at every start and seek, newest-first On Demand, PlayStation button shapes in every hint, keeping whole lists when a provider sends oversized data, seeking within the open video, the HDR colour fix, the Stats line switch, the Continue row of a show, long on-demand lists and the quicker On Demand menu.
 - **Cold** ([GitHub](https://github.com/JMUtechnologies)), for **Normalize channel volume**, which brings quiet and loud channels to a similar level.
 
 <!-- bbr-footer:start -->
