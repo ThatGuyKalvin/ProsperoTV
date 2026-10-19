@@ -190,7 +190,7 @@ different.
    Live TV.
 2. On a first launch, keep the console online and leave the app open while it
    downloads and caches the iptv-org catalog. Later launches show the cached
-   channels immediately. If a newer version is listed on homebrew.page, an
+   channels immediately. If a newer version is listed on prosperostore.net, an
    update dialog opens over the menu; **Later** leaves everything as it is.
 3. Open a channel with Cross. The tuning screen stays until the channel's
    first picture; closing playback returns to the same screen and channel. A

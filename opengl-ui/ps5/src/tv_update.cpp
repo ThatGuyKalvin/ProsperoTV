@@ -4,7 +4,7 @@
 //
 // Both are the PS5 Native App Boilerplate's self-update kit (update_kit/, see
 // its README.md). The check fetches the catalog's signed manifest and the
-// app's own entry from homebrew.page, verifies the Ed25519 signature and the
+// app's own entry from prosperostore.net, verifies the Ed25519 signature and the
 // hashes, and compares the listed content version with this build's. The
 // update downloads the release ZIP from GitHub over HTTPS and streams it to
 // the helper (self-updater.elf in the app's folder), which the app sends to

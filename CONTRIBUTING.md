@@ -20,8 +20,9 @@ Before opening a change:
    (`NN.NNN.NNN`, without a `v` prefix).
 
 Every comment-capable code, script, workflow, tooling configuration, and
-manifest must retain the project copyright and
-`GPL-3.0-or-later` SPDX header. JSON and binary formats cannot carry comments;
+manifest must carry a project copyright line, naming BlackBearReloaded or
+ThatGuyKalvin, and the `GPL-3.0-or-later` SPDX header. Keep the copyright line a
+file was created with. JSON and binary formats cannot carry comments;
 their licensing is covered by `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 Changes to `tooling/native/` must include a deterministic host check and a

@@ -54,7 +54,7 @@ bool fetch_image(const char *url, std::vector<std::uint8_t> *bytes,
                  const iptv::http::RequestControl *control);
 
 // ---- updates ----
-// Once per launch the machine asks homebrew.page whether a newer ProsperoTV is
+// Once per launch the machine asks prosperostore.net whether a newer ProsperoTV is
 // listed (the console: ps5/src/tv_update.cpp), and can replace the app with
 // it: the release is downloaded and unpacked beside the app, and its files
 // take the place of the old ones once the app has closed. Nothing is changed

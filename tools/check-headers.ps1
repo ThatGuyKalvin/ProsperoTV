@@ -28,9 +28,10 @@ $files += @(
 $files = @($files | Sort-Object -Unique)
 $markers = @(
     "ps5-native-app-boilerplate",
-    "Copyright (C) 2026 BlackBearReloaded",
     "SPDX-License-Identifier: GPL-3.0-or-later"
 )
+# Either copyright holder; a file keeps the line it was created with.
+$copyright = "Copyright \(C\) 2026 (BlackBearReloaded|ThatGuyKalvin)"
 $missing = @()
 
 foreach ($file in $files) {
@@ -45,6 +46,9 @@ foreach ($file in $files) {
         if (-not $header.Contains($marker)) {
             $missing += "$file (missing '$marker')"
         }
+    }
+    if ($header -notmatch $copyright) {
+        $missing += "$file (missing copyright line)"
     }
 }
 

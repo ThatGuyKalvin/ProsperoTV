@@ -6,7 +6,7 @@ nothing. What the app already does is listed under
 [Features](README.md#features).
 
 To ask for something that is not here, or to say which of these matters to
-you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
+you, [open an issue](https://github.com/ThatGuyKalvin/ProsperoTV/issues).
 
 ## From recent reports
 

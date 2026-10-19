@@ -1,7 +1,7 @@
 # Update check and self-update
 
 These files are the PS5 Native App Boilerplate's (`examples/update-check` and
-`examples/self-update`, boilerplate commit 2966cac), copied unchanged, as
+`examples/self-update`, boilerplate commit 2966cac), copied with the catalog's address changed to prosperostore.net, as
 ProsperoEden uses them:
 
 | File | What it is |
@@ -31,7 +31,7 @@ miniz 3.0.2 (`ps5/third_party/miniz`, MIT).
 How an update goes:
 
 1. Once per launch, on a thread of its own, the app fetches the catalog's
-   signed manifest and its own entry from homebrew.page, verifies the
+   signed manifest and its own entry from prosperostore.net, verifies the
    signature and the hashes, and compares the listed content version with
    `sce_sys/param.json`.
 2. A newer release is offered. Nothing happens unless the viewer says so.

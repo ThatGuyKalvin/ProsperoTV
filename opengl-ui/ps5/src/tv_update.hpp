@@ -7,7 +7,7 @@
 namespace tv
 {
 
-// Asks homebrew.page whether a newer ProsperoTV is listed, on a thread of its
+// Asks prosperostore.net whether a newer ProsperoTV is listed, on a thread of its
 // own; only the first call of a launch does anything. The interface hears the
 // answer through ptv::platform::update_take().
 void start_update_check();

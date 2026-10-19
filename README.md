@@ -38,7 +38,7 @@
 - Keep the catalog, favorites, recent channels, and source state fast and
   persistent under `/data/prosperotv`, where an update never touches them.
 - Update from inside the app: a newer version listed on
-  [homebrew.page](https://homebrew.page) is offered at launch with its release
+  [prosperostore.net](https://prosperostore.net) is offered at launch with its release
   notes, downloaded, and installed in place.
 - Handle live HLS buffering, stale segments, alternate URLs, and failed feeds
   without destabilizing the next playback session.
@@ -419,7 +419,7 @@ updated by hand.
 
 ### Updating ProsperoTV
 
-From 01.000.020 on, ProsperoTV checks [homebrew.page](https://homebrew.page)
+From 01.000.020 on, ProsperoTV checks [prosperostore.net](https://prosperostore.net)
 once per launch. When a newer version is listed it offers **Update now**,
 **What's new**, and **Later**. The update downloads the release, closes the
 app, and replaces its files; sources, favorites, recent channels, and settings
@@ -591,7 +591,7 @@ Third-party components, authors and licenses are listed in
 
 ## License
 
-Copyright © 2026 BlackBearReloaded. Licensed under GPL-3.0-or-later; see [LICENSE](LICENSE). Third-party components keep their own licenses. Binary releases are built from the tagged source in this repository.
+Copyright © 2026 BlackBearReloaded and contributors. Licensed under GPL-3.0-or-later; see [LICENSE](LICENSE). The repository's move to ThatGuyKalvin changes no copyright or licence notice. Third-party components keep their own licenses. Binary releases are built from the tagged source in this repository.
 
 ## Disclaimer
 

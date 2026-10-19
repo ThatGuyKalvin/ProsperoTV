@@ -5,7 +5,7 @@ ProsperoTV's interface since 01.000.020, built on the
 frosted panels over a red sky, a hero for the channel in focus, a scrolling
 grid with the alphabet beside it, a search drawer, a tuning screen that runs
 until a channel's first picture, and an update that installs itself when a
-newer version is listed on homebrew.page. It is drawn with OpenGL (ps5-opengl
+newer version is listed on prosperostore.net. It is drawn with OpenGL (ps5-opengl
 SDK) instead of the earlier versions' SDL and RmlUi; the catalog, the stores and
 the player are the same sources as before, used from the folder above.
 It asks for filesystem access the way ProsperoEden does, keeps its files in
@@ -155,7 +155,7 @@ audio decoders, the keyboard) are loaded before access is asked for.
 
 ## Updates
 
-Once per launch the app asks homebrew.page whether a newer ProsperoTV is
+Once per launch the app asks prosperostore.net whether a newer ProsperoTV is
 listed (`ps5/src/update_kit/README.md`). A newer release opens a dialog over
 the menu: **Update now** downloads the release, shows how far it is and how
 long it will take, unpacks it beside the app, and closes the app so the new
