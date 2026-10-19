@@ -48,6 +48,9 @@ int Model::remote_sources(std::string_view input, std::string &output)
         output = "[";
         for (const auto &source : sources_)
         {
+            // The first slot is no source at all.
+            if (source.kind == 0)
+                continue;
             if (output.size() > 1)
                 output += ',';
             output +=
@@ -107,7 +110,7 @@ int Model::remote_sources(std::string_view input, std::string &output)
     const auto &operation = fields["operation"];
     if (operation == "select")
     {
-        if (!previous || (previous->kind != 0 && previous->url.empty()))
+        if (!previous || previous->kind == 0 || previous->url.empty())
             return 400;
         iptv_ime_cancel();
         use_saved_source(id);

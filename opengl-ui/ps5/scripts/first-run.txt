@@ -1,6 +1,7 @@
-# First start on a console with nothing saved: download the channel list, use
-# the letters and a held R2, look at every tab, search by text, play three
-# channels (one of them 4K) and come back from each, quit.
+# First start on a console with only a playlist added (the app has no list of
+# its own): download the channel list, use the letters and a held R2, look at
+# every tab, search by text, play three channels (one of them 4K) and come back
+# from each, quit.
 wait 2
 shot 01-start
 status

@@ -21,6 +21,7 @@ namespace
 class VodTest : public ::testing::Test
 {
   protected:
+    static constexpr std::int64_t kServer = 5;
     void SetUp() override
     {
         host::reset();
@@ -54,6 +55,16 @@ class VodTest : public ::testing::Test
                                 {},
                                 ptv::RefreshSchedule::manual};
         ASSERT_TRUE(library.save_source(&source));
+        // A second source with nothing on demand, to switch to.
+        ptv::SavedSource server{kServer,
+                                5,
+                                "Test server",
+                                "http://tvheadend.invalid:9981",
+                                {},
+                                {},
+                                {},
+                                ptv::RefreshSchedule::manual};
+        ASSERT_TRUE(library.save_source(&server));
         ASSERT_TRUE(library.select_source(3));
         auto catalog =
             iptv::ParseExtendedM3u("#EXTM3U\n#EXTINF:-1,Live\nhttps://stream.invalid/live.ts\n",
@@ -290,7 +301,7 @@ TEST_F(VodTest, MissingHomeSeriesFetchCanCancelAndFallsBackToSavedEpisode)
     EXPECT_FALSE(model.take_play_request(&request));
     ASSERT_TRUE(model.play_home(id, true));
     model.poll();
-    model.use_saved_source(1);
+    model.use_saved_source(kServer);
     EXPECT_FALSE(model.take_play_request(&request));
     model.close();
     model.use_saved_source(3);
@@ -766,7 +777,7 @@ TEST_F(VodTest, OverviewCountsTitlesAndDisablesOnlyConfirmedEmptyLists)
     ASSERT_EQ(model.view.vod_kind, -1);
     settle_counts(model);
     EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 0u);
-    model.use_saved_source(1);
+    model.use_saved_source(kServer);
     screen.update();
     EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 0u);
     EXPECT_EQ(model.vod_count(ptv::VodKind::series), 0u);
@@ -1196,7 +1207,7 @@ TEST_F(VodTest, EmptyListsAreValidAndCancellationStopsTheWorker)
     model.poll();
     ASSERT_TRUE(model.vod().busy());
     const auto began = std::chrono::steady_clock::now();
-    model.use_saved_source(1);
+    model.use_saved_source(kServer);
     EXPECT_LT(std::chrono::steady_clock::now() - began, std::chrono::seconds(2));
     EXPECT_FALSE(model.vod().available());
     EXPECT_FALSE(model.vod().busy());

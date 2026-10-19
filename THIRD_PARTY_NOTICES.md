@@ -17,8 +17,6 @@ ProsperoTV builds on and acknowledges:
 - [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
   [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk), and
   [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo).
-- [iptv-org/iptv](https://github.com/iptv-org/iptv) for the public channel
-  catalog and metadata.
 - [ProsperoRadio](https://github.com/blackbearreloaded/ProsperoRadio) as the
   primary native application and user-experience reference.
 - [IPTVnator](https://github.com/4gray/iptvnator) and

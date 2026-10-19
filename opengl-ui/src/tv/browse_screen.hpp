@@ -26,6 +26,7 @@ class BrowseScreen
         selected, // a channel was chosen for multiview; no foreground playback
         search,   // open the search sheet
         go_live,  // the favorites list is empty: go and find some
+        sources,  // there is no source yet: go and add one
     };
 
     explicit BrowseScreen(Shared &shared);

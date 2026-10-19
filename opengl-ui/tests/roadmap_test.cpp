@@ -36,6 +36,7 @@ class RoadmapTest : public ::testing::Test
                  << "\nhttps://example.invalid/" << i << ".m3u8\n";
         file.close();
         host::set_network(true, playlist);
+        host::add_playlist_source(dir);
     }
     void TearDown() override
     {
@@ -456,8 +457,8 @@ TEST_F(RoadmapTest, StartupReturnsToTheSourceOfTheLastWatchedChannel)
         ASSERT_TRUE(model.play(3));
         ptv::PlayRequest request;
         ASSERT_TRUE(model.take_play_request(&request));
-        model.use_saved_source(1);
-        ASSERT_EQ(model.selected_source_id(), 1);
+        model.use_saved_source(2);
+        ASSERT_EQ(model.selected_source_id(), 2);
         model.close();
     }
     ptv::Settings settings;

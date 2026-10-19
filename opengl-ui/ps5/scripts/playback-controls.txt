@@ -3,7 +3,7 @@
 # track panel, the channel list, the next and the previous channel, the
 # channel watched before, and leaving. Then five quick changes of channel,
 # two seconds apart, each before the one before has shown a picture.
-# Needs the built-in list (or any list where "news" finds several channels).
+# Needs a list where "news" finds several channels (the app has none of its own).
 wait 8
 until catalog 600
 wait 2

@@ -354,6 +354,11 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
     const int turn = page_turn(input, &repeat);
     if (!model.has_catalog())
     {
+        if (!model.is_set_up(model.active_source()) && input.is_pressed(Action::confirm))
+        {
+            feedback.play(audio::Cue::select);
+            return Result::sources;
+        }
         if (model.catalog_failed() && !model.refreshing() && input.is_pressed(Action::confirm))
         {
             feedback.play(audio::Cue::select);
@@ -662,7 +667,14 @@ void BrowseScreen::update(float dt)
 
     // ---- what an empty screen says ----
     empty_.action_button = ui::Button::cross;
-    if (!model.has_catalog())
+    if (!model.has_catalog() && !model.is_set_up(model.active_source()))
+    {
+        empty_.title = tr("No channels yet");
+        empty_.body = tr("Add a playlist or account on the Sources tab.");
+        empty_.action = tr("Open Sources");
+        empty_.set_bounds({420.0f, 300.0f, 1080.0f, 480.0f});
+    }
+    else if (!model.has_catalog())
     {
         empty_.title = tr("The channel list could not be loaded");
         empty_.body = model.catalog_error();
@@ -955,7 +967,7 @@ void BrowseScreen::draw(ui::Canvas &canvas) const
     const Model &model = shared_.model;
     if (!model.has_catalog())
     {
-        if (model.catalog_failed())
+        if (model.catalog_failed() || !model.is_set_up(model.active_source()))
             empty_.draw(canvas);
         else
             draw_waiting(canvas);
@@ -1061,7 +1073,9 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
     };
     if (!model.has_catalog())
     {
-        if (model.catalog_failed() && !model.refreshing())
+        if (!model.is_set_up(model.active_source()))
+            add({ui::Button::cross, tr("Open Sources")});
+        else if (model.catalog_failed() && !model.refreshing())
             add({ui::Button::cross, tr("Try again")});
         return count;
     }

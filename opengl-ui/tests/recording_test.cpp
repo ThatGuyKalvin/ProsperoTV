@@ -138,6 +138,7 @@ TEST_F(RecordingTest, ReminderFiresOnceAfterReopeningProfile)
     std::ofstream(dir + "/list.m3u")
         << "#EXTM3U\n#EXTINF:-1,Channel\nhttps://test.invalid/live.ts\n";
     host::set_network(true, dir + "/list.m3u");
+    host::add_playlist_source(dir);
     {
         ptv::Model model(dir);
         ASSERT_TRUE(model.open());

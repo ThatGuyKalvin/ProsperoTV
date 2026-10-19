@@ -188,9 +188,9 @@ different.
 1. Launch ProsperoTV. The opening plays once (an old television switches on;
    any button ends it, and Reduce motion skips it), then the menu is there on
    Live TV.
-2. On a first launch, keep the console online and leave the app open while it
-   downloads and caches the iptv-org catalog. Later launches show the cached
-   channels immediately. If a newer version is listed on prosperostore.net, an
+2. On a first launch there are no channels: add a playlist or account on the
+   Sources tab, and keep the console online while its first copy downloads.
+   Later launches show the cached channels immediately. If a newer version is listed on prosperostore.net, an
    update dialog opens over the menu; **Later** leaves everything as it is.
 3. Open a channel with Cross. The tuning screen stays until the channel's
    first picture; closing playback returns to the same screen and channel. A

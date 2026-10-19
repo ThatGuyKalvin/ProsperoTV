@@ -46,7 +46,7 @@ int account_expiry_notice(const AccountInfo &info, std::uint64_t now);
 struct SavedSource
 {
     std::int64_t id = 0;
-    int kind = 0; // 0: built-in, 1: playlist, 2: Xtream, 3: portal, 4: HDHomeRun, 5: Tvheadend
+    int kind = 0; // 0: no source, 1: playlist, 2: Xtream, 3: portal, 4: HDHomeRun, 5: Tvheadend
     std::string name;
     std::string url;
     std::string username;
