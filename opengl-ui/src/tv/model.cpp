@@ -28,7 +28,7 @@ namespace
 
 // The first source slot once held a third-party list; it is now the place of
 // no source at all, kept so the numbers of the others and their saved data stay.
-constexpr std::uint64_t kBuiltInSourceId = UINT64_C(0x495054562d4f5247);
+constexpr std::uint64_t kBuiltInSourceId = UINT64_C(0x4e4f4e45);
 constexpr std::size_t kCatalogThreadStackBytes = 4u * 1024u * 1024u;
 // An address that is not a playlist can send anything for as long as it likes:
 // this much with not one channel in it, and the download is given up.

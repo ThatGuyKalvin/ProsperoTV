@@ -486,8 +486,8 @@ TEST_F(ModelTest, AnEarlierChoiceOfTheThirdPartyListGivesWayToASourceSetUp)
         ptv::SavedSource old;
         old.id = 1;
         old.kind = 0;
-        old.name = "iptv-org public catalog";
-        old.url = "https://iptv-org.github.io/iptv/index.m3u";
+        old.name = "Public catalog";
+        old.url = "https://catalog.example.invalid/index.m3u";
         ASSERT_TRUE(library.save_source(&old));
         ASSERT_TRUE(library.select_source(1));
     };
@@ -502,7 +502,7 @@ TEST_F(ModelTest, AnEarlierChoiceOfTheThirdPartyListGivesWayToASourceSetUp)
         std::string phone;
         ASSERT_EQ(model.remote_sources("", phone), 200);
         EXPECT_EQ(phone.find("{\"id\":1,"), std::string::npos);
-        EXPECT_EQ(phone.find("iptv-org"), std::string::npos);
+        EXPECT_EQ(phone.find("catalog.example.invalid"), std::string::npos);
         for (const auto &request : host::requests())
             EXPECT_EQ(request.url, host::kPlaylistUrl);
         model.close();

@@ -2,7 +2,7 @@
 
 Status date: 2026-08-29
 
-ProsperoTV has a hardware-proven native shell and local iptv-org catalog cache plus
+ProsperoTV has a hardware-proven native shell and local playlist catalog cache plus
 an integrated MPEG-TS/HLS playback and hardware decoder/presenter path. H.264
 and HEVC are hardware-proven from sub-720p through native 4K. Bounded fallback,
 cancellation, repeated decoder teardown, and direct WebM VP9 Profile 0 at
@@ -15,9 +15,9 @@ remaining UI/cache behavior and long-duration soak remain.
 | --- | --- |
 | Identity | Configured as `ProsperoTV`, title `PPSA99003`, concept `99003`, content version `01.000.002` |
 | Native foundation | `ps5-native-app-boilerplate` Makefile, native linker/module writer, SELF signer, title-folder assembler, and deterministic generated `libc.prx`; PSRadio-style SDL/RmlUi shell, controller input, background work, `/download0` state, and explicit cleanup |
-| Public catalog | Built-in iptv-org `index.m3u` source plus a user-entered custom HTTP(S) M3U/M3U8 source |
+| Sources | A user-entered custom HTTP(S) M3U/M3U8 source; no channel list is included |
 | Catalog parser | Extended M3U metadata, deduplication, alternate URLs/groups, country/language fields, and channel HTTP headers |
-| Local cache | Separate SQLite databases for built-in and custom sources, staged replacement, quick integrity check, and last-good fallback |
+| Local cache | A separate SQLite database for each source, staged replacement, quick integrity check, and last-good fallback |
 | Browser UI | Channel list, details, search, broad groups, favorites, recents, source selection, and background refresh state |
 | Transport | HTTP(S), redirects, direct MPEG-TS, HLS master/media playlists, MPEG-TS PAT/PMT/PES, optional AAC ADTS, and bounded direct WebM video |
 | H.264 | Native hardware capacity classes through 720p, 1080p, 1440p, and 2160p; arbitrary valid dimensions within a class are accepted |
@@ -47,7 +47,7 @@ adding Profile 2 to the mode table.
 
 Candidate `5eda2eb` passed the G1 investigation-loop startup case. The exact
 FFPFSC entered `eboot.bin`, rendered the native browser with 12,863 channels
-from the cached iptv-org catalog, remained alive through observation, and
+from a cached playlist catalog, remained alive through observation, and
 returned to the launcher on close. The current G2 candidate then passed
 controlled hardware playback for H.264 at 960x540, 1920x1080, 2560x1440, and
 3840x2160, and HEVC at 1280x720, 1920x1080, 2560x1440, and 3840x2160. Every
@@ -107,7 +107,7 @@ possible optimization if measurements show startup latency or memory pressure.
   decoder capacity class; profile, level, bit depth, and chroma are still
   bounded to hardware-proven SDR modes.
 - Stream availability and legality are properties of each third-party listing,
-  not guarantees made by ProsperoTV or iptv-org.
+  not guarantees made by ProsperoTV.
 
 ## Next completion gates
 
