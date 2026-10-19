@@ -200,6 +200,7 @@ struct FakeBackend
     int select_result = 0;
     unsigned programme_boundaries = 0;
     int boundary_result = 0;
+    unsigned resyncs_requested = 0;
     std::vector<std::uint32_t> audio_selections;
     std::vector<std::vector<std::uint8_t>> video_packets;
     std::vector<iptv_stream_subtitle_track_t> subtitle_tracks;
@@ -1891,6 +1892,83 @@ TEST(IptvStreamTest, WaitsForNewKeyframeAfterVideoPacketGap)
     const auto keyframe = H264Packet(4, false, 0x65);
     ASSERT_EQ(iptv_stream_push(&session, keyframe.data(), keyframe.size()), IPTV_STREAM_OK);
     EXPECT_EQ(fake.videos, 2u);
+    EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+}
+
+TEST(IptvStreamTest, DecoderResyncRestartsAtTheNextKeyframeWithItsParameterSets)
+{
+    FakeBackend fake;
+    iptv_stream_backend_t backend{};
+    backend.context = &fake;
+    backend.open = FakeOpen;
+    backend.submit_video = FakeVideo;
+    backend.submit_audio = FakeAudio;
+    backend.disable_audio = FakeDisableAudio;
+    backend.discontinuity = FakeDiscontinuity;
+    backend.drain = FakeDrain;
+    backend.close = FakeClose;
+    backend.video_resync = [](void *context)
+    {
+        auto &state = *static_cast<FakeBackend *>(context);
+        if (!state.resyncs_requested)
+            return 0;
+        --state.resyncs_requested;
+        return 1;
+    };
+
+    iptv_stream_session_t session{};
+    iptv_stream_init(&session);
+    ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+    const auto start = StreamBytes(0x0f, H264Packet(0, true));
+    ASSERT_EQ(iptv_stream_push(&session, start.data(), start.size()), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.videos, 1u);
+    const auto configured = fake.video_packets.front();
+    const auto delta = H264Packet(1, false, 0x41);
+    ASSERT_EQ(iptv_stream_push(&session, delta.data(), delta.size()), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.videos, 2u);
+
+    // The decoder reset after a damaged picture: pictures that depend on it are not sent.
+    fake.resyncs_requested = 1;
+    for (std::uint8_t counter = 2; counter < 4; ++counter)
+    {
+        const auto dependent = H264Packet(counter, false, 0x41);
+        ASSERT_EQ(iptv_stream_push(&session, dependent.data(), dependent.size()), IPTV_STREAM_OK);
+    }
+    EXPECT_EQ(fake.videos, 2u);
+    EXPECT_EQ(fake.resyncs_requested, 0u);
+    EXPECT_EQ(session.telemetry.video_resyncs, 1u);
+
+    // The next IDR starts again with the parameter sets it did not carry itself.
+    const auto keyframe = H264Packet(4, false, 0x65);
+    ASSERT_EQ(iptv_stream_push(&session, keyframe.data(), keyframe.size()), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.videos, 3u);
+    const auto &restart = fake.video_packets.back();
+    const auto nal = [&restart](std::uint8_t header)
+    {
+        const std::uint8_t start[] = {0, 0, 0, 1, header};
+        return std::search(restart.begin(), restart.end(), std::begin(start), std::end(start));
+    };
+    EXPECT_LT(nal(0x67), nal(0x68));
+    EXPECT_LT(nal(0x68), nal(0x65));
+    EXPECT_NE(nal(0x65), restart.end());
+    const auto following = H264Packet(5, false, 0x41);
+    ASSERT_EQ(iptv_stream_push(&session, following.data(), following.size()), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.videos, 4u);
+    EXPECT_LT(fake.video_packets.back().size(), configured.size());
+
+    // A request arriving while the stream already waits for a keyframe (after a gap) is
+    // still taken, so the decoder keeps the keyframe that follows.
+    const auto gap = H264Packet(7, false, 0x41);
+    ASSERT_EQ(iptv_stream_push(&session, gap.data(), gap.size()), IPTV_STREAM_OK);
+    EXPECT_EQ(session.telemetry.continuity_errors, 1u);
+    fake.resyncs_requested = 1;
+    const auto after_gap = H264Packet(8, false, 0x65);
+    ASSERT_EQ(iptv_stream_push(&session, after_gap.data(), after_gap.size()), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.resyncs_requested, 0u);
+    EXPECT_EQ(fake.videos, 5u);
+    EXPECT_EQ(session.telemetry.video_resyncs, 2u);
+    EXPECT_EQ(fake.opens, 1u);
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
 }
 

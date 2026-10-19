@@ -1542,6 +1542,15 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
     }
     const bool hevc = impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC;
     const bool random_access = hevc ? picture_type >= 16 && picture_type <= 21 : picture_type == 5;
+    // The decoder reset after a damaged picture: begin again at the next IDR/IRAP,
+    // with its parameter sets, as after a gap in the transport. Taken even while
+    // already waiting for one, so that picture is not discarded as stale.
+    if (impl->backend_open && !impl->scanning && impl->backend.video_resync &&
+        impl->backend.video_resync(impl->backend.context))
+    {
+        impl->video_random_access = false;
+        ++session->telemetry.video_resyncs;
+    }
     const bool first_picture = !impl->video_random_access;
     if (!impl->video_random_access)
     {

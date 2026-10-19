@@ -145,6 +145,8 @@ extern "C"
         uint32_t decoder_frame_accepted;
         uint32_t software_video;
         int32_t software_video_trigger;
+        uint64_t video_error_recoveries;    /* Damaged pictures decoding went on past. */
+        int32_t last_recovered_video_error; /* VideoDec2 result of the latest. */
         iptv_color_info_t color;
         uint32_t hdr_output;
         uint64_t submitted_audio_frames;
@@ -222,6 +224,11 @@ extern "C"
     int32_t iptv_native_backend_select_audio(iptv_native_backend_t *backend, uint32_t stream_type);
     int32_t iptv_native_backend_programme_boundary(iptv_native_backend_t *backend);
     int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend);
+    /* Stream owner's thread only, before the next submit_video. Returns 1 once
+     * after H.264/HEVC decoding recovered from a damaged picture: the decoder
+     * was reset and discards queued pictures until the owner submits a
+     * random-access picture with its parameter sets. */
+    int iptv_native_backend_take_video_resync(iptv_native_backend_t *backend);
     /* Control-thread requests while an opened backend remains alive; only
      * atomic state is touched. Reposition releases
      * blocked submissions. The stream owner must then reset its timeline. */

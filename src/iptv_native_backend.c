@@ -108,6 +108,12 @@ unsigned iptv_native_get_volume(void)
 // The longest the sound waits for the first picture before it starts without it.
 #define AUDIO_FIRST_PICTURE_WAIT_US UINT64_C(2000000)
 #define CONTROLS_OVERLAY_US UINT64_C(5000000)
+// A damaged H.264/HEVC picture (VideoDec2 0x811D0301, 0x811D0304) resets the decoder, which
+// waits for the next random-access picture instead of ending the channel. Playback ends after
+// this many in a row with no picture shown in between, or when this many queued pictures go by
+// with no fresh start from the stream owner.
+#define VIDEO_RECOVERY_LIMIT 3u
+#define VIDEO_RESYNC_DROP_LIMIT (2u * VIDEO_QUEUE_CAPACITY)
 
 #define IPTV_NATIVE_E_ARGUMENT (-1000)
 #define IPTV_NATIVE_E_STATE (-1001)
@@ -116,6 +122,8 @@ unsigned iptv_native_get_volume(void)
 #define IPTV_NATIVE_E_DECODER_OUTPUT (-1004)
 #define IPTV_NATIVE_E_AUDIO_FRAME (-1005)
 #define IPTV_NATIVE_E_CANCELLED (-125)
+/* Internal: the decoder must reset and wait for a random-access picture. */
+#define IPTV_NATIVE_E_VIDEO_RESYNC (-1006)
 
 typedef struct videodec2_decoder_config
 {
@@ -324,6 +332,7 @@ typedef struct video_queue_item
     _Atomic uint64_t pts_us;
     uint32_t bytes;
     uint32_t generation;
+    uint32_t resync_epoch;
     uint8_t displayable;
     uint8_t *data;
 } video_queue_item_t;
@@ -460,6 +469,15 @@ typedef struct backend_state
     uint8_t pace_dropped_in_a_row;
     uint32_t video_generation;
     _Atomic uint32_t audio_generation;
+    // Recovery from a damaged picture: the video worker counts requests, the stream owner
+    // takes them (iptv_native_backend_take_video_resync), and queued pictures from before
+    // the owner took the latest are discarded.
+    _Atomic uint32_t video_resync_requested;
+    _Atomic uint32_t video_resync_taken;
+    uint32_t resync_dropped;
+    int32_t resync_error;
+    uint32_t recoveries_unseen;
+    uint64_t recovery_presented_mark;
 } backend_state_t;
 
 _Static_assert(sizeof(backend_state_t) <= IPTV_NATIVE_BACKEND_STORAGE_BYTES,
@@ -2186,6 +2204,26 @@ static int32_t decode_software_frame(backend_state_t *state, const void *bytes, 
     return 0;
 }
 
+static int video_error_recoverable(backend_state_t *state, int32_t result)
+{
+    const uint32_t code = (uint32_t)result;
+    if (state->telemetry.software_video ||
+        (state->config.codec != IPTV_NATIVE_CODEC_H264 &&
+         state->config.codec != IPTV_NATIVE_CODEC_HEVC) ||
+        (code != UINT32_C(0x811d0301) && code != UINT32_C(0x811d0304)))
+        return 0;
+    // A stream whose every fresh start fails again is broken, not damaged.
+    const uint64_t presented =
+        atomic_load_explicit(&state->presented_frame_count, memory_order_acquire);
+    if (presented != state->recovery_presented_mark)
+        state->recoveries_unseen = 0;
+    if (state->recoveries_unseen >= VIDEO_RECOVERY_LIMIT)
+        return 0;
+    ++state->recoveries_unseen;
+    state->recovery_presented_mark = presented;
+    return 1;
+}
+
 static int32_t submit_coded_frame(backend_state_t *state, const void *coded_frame,
                                   size_t frame_bytes, uint64_t pts_us, int displayable)
 {
@@ -2293,6 +2331,11 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
         state->telemetry.decoder_frame_accepted = frame.accepted;
         state->telemetry.decoder_output_reject_flags = output.error ? 1u << 1 : 0;
         ++state->telemetry.decoder_errors;
+        if (result != 0 && video_error_recoverable(state, result))
+        {
+            state->resync_error = result;
+            return IPTV_NATIVE_E_VIDEO_RESYNC;
+        }
         state->telemetry.last_native_result = result;
         state->telemetry.last_result = result != 0 ? result : IPTV_NATIVE_E_DECODER_OUTPUT;
         state->state = IPTV_NATIVE_STATE_ERROR;
@@ -2581,6 +2624,41 @@ static int32_t pause_video(backend_state_t *state)
     return 0;
 }
 
+// After a damaged picture: drop what VideoDec2 holds and ask the stream owner for a fresh
+// start. Pictures already queued depend on the damaged one and are discarded (video_worker_entry).
+static int32_t begin_video_resync(backend_state_t *state)
+{
+    const int32_t completed = complete_pending_presentation(state);
+    if (completed != 0)
+        return completed;
+    const int32_t reset = sceVideodec2Reset(state->decoder);
+    if (reset != 0)
+        return reset;
+    state->previous_picture_pts = UINT64_MAX;
+    discard_pending_video(state);
+    state->resync_dropped = 0;
+    ++state->telemetry.video_error_recoveries;
+    state->telemetry.last_recovered_video_error = state->resync_error;
+    atomic_fetch_add_explicit(&state->video_resync_requested, 1u, memory_order_release);
+    if (tv_diag_enabled())
+    {
+        char line[160];
+        snprintf(line, sizeof(line),
+                 "[player] damaged picture (VideoDec2 0x%08X): decoder reset, waiting for the "
+                 "next keyframe (%u in a row)",
+                 (unsigned)state->resync_error, state->recoveries_unseen);
+        tv_diag_line(line);
+    }
+    return 0;
+}
+
+// A queued picture from before the stream owner took the latest resync request.
+static int video_item_superseded(const backend_state_t *state, const video_queue_item_t *item)
+{
+    return item->resync_epoch !=
+           atomic_load_explicit(&state->video_resync_requested, memory_order_acquire);
+}
+
 static void *video_worker_entry(void *argument)
 {
     backend_state_t *state = argument;
@@ -2657,6 +2735,26 @@ static void *video_worker_entry(void *argument)
             ++state->telemetry.dropped_delayed_frames;
             continue;
         }
+        if (video_item_superseded(state, item))
+        {
+            free(item->data);
+            item->data = NULL;
+            atomic_fetch_sub_explicit(&state->video_queue_bytes, bytes, memory_order_release);
+            atomic_store_explicit(&state->video_queue_read, read + 1u, memory_order_release);
+            ++state->telemetry.dropped_delayed_frames;
+            if (++state->resync_dropped > VIDEO_RESYNC_DROP_LIMIT)
+            {
+                // The stream owner never started again: report the original damage.
+                state->telemetry.last_native_result = state->resync_error;
+                state->telemetry.last_result = state->resync_error;
+                state->state = IPTV_NATIVE_STATE_ERROR;
+                state->telemetry.state = state->state;
+                atomic_store_explicit(&state->video_worker_result, state->resync_error,
+                                      memory_order_release);
+                break;
+            }
+            continue;
+        }
         if (state->video_generation != generation)
         {
             const int32_t completed = complete_pending_presentation(state);
@@ -2714,6 +2812,18 @@ static void *video_worker_entry(void *argument)
         atomic_store_explicit(&state->video_queue_read, read + 1u, memory_order_release);
         had_data = 1;
         empty_reported = 0;
+        if (result == IPTV_NATIVE_E_VIDEO_RESYNC)
+        {
+            const int32_t restarted = begin_video_resync(state);
+            if (restarted == 0)
+                continue;
+            state->telemetry.last_native_result = state->resync_error;
+            state->telemetry.last_result = restarted;
+            state->state = IPTV_NATIVE_STATE_ERROR;
+            state->telemetry.state = state->state;
+            atomic_store_explicit(&state->video_worker_result, restarted, memory_order_release);
+            break;
+        }
         if (result != 0)
         {
             if (result == IPTV_NATIVE_E_CANCELLED &&
@@ -2818,6 +2928,7 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
     item->pts_us = pts_us;
     item->bytes = (uint32_t)frame_bytes;
     item->generation = generation;
+    item->resync_epoch = atomic_load_explicit(&state->video_resync_taken, memory_order_relaxed);
     item->displayable = displayable ? 1u : 0u;
     item->data = copy;
     queued_bytes =
@@ -3417,6 +3528,19 @@ int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend)
     atomic_store(&state->audio_sync_pending, state->config.enable_audio != 0);
     atomic_store_explicit(&state->discard_input, 0, memory_order_release);
     return 0;
+}
+
+int iptv_native_backend_take_video_resync(iptv_native_backend_t *backend)
+{
+    backend_state_t *state = state_from(backend);
+    if (!state || state->magic != BACKEND_MAGIC)
+        return 0;
+    const uint32_t requested =
+        atomic_load_explicit(&state->video_resync_requested, memory_order_acquire);
+    if (atomic_load_explicit(&state->video_resync_taken, memory_order_relaxed) == requested)
+        return 0;
+    atomic_store_explicit(&state->video_resync_taken, requested, memory_order_release);
+    return 1;
 }
 
 void iptv_native_backend_set_audio_delay(iptv_native_backend_t *backend, int milliseconds)
@@ -4463,6 +4587,51 @@ int main(void)
     for (index = 0; index < VIDEO_DRAIN_FLUSH_LIMIT; ++index)
         assert(pending_pts_take_first(&pending, &pts_us, &displayable) && pts_us == index);
     assert(pending.count == 0);
+
+    {
+        /* A damaged H.264/HEVC picture resets the decoder instead of ending the channel, a
+         * bounded number of times in a row; other decoder errors still end it. */
+        iptv_native_backend_t recovering = {0};
+        assert(iptv_native_backend_init(&recovering) == 0);
+        backend_state_t *recover = state_from(&recovering);
+        recover->config.codec = IPTV_NATIVE_CODEC_H264;
+        assert(!video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0302)));
+        assert(!video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0303)));
+        assert(!video_error_recoverable(recover, IPTV_NATIVE_E_DECODER_OUTPUT));
+        for (index = 0; index < VIDEO_RECOVERY_LIMIT; ++index)
+            assert(video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0304)));
+        assert(!video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0301)));
+        atomic_store(&recover->presented_frame_count, 1); /* a picture was shown since */
+        assert(video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0301)));
+        recover->config.codec = IPTV_NATIVE_CODEC_HEVC;
+        assert(video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0304)));
+        recover->config.codec = IPTV_NATIVE_CODEC_VP9_PROFILE0;
+        assert(!video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0304)));
+        recover->config.codec = IPTV_NATIVE_CODEC_H264;
+        recover->telemetry.software_video = 1;
+        assert(!video_error_recoverable(recover, (int32_t)UINT32_C(0x811d0304)));
+        recover->telemetry.software_video = 0;
+
+        /* Pictures queued before the stream owner takes the request depend on the damaged
+         * one; the owner's fresh start, queued after, is decoded. */
+        recover->state = IPTV_NATIVE_STATE_OPEN;
+        recover->video_queue = calloc(VIDEO_QUEUE_CAPACITY, sizeof(*recover->video_queue));
+        assert(recover->video_queue);
+        assert(!iptv_native_backend_take_video_resync(&recovering));
+        assert(queue_coded_frame(recover, frame, sizeof(frame), 0, 1) == 0);
+        assert(!video_item_superseded(recover, &recover->video_queue[0]));
+        atomic_fetch_add(&recover->video_resync_requested, 1u);
+        assert(video_item_superseded(recover, &recover->video_queue[0]));
+        assert(queue_coded_frame(recover, frame, sizeof(frame), 40000, 1) == 0);
+        assert(video_item_superseded(recover, &recover->video_queue[1]));
+        assert(iptv_native_backend_take_video_resync(&recovering));
+        assert(!iptv_native_backend_take_video_resync(&recovering));
+        assert(queue_coded_frame(recover, frame, sizeof(frame), 80000, 1) == 0);
+        assert(!video_item_superseded(recover, &recover->video_queue[2]));
+        for (index = 0; index < 3; ++index)
+            free(recover->video_queue[index].data);
+        free(recover->video_queue);
+    }
     return 0;
 }
 #endif

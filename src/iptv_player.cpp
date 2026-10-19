@@ -378,6 +378,7 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         "decoder_output_picture_count=%u\ndecoder_output_codec=%u\n"
         "decoder_output_width=%u\ndecoder_output_height=%u\ndecoder_output_pitch=%u\n"
         "decoder_frame_accepted=%u\nsoftware_video=%u\nsoftware_video_trigger=%d\n"
+        "video_error_recoveries=%llu\nlast_recovered_video_error=0x%08x\nvideo_resyncs=%llu\n"
         "color_primaries=%u\ncolor_transfer=%u\ncolor_matrix=%u\ncolor_range=%u\nhdr_output=%"
         "u\nhdr_metadata=%u\nhdr_mastering_peak=%u\nhdr_max_cll=%u\nhdr_max_fall=%u\n"
         "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
@@ -431,9 +432,12 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         native.decoder_output_error, native.decoder_output_picture_count,
         native.decoder_output_codec, native.decoder_output_width, native.decoder_output_height,
         native.decoder_output_pitch, native.decoder_frame_accepted, native.software_video,
-        native.software_video_trigger, native.color.primaries, native.color.transfer,
-        native.color.matrix, native.color.range, native.hdr_output, native.color.hdr.flags,
-        native.color.hdr.max_luminance, unsigned(native.color.hdr.max_cll),
+        native.software_video_trigger,
+        static_cast<unsigned long long>(native.video_error_recoveries),
+        static_cast<unsigned>(native.last_recovered_video_error),
+        static_cast<unsigned long long>(stream.video_resyncs), native.color.primaries,
+        native.color.transfer, native.color.matrix, native.color.range, native.hdr_output,
+        native.color.hdr.flags, native.color.hdr.max_luminance, unsigned(native.color.hdr.max_cll),
         unsigned(native.color.hdr.max_fall),
         static_cast<unsigned long long>(native.buffered_video_access_units),
         static_cast<unsigned long long>(native.drained_video_frames),
@@ -868,6 +872,13 @@ int AdapterDiscontinuity(void *context)
     return adapter && adapter->opened ? iptv_native_backend_discontinuity(&adapter->backend) : -1;
 }
 
+int AdapterVideoResync(void *context)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    return adapter && adapter->opened ? iptv_native_backend_take_video_resync(&adapter->backend)
+                                      : 0;
+}
+
 int AdapterDrain(void *context)
 {
     auto *adapter = static_cast<NativeAdapter *>(context);
@@ -990,6 +1001,7 @@ class StreamRunner
                 gSubtitles.reset_timeline();
         };
         backend.discontinuity = AdapterDiscontinuity;
+        backend.video_resync = AdapterVideoResync;
         backend.programme_boundary = [](void *self)
         {
             auto *adapter = static_cast<NativeAdapter *>(self);

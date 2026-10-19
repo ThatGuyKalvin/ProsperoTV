@@ -263,6 +263,11 @@ struct Decoder
             return static_cast<int>(
                 iptv_native_backend_discontinuity(&static_cast<Decoder *>(self)->native));
         };
+        backend.video_resync = [](void *self)
+        {
+            auto &d = *static_cast<Decoder *>(self);
+            return d.opened ? iptv_native_backend_take_video_resync(&d.native) : 0;
+        };
         backend.drain = [](void *) { return 0; };
         backend.close = [](void *) {};
         if (iptv_stream_open(&stream, nullptr, &backend) == 0)

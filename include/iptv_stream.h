@@ -130,6 +130,10 @@ typedef struct iptv_stream_backend {
     /* Optional barrier before an automatic PMT change. Present queued media
      * before replacing its tracks; seeks bypass this barrier. */
     int (*programme_boundary)(void *context);
+    /* Optional. Nonzero once after the decoder recovered from a damaged picture
+     * and reset: video restarts at the next random-access picture, with its
+     * parameter sets, as after a gap in the transport. */
+    int (*video_resync)(void *context);
 } iptv_stream_backend_t;
 
 typedef struct iptv_stream_telemetry {
@@ -164,6 +168,7 @@ typedef struct iptv_stream_telemetry {
     uint64_t discontinuities;
     uint64_t duplicate_packets;
     uint64_t dropped_payloads;
+    uint64_t video_resyncs; /* Restarts at a random-access picture for the decoder. */
     uint64_t pts_wraps;
     uint64_t buffer_errors;
     uint64_t cleanup_count;
