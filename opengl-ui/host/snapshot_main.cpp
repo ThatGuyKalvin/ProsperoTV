@@ -221,13 +221,12 @@ const Step kWalk[] = {
     press(Action::west, 1.0f, "18-favorites-empty"),
     // ---- Sources ----
     press(Action::page_next, 1.1f, "19-sources"),
-    move(Direction::down, 0.7f, "20-sources-playlist"),
+    look(0.7f, "20-sources-playlist"),
     move(Direction::down, 0.7f, "21-sources-account"),
     press(Action::jump_next, 0.7f, "21a-user-agent-presets"),
     move(Direction::down, 0.3f),
     move(Direction::down, 0.7f, "21b-user-agent-smarters"),
     press(Action::back),
-    move(Direction::up, 0.3f),
     move(Direction::up, 0.3f),
     change([]() { host::set_network(true, g_playlist, 2500); }, 0.1f),
     press(Action::menu, 1.0f, "22-sources-updating"),
@@ -458,6 +457,8 @@ int main(int argc, char **argv)
 
     host::reset();
     host::set_network(true, g_playlist, 600);
+    // The app has no list of its own: the tour starts with a playlist added.
+    host::add_playlist_source(data_dir);
     {
         const iptv::XtreamCredentials account{"https://provider.example.invalid", "viewer", "demo"};
         int number = 0;

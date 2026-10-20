@@ -20,7 +20,7 @@ Status: active
   decoder and native presentation path.
 - Intended users: PS5 homebrew users with access to lawful public or personal
   IPTV playlists.
-- Scope and functionality: iptv-org and custom M3U catalogs, SQLite caching,
+- Scope and functionality: user-supplied M3U and Xtream catalogs, SQLite caching,
   browsing/search/favorites/history, HLS and direct MPEG-TS playback, AAC audio,
   native H.264/HEVC playback, and direct WebM VP9 Profile 0 playback.
 - Deliverables: source, tests, signed title folder (released as a ZIP),
@@ -34,8 +34,8 @@ Status: active
 
 - `R1`: start as `ProsperoTV` under title `PPSA99003` and render the native UI.
 - `R2`: load the last good catalog from `/download0` before network refresh.
-- `R3`: fetch and parse the official iptv-org `index.m3u` off the UI thread.
-- `R4`: persist built-in and custom catalogs in separate bounded SQLite files
+- `R3`: fetch and parse the user's M3U playlist off the UI thread.
+- `R4`: persist each source's catalog in a separate bounded SQLite file
   using staged replacement, integrity checks, and last-good recovery.
 - `R5`: provide controller navigation, search, groups, favorites, history,
   source selection, refresh state, and actionable errors.
@@ -71,7 +71,7 @@ Status: active
   requires FTP 2121, klog 3232, elfldr/shsrv 9021, and exclusive ownership of
   the environment-declared shared lock for the entire bounded cycle.
 - Never open or change PS5 Settings and never initiate or approve an update.
-- iptv-org provides playlist metadata, not stream availability or legal rights.
+- A playlist provides metadata, not stream availability or legal rights.
 - The UI currently materializes the bounded selected catalog in memory after
   loading it from SQLite. Database-backed paging is measurement-driven follow-up.
 - VP9 Profile 0 is accepted through a bounded video-only WebM path. DASH,
@@ -89,7 +89,7 @@ Status: active
 | ID | Observable criterion | Required evidence |
 | --- | --- | --- |
 | `A1` | ShadowMount registers `PPSA99003` and the title reaches a stable rendered UI without a crash. | Frozen hashes, lifecycle/klog slice, screenshot, clean close |
-| `A2` | A clean data directory refreshes iptv-org into SQLite; relaunch loads the cache before refresh. | UI evidence plus `/download0` files and receipt |
+| `A2` | A clean data directory with a playlist added refreshes it into SQLite; relaunch loads the cache before refresh. | UI evidence plus `/download0` files and receipt |
 | `A3` | Browse, search, favorite, recent, source, and refresh controls work from the controller. | Bounded functional run and persisted state |
 | `A4` | H.264 and HEVC play at 1080p, 1440p, and 2160p with expected output geometry and clean stop. | Per-mode receipt, screenshot, klog, clean teardown |
 | `A5` | Alternate URL, cancellation, repeated channel changes, and network failure remain responsive and leak-free. | Scenario receipts and post-run service health |

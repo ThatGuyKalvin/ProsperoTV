@@ -32,12 +32,12 @@ extern "C" int scePthreadJoin(void *thread, void **result);
 namespace
 {
 
-constexpr char kCatalogUrl[] = "https://iptv-org.github.io/iptv/index.m3u";
 constexpr char kCatalogCachePath[] = "/download0/prosperotv-catalog.sqlite3";
 constexpr char kCustomCatalogCachePath[] = "/download0/prosperotv-custom-catalog.sqlite3";
 constexpr char kXtreamCatalogCachePath[] = "/download0/prosperotv-xtream-catalog.sqlite3";
 constexpr char kXtreamReceiptPath[] = "/download0/prosperotv-xtream-receipt.txt";
-constexpr std::uint64_t kCatalogSourceId = UINT64_C(0x495054562d4f5247);
+// The first slot is no source at all; nothing is ever saved under its id.
+constexpr std::uint64_t kCatalogSourceId = UINT64_C(0x4e4f4e45);
 constexpr std::uint64_t kCatalogRefreshSeconds = UINT64_C(12) * 60u * 60u;
 constexpr std::size_t kCatalogThreadStackBytes = 4u * 1024u * 1024u;
 constexpr unsigned kChannelCardCount = 8;
@@ -483,13 +483,18 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
     if (iptv::LoadXtreamCredentials(&xtream_credentials_) == iptv::XtreamStatus::ok)
         source_health_[2] = SourceHealth::Saved;
 
+    // The first slot is no source at all: with nothing chosen, the first source
+    // set up is used.
+    if (!custom_source_url_.empty())
+        active_source_ = SourceSelection::Custom;
+    else if (iptv::ValidateXtreamCredentials(xtream_credentials_))
+        active_source_ = SourceSelection::Xtream;
     SourceSelection saved_source = SourceSelection::BuiltIn;
     if (iptv::LoadActiveSource(&saved_source) == iptv::SourceStateStatus::ok)
     {
         if ((saved_source == SourceSelection::Custom && !custom_source_url_.empty()) ||
             (saved_source == SourceSelection::Xtream &&
-             iptv::ValidateXtreamCredentials(xtream_credentials_)) ||
-            saved_source == SourceSelection::BuiltIn)
+             iptv::ValidateXtreamCredentials(xtream_credentials_)))
             active_source_ = saved_source;
     }
 
@@ -507,7 +512,8 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
         iptv::LoadCatalog(active_cache_path, &catalog_, {}, &cache_report);
     (void)iptv::LoadUserState(&user_state_);
     catalog_loaded_ = cache_status == iptv::StoreStatus::ok &&
-                      catalog_.source_id == active_source_id && !catalog_.empty();
+                      catalog_.source_id == active_source_id && !catalog_.empty() &&
+                      (custom_active || xtream_active);
     if (!catalog_loaded_)
         catalog_ = {};
     else
@@ -537,6 +543,11 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
             document_, "source-status-detail",
             "Using the last good catalog while the selected source refreshes in the background.");
         SetText(document_, "source-status-0", "CACHED");
+    }
+    else if (!custom_active && !xtream_active)
+    {
+        SetStatusState("No source", true, false);
+        SetText(document_, "source-status-0", "EMPTY");
     }
     else
     {
@@ -1037,7 +1048,9 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                 }
                 else if (focus_slot_ == 0)
                 {
-                    SelectSource(SourceSelection::BuiltIn);
+                    SetText(document_, "source-status-label", "No source to use");
+                    SetText(document_, "source-status-detail",
+                            "Add a custom playlist or an Xtream Codes account.");
                 }
                 else if (focus_slot_ == 1 && !custom_source_url_.empty())
                 {
@@ -1168,10 +1181,11 @@ void IptvApp::RefreshSourceUi()
 {
     static constexpr const char *health_names[] = {"EMPTY", "SAVED", "CACHED", "REFRESHING",
                                                    "READY", "STALE", "ERROR"};
-    SetText(document_, "source-name-0", "iptv-org public catalog");
-    SetText(document_, "source-meta-0", "Public M3U");
-    SetText(document_, "source-management-name-0", "iptv-org public catalog");
-    SetText(document_, "source-management-url-0", kCatalogUrl);
+    SetText(document_, "source-name-0", "No source");
+    SetText(document_, "source-meta-0", "Add a source");
+    SetText(document_, "source-management-name-0", "No source");
+    SetText(document_, "source-management-url-0",
+            "Add a custom playlist or an Xtream Codes account below");
 
     SetText(document_, "source-name-1", "Custom playlist");
     SetText(document_, "source-meta-1", custom_source_url_.empty() ? "Add URL" : "Custom M3U");
@@ -1222,8 +1236,8 @@ void IptvApp::LoadActiveSourceCache()
                                              : kCatalogSourceId;
     iptv::Catalog cached;
     const iptv::StoreStatus status = iptv::LoadCatalog(path, &cached);
-    catalog_loaded_ =
-        status == iptv::StoreStatus::ok && cached.source_id == source_id && !cached.empty();
+    catalog_loaded_ = status == iptv::StoreStatus::ok && cached.source_id == source_id &&
+                      !cached.empty() && (custom || xtream);
     catalog_ = catalog_loaded_ ? std::move(cached) : iptv::Catalog{};
     if (catalog_loaded_)
         (void)iptv::LoadPlaybackResults(iptv::kDefaultPlaybackHistoryPath, source_id, &catalog_);
@@ -1240,7 +1254,7 @@ void IptvApp::LoadActiveSourceCache()
 
 void IptvApp::SelectSource(SourceSelection source)
 {
-    if (refresh_thread_)
+    if (refresh_thread_ || source == SourceSelection::BuiltIn)
         return;
     if (source == SourceSelection::Custom && custom_source_url_.empty())
     {
@@ -1262,9 +1276,8 @@ void IptvApp::SelectSource(SourceSelection source)
         SetStatusState("Source selected; preference not saved", true, false);
     }
     SetText(document_, "source-status-label",
-            source == SourceSelection::Custom   ? "Custom playlist selected"
-            : source == SourceSelection::Xtream ? "Xtream Codes selected"
-                                                : "iptv-org selected");
+            source == SourceSelection::Custom ? "Custom playlist selected"
+                                              : "Xtream Codes selected");
     SetText(document_, "source-status-detail",
             catalog_loaded_ ? "Showing the saved cache while the selected playlist refreshes."
                             : "No cache is available; downloading the selected playlist now.");
@@ -1464,6 +1477,13 @@ void IptvApp::RequestRefresh()
 
     const bool custom = active_source_ == SourceSelection::Custom;
     const bool xtream = active_source_ == SourceSelection::Xtream;
+    if (!custom && !xtream)
+    {
+        SetText(document_, "source-status-label", "No source");
+        SetText(document_, "source-status-detail",
+                "Add a custom playlist or an Xtream Codes account on the Sources screen.");
+        return;
+    }
     if (custom && custom_source_url_.empty())
         return;
     if (xtream && !iptv::ValidateXtreamCredentials(xtream_credentials_))
@@ -1472,7 +1492,7 @@ void IptvApp::RequestRefresh()
         return;
     }
     refresh_source_ = active_source_;
-    refresh_url_ = custom ? custom_source_url_ : xtream ? "" : kCatalogUrl;
+    refresh_url_ = custom ? custom_source_url_ : "";
     refresh_cache_path_ = custom   ? kCustomCatalogCachePath
                           : xtream ? kXtreamCatalogCachePath
                                    : kCatalogCachePath;
@@ -1488,9 +1508,7 @@ void IptvApp::RequestRefresh()
     pending_xtream_message_.clear();
     SetStatusState("Refreshing", true, false);
     SetText(document_, "source-status-label",
-            custom   ? "Refreshing custom playlist"
-            : xtream ? "Refreshing Xtream live channels"
-                     : "Refreshing iptv-org catalog");
+            custom ? "Refreshing custom playlist" : "Refreshing Xtream live channels");
     SetText(document_, "source-status-detail",
             catalog_loaded_
                 ? "Cached channels remain available while the selected source refreshes."
@@ -1679,8 +1697,7 @@ void IptvApp::ConsumeRefresh()
                                                  : "Custom playlist loaded in memory")
                 : xtream ? (pending_cache_saved_ ? "Xtream live catalog ready"
                                                  : "Xtream catalog loaded in memory")
-                         : (pending_cache_saved_ ? "Public catalog ready"
-                                                 : "Public catalog loaded in memory"));
+                         : (pending_cache_saved_ ? "Catalog ready" : "Catalog loaded in memory"));
         char detail[160];
         std::snprintf(
             detail, sizeof(detail), "%u channels accepted; %u records skipped.%s",
@@ -1783,7 +1800,7 @@ void IptvApp::ConsumeRefresh()
         SetText(document_, "source-status-label",
                 custom   ? "Unable to load custom playlist"
                 : xtream ? "Unable to load Xtream live channels"
-                         : "Unable to load public catalog");
+                         : "Unable to load catalog");
         SetText(document_, "source-status-detail", detail);
         ShowCatalogError(true, "Unable to load catalog", detail);
         focus_target_ = FocusTarget::Error;
@@ -2216,7 +2233,7 @@ void IptvApp::RefreshCatalogUi()
         SetText(document_, "selected-channel-meta",
                 (search_query_[0] || filters_active) ? "Circle clears the current search."
                 : selected_group_                    ? "Choose another group above."
-                                  : "Refresh the public catalog or use a local cache.");
+                                  : "Add a playlist or account on the Sources screen.");
         SetText(document_, "selected-channel-tech", "Codec, resolution and FPS unavailable");
     }
     else

@@ -1,7 +1,7 @@
 # ProsperoTV's interface
 
 ProsperoTV's interface since 01.000.020, built on the
-[ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit:
+[ps5-homebrew-ui](https://github.com/LedyBacer/ps5-homebrew-ui) kit:
 frosted panels over a red sky, a hero for the channel in focus, a scrolling
 grid with the alphabet beside it, a search drawer, a tuning screen that runs
 until a channel's first picture, and an update that installs itself when a

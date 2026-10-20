@@ -573,7 +573,6 @@ class Model
         return xtream_.server_url;
     }
     bool is_set_up(iptv::SourceKind source) const;
-    static const char *builtin_url();
     bool refreshing() const
     {
         return refresh_thread_ != nullptr;

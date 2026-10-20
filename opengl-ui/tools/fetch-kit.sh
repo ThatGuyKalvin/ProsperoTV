@@ -5,7 +5,7 @@
 #
 # usage: tools/fetch-kit.sh        (prints the kit's folder)
 #
-# The kit (https://github.com/blackbearreloaded/ps5-homebrew-ui) is a build
+# The kit (https://github.com/LedyBacer/ps5-homebrew-ui) is a build
 # dependency, not part of this repository: nothing of it is copied here. KIT
 # names a checkout to use as it is (for work on both at once); otherwise the
 # pinned commit is fetched once into .deps/ps5-homebrew-ui.
@@ -27,7 +27,7 @@ if [[ $(git -C "$kit" rev-parse HEAD 2>/dev/null || true) != "$pin" ]]; then
     rm -rf -- "$kit"
     mkdir -p "$kit"
     git -C "$kit" init -q
-    git -C "$kit" remote add origin https://github.com/blackbearreloaded/ps5-homebrew-ui.git
+    git -C "$kit" remote add origin https://github.com/LedyBacer/ps5-homebrew-ui.git
     git -C "$kit" fetch -q --depth 1 origin "$pin"
     git -C "$kit" checkout -q --detach FETCH_HEAD
 fi

@@ -6,8 +6,8 @@
 
 <p align="center">
   <strong>A native IPTV client for PlayStation 5 homebrew</strong><br>
-  Browse, search, and save channels from iptv-org, custom M3U playlists, or
-  your own Xtream Codes provider with an offline-first SQLite cache, a
+  Browse, search, and save channels from your own M3U playlists or Xtream
+  Codes provider with an offline-first SQLite cache, a
   controller-first interface, native PS5 video decoding, and updates that
   install themselves.
 </p>
@@ -22,15 +22,14 @@
 
 > [!NOTE]
 > **Version 01.000.020 brings a new interface.** It is built on
-> [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) and lives in
+> [ps5-homebrew-ui](https://github.com/LedyBacer/ps5-homebrew-ui) and lives in
 > [`opengl-ui/`](opengl-ui/); the catalog, the stores, and the player are the ones earlier
 > versions used. Coming from 01.000.015 or older: see [Updating ProsperoTV](#updating-prosperotv).
 
 ## Highlights
 
-- Browse thousands of community-maintained IPTV channels from the iptv-org
-  catalog, add a custom HTTP(S) M3U playlist, or connect an Xtream Codes
-  account.
+- Bring your own channels: add an HTTP(S) M3U playlist or connect an Xtream
+  Codes account. ProsperoTV ships with no third-party list of its own.
 - Search by name and filter by country, language, category, and advertised
   quality with continuous controller paging.
 - Decode H.264, HEVC, and VP9 through native PS5 video paths at resolutions up
@@ -49,14 +48,14 @@
 ## Project foundations
 
 > [!IMPORTANT]
-> **Built on the [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate).**
+> **Built on the [PS5 Native App Boilerplate](https://github.com/LedyBacer/ps5-native-app-boilerplate).**
 > ProsperoTV retains its C++20 application structure, reproducible clean-room
 > runtime, FSELF tooling, tests, deployment flow, and release automation.
 
 > [!IMPORTANT]
-> **Channel data comes from [iptv-org/iptv](https://github.com/iptv-org/iptv).**
-> ProsperoTV is an independent client. Neither this project nor iptv-org hosts
-> the listed streams, and channel availability can change without notice.
+> **ProsperoTV includes no channel list.** It is an independent client: every
+> channel comes from a source you add, this project hosts no streams, and
+> channel availability can change without notice.
 
 | Identity | Value |
 | --- | --- |
@@ -65,14 +64,13 @@
 | Shell category | Media |
 | Current version | `01.000.080` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
-| Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/data/prosperotv`; the title's own `/download0` when filesystem access is not available |
 
 ## Features
 
 ### Sources
 
-- Use the built-in iptv-org catalog, or add your own: HTTP(S) M3U/M3U8
+- Add your own sources: HTTP(S) M3U/M3U8
   playlists, Xtream Codes accounts (masked password entry), MAC-code portals
   (Stalker/Ministra style), and tuners or servers on the home network such as
   HDHomeRun and Tvheadend.
@@ -209,7 +207,7 @@
   playback on the next launch. Forced termination and power loss cannot be
   recorded by the crash handler.
 - Use a full-screen OpenGL interface at up to 4K, built with the
-  [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit,
+  [ps5-homebrew-ui](https://github.com/LedyBacer/ps5-homebrew-ui) kit,
   with fonts for Latin, Greek, Cyrillic, Chinese, Japanese, and Korean channel
   names, interface sounds, and a Reduce motion setting. Settings also offers
   Dusk, Ocean and Forest themes, opaque high-contrast menus, and 25% larger text
@@ -441,9 +439,9 @@ favorites, history, and account the old one saved; it copies them to
 `/data/prosperotv` the first time it starts.
 
 > [!NOTE]
-> The first launch downloads, validates, and caches the iptv-org catalog. Keep
-> the console online and leave ProsperoTV open until the catalog is ready.
-> Later launches load the local database immediately.
+> ProsperoTV starts with no channels. Add a playlist or account on the Sources
+> tab; its first download is validated and cached, and later launches load the
+> local database immediately.
 
 Xtream support is for credentials supplied by the user. ProsperoTV does not
 include, sell, or discover provider accounts. The server, username, and
@@ -555,7 +553,7 @@ warning.
   stream is online, correctly labeled, or compatible with the PS5 decoder.
 
 ProsperoTV displays the most specific detected cause when a channel cannot be
-played. A channel failure does not imply that the app, iptv-org, or the
+played. A channel failure does not imply that the app, the source, or the
 console is unavailable.
 
 ## Roadmap
@@ -598,7 +596,7 @@ Copyright © 2026 BlackBearReloaded and contributors. Licensed under GPL-3.0-or-
 - **No affiliation.** This is an independent homebrew project. It is not
   affiliated with, endorsed by, or sponsored by Sony Interactive Entertainment.
   "PlayStation", "PS5" and related marks are trademarks of Sony Interactive
-  Entertainment Inc. This project is not affiliated with or endorsed by iptv-org.
+  Entertainment Inc.
 - **No proprietary material.** No Sony SDK, firmware, encryption keys or
   decrypted system modules are included.
 - **No warranty.** This project is provided "as is", without warranty of any

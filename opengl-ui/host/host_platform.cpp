@@ -5,6 +5,7 @@
 #include "host_platform.hpp"
 
 #include "iptv_ime.h"
+#include "iptv_source_state.h"
 #include "tv/platform.hpp"
 
 #include <atomic>
@@ -186,6 +187,12 @@ void refuse_update(bool begin, bool apply)
 UpdateCalls update_calls()
 {
     return g_update.calls;
+}
+
+void add_playlist_source(const std::string &data_dir)
+{
+    (void)iptv::SaveCustomSourceUrl(data_dir + "/iptv-custom-source-v1.txt", kPlaylistUrl);
+    (void)iptv::SaveActiveSource(data_dir + "/iptv-active-source-v1.txt", iptv::SourceKind::Custom);
 }
 
 void reset()

@@ -102,6 +102,7 @@ TEST_F(GuideTest, ReminderNoticeTranslatesLabelsButPreservesProviderTitleAndStor
     std::ofstream(playlist) << kPlaylist;
     std::ofstream(xml) << kXml;
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
@@ -125,6 +126,7 @@ TEST_F(GuideTest, UnifiedSearchFindsFutureAndPastTitlesAndHonoursHiddenChannels)
     std::ofstream(playlist) << kPlaylist;
     std::ofstream(xml) << kXml;
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
@@ -159,6 +161,7 @@ TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
     std::ofstream(playlist) << kPlaylist;
     std::ofstream(xml) << kXml;
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
@@ -360,6 +363,7 @@ TEST_F(GuideTest, DownloadSearchPlaybackAndFailedRefreshWorkTogether)
     std::ofstream(playlist) << kPlaylist;
     std::ofstream(xml) << kXml;
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
@@ -402,6 +406,7 @@ TEST_F(GuideTest, CustomGuideOverridesKeepSourceHeadersOnTheirOrigin)
     std::ofstream(playlist) << kPlaylist;
     std::ofstream(xml) << kXml;
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
     host::set_network_response("https://source.invalid/guide.xml", xml);
     host::set_network_response("https://foreign.invalid/guide.xml", xml);
@@ -498,6 +503,7 @@ TEST_F(GuideTest, OverrideAndMatchingInvalidateOldGuideAndSurviveOfflineRestart)
     std::ofstream(playlist) << kPlaylist;
     std::ofstream(xml) << kXml;
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
     host::set_network_response("https://guide.invalid/custom.xml", xml);
     std::string first;

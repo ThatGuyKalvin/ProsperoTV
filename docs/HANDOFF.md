@@ -47,7 +47,7 @@ Updated: 2026-08-29 America/New_York
 - Acceptance: controller browse/search/filter, favorite/history persistence,
   source selection, clean catalog refresh, and cache-first relaunch all work in
   one bounded functional cycle.
-- Control: the accepted production title with a known cached iptv-org catalog
+- Control: the accepted production title with a known cached playlist catalog
   and one clean `/download0` refresh/relaunch sequence.
 - Stop condition: any Settings, Store, sign-in, update, ambiguous screen,
   execution crash, kernel-health concern, hash mismatch, or failed cleanup.
@@ -70,7 +70,7 @@ Updated: 2026-08-29 America/New_York
 - 2026-08-29 | G1 | 8dc7f8b | fw6.02 | inconclusive twice: first launch overlapped PPSA77003; second was rejected before EXEC by stale inner LVD read error 5 | results/G1/PPSA88000-20260829-112516-result.json | require explicit two-layer teardown
 - 2026-08-29 | G1 | 8dc7f8b | fw6.02 | failed: clean remount reached EXEC, then ordinary `operator new` returned 16-byte alignment to a 256-bit RmlUi initializer | results/G1/PPSA88000-20260829-113041-result.json | align allocator family to 32 bytes
 - 2026-08-29 | G1 | 5eda2eb | host | pass: 25 unit tests, 5 tooling tests, lint, deterministic boilerplate `libc.prx`, signed containers, static inspection, MkPFS creation, and verification | docs/HANDOFF.md | clean two-layer remount and startup case
-- 2026-08-29 | G1 | 5eda2eb | fw6.02 | pass: exact image entered eboot, rendered native UI with 12,863 cached iptv-org channels, remained alive, and returned to launcher on close | results/G1/PPSA88000-20260829-114721-result.json | begin controlled codec matrix
+- 2026-08-29 | G1 | 5eda2eb | fw6.02 | pass: exact image entered eboot, rendered native UI with 12,863 cached playlist channels, remained alive, and returned to launcher on close | results/G1/PPSA88000-20260829-114721-result.json | begin controlled codec matrix
 - 2026-08-29 | G2 | 4aa583a eboot | fw6.02 | pass: H.264 High and HEVC Main 1080p60, 1,800/1,800 decoded/presented frames each, AAC decoded, zero-copy native frame-pool output | results/G2/PPSA88002-20260829-115934-codec-receipts.txt | broaden geometry classes
 - 2026-08-29 | G2 | 0e92b6b | host | pass: 28 unit tests, 6 tooling tests, lint, boilerplate runtime hash/layout gate, native build, SELF inspection, MkPFS creation and verification | docs/HANDOFF.md | run capacity-class matrix
 - 2026-08-29 | G2 | 4055f6f eboot | fw6.02 | pass: H.264 960x540 and HEVC 1280x720 decoded/presented 60/60 with AAC and zero-copy native output | results/G2/PPSA88004-20260829-122922-codec-receipts.txt | test upper classes

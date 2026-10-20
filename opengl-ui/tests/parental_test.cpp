@@ -127,6 +127,7 @@ TEST_F(ParentalTest, PinAndKidsPolicyCoverListsFavoritesDirectPlayPreviewGuideRe
            "#EXTINF:-1 group-title=\"Movies\" is-adult=\"1\",Flagged\nhttps://test.invalid/c\n"
            "#EXTINF:-1 group-title=\"General\",General\nhttps://test.invalid/d\n";
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
     settle(model);
@@ -333,6 +334,7 @@ TEST_F(ParentalTest, ViewingQuotaBlocksLivePreviewQueuedResumeAndPhoneWithoutHid
     std::ofstream(playlist)
         << "#EXTM3U\n#EXTINF:-1 group-title=\"Kids\",Cartoon\nhttps://test.invalid/b\n";
     host::set_network(true, playlist);
+    host::add_playlist_source(dir);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
     settle(model);

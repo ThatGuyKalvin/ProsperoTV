@@ -104,6 +104,7 @@ class AppTest : public ::testing::Test
         playlist_ = dir_ + "/playlist.m3u";
         std::ofstream(playlist_) << playlist_text();
         host::set_network(true, playlist_);
+        host::add_playlist_source(dir_);
         model_ = std::make_unique<ptv::Model>(dir_);
         ASSERT_TRUE(model_->open());
         for (int i = 0; i < 400 && model_->refreshing(); ++i)
@@ -777,13 +778,26 @@ TEST_F(AppTest, AChannelThatFailedIsAskedAboutFirst)
     EXPECT_EQ(request.channel_id, id);
 }
 
-TEST_F(AppTest, ASourceIsSetUpFromItsRow)
+TEST_F(AppTest, WithNoSourceLiveTvLeadsToSourcesWhereOneIsSetUp)
 {
-    press(Action::page_next);
-    press(Action::page_next);
-    press(Action::page_next); // Sources
-    move(Direction::down);    // Custom playlist
-    press(Action::confirm);   // not set up: its form
+    // A console that has never had a source: nothing is downloaded.
+    app_.reset();
+    model_->close();
+    const std::string fresh = dir_ + "/fresh";
+    fs::create_directories(fresh);
+    const int fetches = host::fetch_count();
+    model_ = std::make_unique<ptv::Model>(fresh);
+    ASSERT_TRUE(model_->open());
+    EXPECT_FALSE(model_->refreshing());
+    EXPECT_FALSE(model_->has_catalog());
+    EXPECT_FALSE(model_->catalog_failed());
+    EXPECT_EQ(host::fetch_count(), fetches);
+    model_->view.tab = 1;
+    make_app();
+    ASSERT_EQ(app_->tab(), 1);
+    press(Action::confirm); // Open Sources
+    ASSERT_EQ(app_->tab(), 4);
+    press(Action::confirm); // Custom playlist, the first row: not set up, its form
     EXPECT_EQ(host::keyboard_requests(), 1);
     EXPECT_EQ(host::keyboard_title(), "Playlist address");
     host::set_keyboard_text("https://lists.example.invalid/mine.m3u");
@@ -795,15 +809,14 @@ TEST_F(AppTest, ASourceIsSetUpFromItsRow)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     EXPECT_TRUE(model_->has_catalog());
-    EXPECT_EQ(model_->view.focused_source, 1);
+    EXPECT_EQ(model_->view.focused_source, 0);
 }
 
 TEST_F(AppTest, SourceUserAgentPickerCancelsSelectsPresetsAndRetainsCustomEntry)
 {
     press(Action::page_next);
     press(Action::page_next);
-    press(Action::page_next);
-    move(Direction::down);
+    press(Action::page_next); // Sources: the playlist in use is the first row
     const auto selected = model_->selected_source_id();
     press(Action::jump_next);
     press(Action::page_next); // The chooser owns input until selected or cancelled.
@@ -2021,7 +2034,8 @@ TEST_F(AppTest, SourceCheckRowStartsAndCancelsWithoutChangingSource)
     press(Action::page_next);
     press(Action::page_next);
     ASSERT_EQ(app_->tab(), 4);
-    for (std::size_t i = 0; i < model_->saved_sources().size(); ++i)
+    // Every source has a row but the empty first slot.
+    for (std::size_t i = 1; i < model_->saved_sources().size(); ++i)
         move(Direction::down);
     host::set_preview_probe(static_cast<int>(ptv::ProbeOutcome::unknown), 0, 1000);
     press(Action::confirm);

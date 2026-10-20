@@ -735,7 +735,7 @@ subcategories, hiding and showing a category, search, favorites, the guide
 (now and next, the grid, the next day, a programme's description), movies and
 shows down to an episode, choosing an audio and a subtitle track (a Matroska
 file with eleven audio and twenty-eight subtitle tracks), multiview with two
-channels decoding at once, switching between the built-in list and the
+channels decoding at once, switching between a playlist and the
 account, the refresh schedule, starting on the last channel, live previews,
 and playback of H.264 720p60 and 1080p30 and HEVC 4K channels. Ten minutes of
 one channel presented 17,893 pictures with a longest gap of 72 ms and no queue
@@ -771,7 +771,7 @@ What was wrong, and is corrected in the same pull request:
 - A category whose name holds a slash ("24/7 COMEDY", "ENTERTAINMENT HD/RAW",
   "B/R SPORTS") was cut into a parent and a child that do not exist. A slash
   now separates levels only where it stands apart from the words.
-- The built-in list said "Press Cross to set up" and "Not set up" while in use.
+- A source in use said "Press Cross to set up" and "Not set up".
 - A sandboxed title on system software 12.70 is refused every named port
   (error 13) and is given an automatic one that answers nobody: the pairing
   screen showed an address no phone could reach. The remote now tries other

@@ -32,6 +32,10 @@ void set_network_response(const std::string &url, const std::string &file);
 void set_network_piece(std::size_t bytes);
 // How many downloads were asked for.
 int fetch_count();
+// The app comes with no list of its own: this gives a data folder the
+// playlist a person would add, at kPlaylistUrl, and makes it the one in use.
+inline constexpr char kPlaylistUrl[] = "https://playlist.example.invalid/list.m3u";
+void add_playlist_source(const std::string &data_dir);
 struct RequestRecord
 {
     std::string url, cookie, authorization;

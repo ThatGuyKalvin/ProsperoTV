@@ -26,8 +26,9 @@ namespace ptv
 namespace
 {
 
-constexpr char kCatalogUrl[] = "https://iptv-org.github.io/iptv/index.m3u";
-constexpr std::uint64_t kBuiltInSourceId = UINT64_C(0x495054562d4f5247);
+// The first source slot once held a third-party list; it is now the place of
+// no source at all, kept so the numbers of the others and their saved data stay.
+constexpr std::uint64_t kBuiltInSourceId = UINT64_C(0x4e4f4e45);
 constexpr std::size_t kCatalogThreadStackBytes = 4u * 1024u * 1024u;
 // An address that is not a playlist can send anything for as long as it likes:
 // this much with not one channel in it, and the download is given up.
@@ -56,7 +57,7 @@ const char *source_name(iptv::SourceKind source)
     case iptv::SourceKind::BuiltIn:
         break;
     }
-    return tr("the iptv-org catalog");
+    return tr("no source");
 }
 
 bool valid_credential(const char *value)
@@ -224,11 +225,6 @@ std::uint64_t Model::source_id(iptv::SourceKind source) const
     return kBuiltInSourceId;
 }
 
-const char *Model::builtin_url()
-{
-    return kCatalogUrl;
-}
-
 const char *Model::group_name(Group group)
 {
     static constexpr const char *names[kGroupCount] = {
@@ -257,7 +253,7 @@ bool Model::is_set_up(iptv::SourceKind source) const
     case iptv::SourceKind::BuiltIn:
         break;
     }
-    return true;
+    return false;
 }
 
 void Model::set_status(std::string label, Level level)
@@ -364,6 +360,12 @@ bool Model::open()
 
     keyboard_ready_ = iptv_ime_init();
 
+    if (!is_set_up(active_source_))
+    {
+        set_status(tr("No source"), Level::ready);
+        set_source_text(tr("No channels yet"), tr("Add a playlist or account on the Sources tab."));
+        return true;
+    }
     const bool fresh = !refresh_needed();
     if (catalog_loaded_)
     {
@@ -481,7 +483,8 @@ void Model::load_cache()
     const iptv::StoreStatus status =
         iptv::LoadCatalog(cache_path(active_source_), &cached, {}, &report);
     catalog_loaded_ = status == iptv::StoreStatus::ok && report.catalog_version >= 5 &&
-                      cached.source_id == wanted && !cached.empty();
+                      cached.source_id == wanted && !cached.empty() &&
+                      active_source_ != iptv::SourceKind::BuiltIn;
     playlist_cache_needs_refresh_ =
         catalog_loaded_ && active_source_ == iptv::SourceKind::Custom && report.catalog_version < 6;
     catalog_ = catalog_loaded_ ? std::move(cached) : iptv::Catalog{};
@@ -1160,11 +1163,7 @@ void Model::edit_source(iptv::SourceKind source)
     if (!require_parent() || iptv_ime_busy())
         return;
     if (source == iptv::SourceKind::BuiltIn)
-    {
-        notify(Level::ready, tr("The iptv-org catalog is built in"),
-               tr("It has nothing to set up."));
         return;
-    }
     if (refresh_thread_ != nullptr)
     {
         notify(Level::warning, tr("An update is running"),
@@ -1395,7 +1394,7 @@ void Model::refresh()
     refresh_saved_source_id_ = selected_source_id_;
     refresh_http_ =
         saved_source(selected_source_id_) ? *saved_source(selected_source_id_) : SavedSource{};
-    refresh_url_ = custom ? custom_url_ : account ? std::string() : std::string(kCatalogUrl);
+    refresh_url_ = custom ? custom_url_ : std::string();
     refresh_cache_path_ = cache_path(active_source_);
     refresh_source_id_ = source_id(active_source_);
     refresh_account_ = account ? xtream_ : iptv::XtreamCredentials{};

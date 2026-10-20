@@ -14,11 +14,9 @@ and reliability.
 
 ProsperoTV builds on and acknowledges:
 
-- [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
+- [PS5 Native App Boilerplate](https://github.com/LedyBacer/ps5-native-app-boilerplate),
   [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk), and
   [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo).
-- [iptv-org/iptv](https://github.com/iptv-org/iptv) for the public channel
-  catalog and metadata.
 - [ProsperoRadio](https://github.com/blackbearreloaded/ProsperoRadio) as the
   primary native application and user-experience reference.
 - [IPTVnator](https://github.com/4gray/iptvnator) and
@@ -87,14 +85,14 @@ in `.deps/ffmpeg-8.0.1/`; no proprietary decoder is redistributed.
 
 The interface in `opengl-ui/` is not part of a release yet. Its build adds:
 
-- [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui)
+- [ps5-homebrew-ui](https://github.com/LedyBacer/ps5-homebrew-ui)
   (GPL-3.0-or-later) and the
-  [ps5-opengl](https://github.com/blackbearreloaded/ps5-opengl) SDK it draws
+  [ps5-opengl](https://github.com/LedyBacer/ps5-opengl) SDK it draws
   with, both fetched at pinned versions when it is built; nothing of either is
   kept in this repository.
 - [PS5-Lapy-JB-Daemon](https://github.com/ArkSama/PS5-Lapy-JB-Daemon), created
   by ArkSama, MIT. The build fetches the cooperative owned-root helper from
-  [a mirror of BlackBearReloaded's fork](https://github.com/Phononenom/PS5-Lapy-JB-Daemon-bbr) at
+  [LedyBacer's copy of BlackBearReloaded's fork](https://github.com/LedyBacer/PS5-Lapy-JB-Daemon) at
   commit `57fcc19b7f57e46c823d6f2a6c6233ebf3288079`, builds it unmodified for
   the app's title with the PS5 Payload SDK v0.42, and
   packages it as `lapy.elf` with `licenses/Lapy-MIT.txt`. The client that

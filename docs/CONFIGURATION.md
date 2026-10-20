@@ -142,9 +142,9 @@ temporary file and rename it into place to avoid partial writes. Provide an
 application-level export/import mechanism for important data because retention
 after title deletion or cache-management actions is not guaranteed.
 
-ProsperoTV offers three channel sources from its Sources screen:
+ProsperoTV includes no third-party channel list; every channel comes from a
+source added on its Sources screen:
 
-- The built-in iptv-org M3U catalog.
 - One custom HTTP(S) M3U or M3U8 URL.
 - One user-supplied Xtream Codes account, entered as a server base URL,
   username, and password. The native PS5 keyboard masks password entry.

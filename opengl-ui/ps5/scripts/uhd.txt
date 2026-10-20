@@ -1,6 +1,6 @@
 # The 4K channels through the drawer's Picture size: the first three, each
 # played for 25 s; a refusal's notice is closed with Circle before the next.
-# (the built-in list names no countries or languages: those rows are passed over)
+# (with a list that names no countries or languages, those rows are passed over)
 wait 2
 until catalog 420
 wait 2

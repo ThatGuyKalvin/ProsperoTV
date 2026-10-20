@@ -35,6 +35,7 @@ TEST(ChannelNumbers, NumberPadPlaysUniqueVisibleChannelAndRejectsAmbiguousOrHidd
            "#EXTINF:-1 tvg-chno=\"8\" group-title=\"Sport\",Delta\nhttps://provider.invalid/4.ts\n"
            "#EXTINF:-1 group-title=\"Sport\",Fallback\nhttps://provider.invalid/5.ts\n";
     host::set_network(true, dir + "/list.m3u");
+    host::add_playlist_source(dir);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
     for (int i = 0; i < 1000 && (!model.has_catalog() || model.refreshing()); ++i)
@@ -120,6 +121,7 @@ TEST(ChannelOrganization, NamesHiddenChannelsAndIndependentOrdersSurviveRestart)
            "#EXTINF:-1 tvg-id=\"b\" tvg-chno=\"2\",Beta\nhttps://provider.invalid/2.ts\n"
            "#EXTINF:-1 tvg-id=\"c\" tvg-chno=\"3\",Gamma\nhttps://provider.invalid/3.ts\n";
     host::set_network(true, dir + "/list.m3u");
+    host::add_playlist_source(dir);
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
     for (int i = 0; i < 1000 && (!model.has_catalog() || model.refreshing()); ++i)

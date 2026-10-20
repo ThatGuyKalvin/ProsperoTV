@@ -30,6 +30,7 @@ class RemoteBrowseTest : public ::testing::Test
             << R"(<tv><programme channel="id80" start="20261008160000 +0000" stop="20261008170000 +0000"><title>Football match</title></programme><programme channel="id80" start="20261008170000 +0000" stop="20261008180000 +0000"><title>News</title></programme></tv>)";
         host::set_unix_time(ptv::xmltv_time("20261008163000 +0000"));
         host::set_network(true, dir + "/list.m3u");
+        host::add_playlist_source(dir);
         host::set_network_response("https://guide.invalid/list.xml", dir + "/guide.xml");
     }
     void TearDown() override

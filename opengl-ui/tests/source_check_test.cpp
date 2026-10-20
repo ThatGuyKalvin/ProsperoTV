@@ -226,6 +226,7 @@ TEST_F(CheckStoreTest, ModelChecksRespectPolicyAndCancelBeforeAnotherResourceOwn
            "group-title=\"Private\",Hidden\nhttps://test.invalid/1.ts\n#EXTINF:-1 "
            "group-title=\"General\",Visible\nhttps://test.invalid/2.ts\n";
     host::set_network(true, dir + "/list.m3u");
+    host::add_playlist_source(dir);
     Model model(dir);
     ASSERT_TRUE(model.open());
     for (unsigned i = 0; i < 1000 && model.refreshing(); ++i)
@@ -318,6 +319,7 @@ TEST_F(CheckStoreTest, InvisibleChecksDoNotSpendViewingQuotaButVisiblePreviewsDo
         << "#EXTM3U\n#EXTINF:-1 group-title=\"Kids\",Cartoon\nhttps://test.invalid/kids.ts\n"
            "#EXTINF:-1 group-title=\"Adult\",Restricted\nhttps://test.invalid/adult.ts\n";
     host::set_network(true, dir + "/list.m3u");
+    host::add_playlist_source(dir);
     Model model(dir);
     struct Cleanup
     {

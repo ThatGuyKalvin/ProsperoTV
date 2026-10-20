@@ -79,6 +79,7 @@ class ModelTest : public ::testing::Test
         playlist_ = dir_ + "/playlist.m3u";
         std::ofstream(playlist_) << kPlaylist;
         host::set_network(true, playlist_);
+        host::add_playlist_source(dir_);
     }
 
     void TearDown() override
@@ -155,6 +156,7 @@ TEST_F(ModelTest, SaysWhichScriptsAListIsWrittenIn)
         fs::remove_all(dir_ + "/cache");
         ptv::Model model(dir_ + "/second");
         fs::create_directories(dir_ + "/second");
+        host::add_playlist_source(dir_ + "/second");
         load(model);
         EXPECT_TRUE(model.uses_east_asian());
         EXPECT_FALSE(model.uses_korean());
@@ -165,6 +167,7 @@ TEST_F(ModelTest, SaysWhichScriptsAListIsWrittenIn)
     {
         ptv::Model model(dir_ + "/third");
         fs::create_directories(dir_ + "/third");
+        host::add_playlist_source(dir_ + "/third");
         load(model);
         EXPECT_TRUE(model.uses_east_asian());
         EXPECT_TRUE(model.uses_korean());
@@ -178,16 +181,16 @@ TEST_F(ModelTest, FirstOpenDownloadsSavesAndSaysSo)
     EXPECT_FALSE(model.has_catalog());
     EXPECT_TRUE(model.refreshing());
     EXPECT_EQ(model.level(), ptv::Level::busy);
-    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::refreshing);
+    EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::refreshing);
 
     ASSERT_TRUE(settle(model));
     EXPECT_TRUE(model.has_catalog());
     EXPECT_EQ(model.channel_count(), 12u);
     EXPECT_EQ(model.visible_count(), 12u);
     EXPECT_EQ(model.level(), ptv::Level::ready);
-    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::ready);
+    EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::ready);
     EXPECT_FALSE(model.catalog_failed());
-    EXPECT_TRUE(fs::exists(dir_ + "/prosperotv-catalog.sqlite3"));
+    EXPECT_TRUE(fs::exists(dir_ + "/prosperotv-custom-catalog.sqlite3"));
     const std::vector<ptv::Notice> notices = model.take_notices();
     ASSERT_EQ(notices.size(), 1u);
     EXPECT_EQ(notices[0].title, "Channel list updated");
@@ -211,7 +214,7 @@ TEST_F(ModelTest, AFreshSavedCopyIsNotDownloadedAgain)
     EXPECT_EQ(model.channel_count(), 12u);
     EXPECT_FALSE(model.refreshing());
     EXPECT_EQ(host::fetch_count(), before);
-    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::cached);
+    EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::cached);
     model.close();
 }
 
@@ -228,7 +231,7 @@ TEST_F(ModelTest, AnOldSavedCopyShowsAtOnceAndIsDownloadedAgain)
     EXPECT_TRUE(model.has_catalog());
     EXPECT_TRUE(model.refreshing());
     ASSERT_TRUE(settle(model));
-    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::ready);
+    EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::ready);
     model.close();
 }
 
@@ -247,7 +250,7 @@ TEST_F(ModelTest, OfflineWithASavedCopyKeepsBrowsing)
     EXPECT_TRUE(model.has_catalog());
     EXPECT_FALSE(model.catalog_failed());
     EXPECT_EQ(model.level(), ptv::Level::warning);
-    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::stale);
+    EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::stale);
     const std::vector<ptv::Notice> notices = model.take_notices();
     ASSERT_EQ(notices.size(), 1u);
     EXPECT_EQ(notices[0].level, ptv::Level::warning);
@@ -264,7 +267,7 @@ TEST_F(ModelTest, OfflineWithNothingSavedSaysWhyAndCanRetry)
     EXPECT_TRUE(model.catalog_failed());
     EXPECT_FALSE(model.catalog_error().empty());
     EXPECT_EQ(model.level(), ptv::Level::error);
-    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::error);
+    EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::error);
 
     host::set_network(true, playlist_);
     model.refresh();
@@ -426,8 +429,17 @@ TEST_F(ModelTest, AChannelThatFailedCanBeTriedAgain)
 
 TEST_F(ModelTest, APlaylistAddressIsTypedSavedAndUsed)
 {
-    ptv::Model model(dir_);
-    load(model);
+    // A console with no source yet: no list of its own is downloaded.
+    const std::string fresh = dir_ + "/fresh";
+    fs::create_directories(fresh);
+    ptv::Model model(fresh);
+    ASSERT_TRUE(model.open());
+    EXPECT_FALSE(model.refreshing());
+    EXPECT_FALSE(model.has_catalog());
+    EXPECT_EQ(host::fetch_count(), 0);
+    EXPECT_EQ(model.active_source(), iptv::SourceKind::BuiltIn);
+    EXPECT_FALSE(model.is_set_up(iptv::SourceKind::BuiltIn));
+    model.take_notices();
     EXPECT_FALSE(model.is_set_up(iptv::SourceKind::Custom));
     EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::empty);
 
@@ -452,15 +464,65 @@ TEST_F(ModelTest, APlaylistAddressIsTypedSavedAndUsed)
     ASSERT_TRUE(settle(model));
     EXPECT_TRUE(model.has_catalog());
     EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::ready);
-    EXPECT_TRUE(fs::exists(dir_ + "/prosperotv-custom-catalog.sqlite3"));
+    EXPECT_TRUE(fs::exists(fresh + "/prosperotv-custom-catalog.sqlite3"));
     model.close();
 
     // The next launch starts on that source.
-    ptv::Model again(dir_);
+    ptv::Model again(fresh);
     ASSERT_TRUE(again.open());
     EXPECT_EQ(again.active_source(), iptv::SourceKind::Custom);
     EXPECT_TRUE(again.has_catalog());
     again.close();
+}
+
+TEST_F(ModelTest, AnEarlierChoiceOfTheThirdPartyListGivesWayToASourceSetUp)
+{
+    // As an earlier version left it: the third-party list's address in the
+    // first slot, and that slot chosen.
+    const auto earlier = [](const std::string &dir)
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource old;
+        old.id = 1;
+        old.kind = 0;
+        old.name = "Public catalog";
+        old.url = "https://catalog.example.invalid/index.m3u";
+        ASSERT_TRUE(library.save_source(&old));
+        ASSERT_TRUE(library.select_source(1));
+    };
+    earlier(dir_);
+    {
+        ptv::Model model(dir_);
+        load(model);
+        EXPECT_EQ(model.active_source(), iptv::SourceKind::Custom);
+        EXPECT_EQ(model.selected_source_id(), 2);
+        ASSERT_NE(model.saved_source(1), nullptr);
+        EXPECT_TRUE(model.saved_source(1)->url.empty());
+        std::string phone;
+        ASSERT_EQ(model.remote_sources("", phone), 200);
+        EXPECT_EQ(phone.find("{\"id\":1,"), std::string::npos);
+        EXPECT_EQ(phone.find("catalog.example.invalid"), std::string::npos);
+        for (const auto &request : host::requests())
+            EXPECT_EQ(request.url, host::kPlaylistUrl);
+        model.close();
+    }
+
+    // With nothing else set up there is nothing to download.
+    const std::string bare = dir_ + "/bare";
+    fs::create_directories(bare);
+    earlier(bare);
+    const int fetches = host::fetch_count();
+    ptv::Model model(bare);
+    ASSERT_TRUE(model.open());
+    EXPECT_FALSE(model.refreshing());
+    EXPECT_FALSE(model.has_catalog());
+    EXPECT_EQ(host::fetch_count(), fetches);
+    EXPECT_FALSE(model.is_set_up(model.active_source()));
+    model.use_saved_source(1);
+    EXPECT_FALSE(model.refreshing());
+    EXPECT_EQ(host::fetch_count(), fetches);
+    model.close();
 }
 
 TEST_F(ModelTest, TheAccountFormAsksThreeThings)
@@ -515,7 +577,7 @@ TEST_F(ModelTest, ClosingStopsADownloadInProgress)
     EXPECT_FALSE(model.refreshing());
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(took).count(), 1500);
     EXPECT_FALSE(model.has_catalog());
-    EXPECT_NE(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::refreshing);
+    EXPECT_NE(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::refreshing);
 
     // And the next session starts it again.
     host::set_network(true, playlist_, 0);
@@ -561,7 +623,7 @@ TEST_F(ModelTest, AListOfMoreThanAHundredThousandChannelsIsBrowsedLikeAnyOther)
         EXPECT_LE(most, kChannels);
         EXPECT_EQ(model.refresh_progress(), 0u);
         EXPECT_EQ(host::delivered_bytes(), file_bytes);
-        EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::ready);
+        EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::ready);
         const std::vector<ptv::Notice> notices = model.take_notices();
         ASSERT_EQ(notices.size(), 1u);
         EXPECT_EQ(notices[0].body, "120,000 channels");
@@ -668,7 +730,7 @@ TEST_F(ModelTest, ASourceWithMoreChannelsThanTheAppHoldsKeepsItsFirstOnesAndSays
     ASSERT_TRUE(settle_large(model));
     ASSERT_TRUE(model.has_catalog());
     EXPECT_EQ(model.channel_count(), held);
-    EXPECT_EQ(model.health(iptv::SourceKind::BuiltIn), ptv::SourceHealth::ready);
+    EXPECT_EQ(model.health(iptv::SourceKind::Custom), ptv::SourceHealth::ready);
     // The download stopped where the catalog was full.
     EXPECT_LT(host::delivered_bytes(), fs::file_size(playlist_));
     const std::vector<ptv::Notice> notices = model.take_notices();

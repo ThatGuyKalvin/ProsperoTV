@@ -26,7 +26,7 @@ The app does not change console settings or use firmware-specific offsets.
 Diagnostics report decoded PCM channels, opened output-port channels and the
 number of stereo fallbacks separately.
 
-The output contract follows [ProsperoLight's 5.1 AudioOut path](https://github.com/blackbearreloaded/ProsperoLight/blob/143561ae04f38b8887cf2ae2ff59d37c0b21a17a/src/moonlight_stream.cpp)
+The output contract follows [ProsperoLight's 5.1 AudioOut path](https://github.com/LedyBacer/ProsperoLight/blob/143561ae04f38b8887cf2ae2ff59d37c0b21a17a/src/moonlight_stream.cpp)
 and [EVO Player's PCM output](https://github.com/sainsaji/EVO-PLAYER-PS5/blob/9ee9a5420c73b5be448610e5f0a90a29a75592f3/projects/evoplayer/core/src/services/PlaybackController.cpp).
 Their private bitstream/HDMI-route mechanisms are not used.
 

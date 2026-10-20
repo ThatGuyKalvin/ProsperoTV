@@ -40,7 +40,7 @@ wait 1
 query -
 wait 1
 # ---- the drawer: Picture size 4K, then show the channels ----
-# (the built-in list names no countries or languages: those rows are passed over)
+# (with a list that names no countries or languages, those rows are passed over)
 press triangle
 wait 1
 press down 2

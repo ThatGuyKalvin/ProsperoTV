@@ -69,7 +69,7 @@ def fetch_lapy():
     try:
         subprocess.run(["git", "init", "-q"], cwd=staging, check=True)
         subprocess.run(["git", "remote", "add", "origin",
-                        "https://github.com/Phononenom/PS5-Lapy-JB-Daemon-bbr.git"],
+                        "https://github.com/LedyBacer/PS5-Lapy-JB-Daemon.git"],
                        cwd=staging, check=True)
         subprocess.run(["git", "fetch", "-q", "--depth", "1", "origin", LAPY_COMMIT],
                        cwd=staging, check=True)

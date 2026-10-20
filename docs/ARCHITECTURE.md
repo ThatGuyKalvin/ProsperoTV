@@ -3,7 +3,7 @@
 ## Project lineage and identity
 
 ProsperoTV is a native PS5 application built from
-[ps5-native-app-boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate).
+[ps5-native-app-boilerplate](https://github.com/LedyBacer/ps5-native-app-boilerplate).
 It adopts the application organization and lifecycle practices proven in
 [PSRadio](https://github.com/blackbearreloaded/ps5-radio), especially the
 native SDL/RmlUi shell, controller input, asynchronous network refresh,
@@ -25,7 +25,7 @@ the native 4K presentation path.
 ## Component flow
 
 ```text
-iptv-org index.m3u or custom M3U
+     custom M3U playlist
               |
               v
       HTTP fetch + redirects
@@ -61,9 +61,8 @@ Profile 0 coded blocks directly to the native packet/Videodec2 boundary.
 
 ## Catalog and persistence
 
-The built-in source is
-`https://iptv-org.github.io/iptv/index.m3u`, published by
-[iptv-org/iptv](https://github.com/iptv-org/iptv). The parser retains channel
+ProsperoTV includes no third-party channel list: every catalog comes from a
+source the user adds. The parser retains channel
 identity, name, URL, logo URL, group, country, language, alternate URLs and
 groups, and `#EXTVLCOPT` user-agent/referrer values. Duplicate records are
 merged within bounded limits.
@@ -101,11 +100,10 @@ Startup is cache-first:
 5. Keep the previous valid cache if download, parse, validation, or promotion
    fails.
 
-The built-in and custom caches are deliberately separate:
+Each source has its own cache:
 
 | Source | Cache |
 | --- | --- |
-| iptv-org | `/download0/prosperotv-catalog.sqlite3` |
 | Custom M3U/M3U8 | `/download0/prosperotv-custom-catalog.sqlite3` |
 
 The schema has metadata, channels, alternate URL, and alternate group tables.

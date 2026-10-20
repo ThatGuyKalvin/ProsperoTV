@@ -50,7 +50,7 @@ void Model::load_library()
     sources_ = library_.sources();
     // Import without altering any original credentials or catalog files.
     const SavedSource originals[] = {
-        {1, 0, "iptv-org public catalog", builtin_url(), {}, {}, {}, RefreshSchedule::daily},
+        {1, 0, "No source", {}, {}, {}, {}, RefreshSchedule::daily},
         {2, 1, "Custom playlist", custom_url_, {}, {}, {}, RefreshSchedule::daily},
         {3,
          2,
@@ -64,6 +64,13 @@ void Model::load_library()
     for (SavedSource source : originals)
         if (saved_source(source.id) == nullptr && !library_.save_source(&source))
             notify(Level::warning, tr("A source could not be imported"));
+    // An earlier version kept the third-party list's address in the first slot.
+    if (const auto *first = saved_source(1);
+        first != nullptr && first->kind == 0 && !first->url.empty())
+    {
+        SavedSource none = originals[0];
+        (void)library_.save_source(&none);
+    }
     sources_ = library_.sources();
     const auto saved = library_.selected_source();
     if (saved != 0 && saved_source(saved) != nullptr && saved_source(saved)->kind <= 5)
@@ -72,6 +79,16 @@ void Model::load_library()
     if (settings.resume_last && last.first != 0 && saved_source(last.first) != nullptr &&
         saved_source(last.first)->kind <= 5)
         selected_source_id_ = last.first;
+    // With no source chosen, or the third-party list an earlier version chose,
+    // the first source set up is used instead.
+    if (const auto *chosen = saved_source(selected_source_id_);
+        chosen == nullptr || chosen->kind == 0)
+        for (const auto &source : sources_)
+            if (source.kind >= 1 && source.kind <= 5 && !source.url.empty())
+            {
+                selected_source_id_ = source.id;
+                break;
+            }
     if (const auto *source = saved_source(selected_source_id_))
         select_source_record(*source);
     else
@@ -282,9 +299,9 @@ void Model::use_saved_source(std::int64_t id)
         return;
     }
     const auto *source = saved_source(id);
-    if (source == nullptr || source->kind > 5)
+    if (source == nullptr || source->kind == 0 || source->kind > 5)
         return;
-    if (source->kind != 0 && source->url.empty())
+    if (source->url.empty())
     {
         edit_saved_source(id);
         return;

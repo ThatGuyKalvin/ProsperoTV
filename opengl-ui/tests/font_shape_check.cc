@@ -139,7 +139,7 @@ int main(int argc, char **argv)
                 "numeric URL fingerprint glyph order remains LTR");
         require(std::memcmp(a.extra, b.extra, sizeof(a.extra)) == 0, "glyph UVs never mirror");
     }
-    // The public catalogue's category row must stay warm while channel tiles change.
+    // A large catalogue's category row must stay warm while channel tiles change.
     std::vector<std::string> categories;
     std::vector<float> widths;
     for (unsigned i = 0; i < 200; ++i)

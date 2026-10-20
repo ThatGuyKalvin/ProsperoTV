@@ -136,7 +136,7 @@ const char *source_label(iptv::SourceKind source)
     case iptv::SourceKind::BuiltIn:
         break;
     }
-    return tr("iptv-org public list");
+    return tr("No source");
 }
 
 } // namespace
@@ -716,6 +716,9 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             break;
         case BrowseScreen::Result::go_live:
             show_tab(kLive, true);
+            break;
+        case BrowseScreen::Result::sources:
+            show_tab(kSources, true);
             break;
         default:
             break;
@@ -1355,14 +1358,6 @@ void App::draw_about(ui::Canvas &canvas) const
               "License, version 3 or later."),
            clear_x, clear_bottom, 23.0f);
     rule();
-    kicker(tr("CHANNEL LIST"));
-    words(
-        tr("The built-in list is the public playlist of the iptv-org community project. All credit "
-           "for it goes to its maintainers."),
-        theme.text, 2);
-    ui::text(list, fonts.semibold, "github.com/iptv-org/iptv", x, y, 22.0f, tone::accent);
-    y += 31.0f;
-    rule();
     kicker(tr("THANKS"));
     words(tr("Thanks to JMUtechnologies for testing and feedback, as well as Bastian-R-dotcom, to "
              "the whole PS5 homebrew community, and to every developer whose tools and libraries "
@@ -1393,7 +1388,6 @@ void App::draw_about(ui::Canvas &canvas) const
                  column, y, 22.0f, theme.text);
         y += 46.0f;
     };
-    way(tr("BUILT IN"), tr("The iptv-org list, ready at the first launch"));
     way(tr("PLAYLIST"), tr("Any M3U playlist, by its web address"));
     way(tr("ACCOUNT"), tr("An Xtream Codes account from your provider"));
     y -= 6.0f;
