@@ -41,6 +41,8 @@ class BrowseScreen
     Result handle(const InputFrame &input, ui::Feedback &feedback);
     // One step back inside the screen. False when there is nowhere to go.
     bool back(ui::Feedback &feedback);
+    // Up here goes to the tab bar.
+    bool at_top() const;
     void update(float dt);
     void draw(ui::Canvas &canvas) const;
     int hints(ui::Hint *out, int capacity) const;

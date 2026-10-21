@@ -185,7 +185,7 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     tabs_.style.padding = 10.0f;
     tabs_.style.gap = 14.0f;
     tabs_.style.track = false;
-    tabs_.style.focus_ring = false;
+    tabs_.style.focus_ring = true;
     tabs_.style.on_page = true;
     tabs_.set_tabs({{tr("Home")},
                     {tr("Live TV")},
@@ -194,7 +194,7 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
                     {tr("Sources")},
                     {tr("Settings")},
                     {tr("About")}});
-    tabs_.set_bounds({450.0f, kHeaderY - 28.0f, 1300.0f, 56.0f});
+    tabs_.set_bounds({514.0f, kHeaderY - 28.0f, 1300.0f, 56.0f});
     tabs_.set_focused(false);
     tabs_.set_active(std::clamp(model.view.tab, 0, kTabCount - 1), true);
 
@@ -307,6 +307,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.set_bounds(kSettingsPanel.inset(22.0f));
     // The viewer's switch; a debug build or a scripted run keeps its own.
     diag::set_enabled(settings.diagnostics);
+    form_.set_focus(0);
+    form_top_ = form_.focus();
     form_.focus_row(kRowMotion);
 
     failure_.style.theme = theme;
@@ -530,6 +532,81 @@ void App::tab_changed()
     }
 }
 
+bool App::screen_at_top() const
+{
+    switch (tabs_.active())
+    {
+    case kHome:
+        return home_.at_top();
+    case kLive:
+    case kFavorites:
+        return browse_.at_top();
+    case kVod:
+        return vod_.at_top();
+    case kSources:
+        return sources_.at_top();
+    case kSettings:
+        return form_.focus() <= form_top_;
+    default:
+        return true;
+    }
+}
+
+void App::focus_tabs(bool focused, ui::Feedback &feedback)
+{
+    tabs_focused_ = focused;
+    search_focused_ = false;
+    tabs_.set_focused(focused);
+    feedback.play(audio::Cue::focus, focused ? 1.03f : 0.97f);
+}
+
+void App::open_search(ui::Feedback &feedback)
+{
+    focus_tabs(false, feedback);
+    search_.open(feedback);
+}
+
+// The TV remote has no L1, R1 or Triangle: arrows reach the tabs and search.
+void App::handle_tabs(const InputFrame &input, ui::Feedback &feedback)
+{
+    if (search_focused_)
+    {
+        if (input.is_pressed(Action::confirm))
+            open_search(feedback);
+        else if (input.nav == Direction::right)
+        {
+            search_focused_ = false;
+            tabs_.set_focused(true);
+            feedback.play(audio::Cue::focus);
+        }
+        else if (input.nav == Direction::down || input.is_pressed(Action::back))
+            focus_tabs(false, feedback);
+        else if (input.nav == Direction::left && !input.nav_repeat)
+            feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+        return;
+    }
+    if (input.nav == Direction::left && tabs_.active() == kHome)
+    {
+        if (!input.nav_repeat)
+        {
+            search_focused_ = true;
+            tabs_.set_focused(false);
+            feedback.play(audio::Cue::focus);
+        }
+        return;
+    }
+    if (input.nav == Direction::left || input.nav == Direction::right)
+    {
+        shared_.model.cancel_home_play();
+        if (tabs_.handle(input, feedback) == ui::Event::changed)
+            tab_changed();
+        return;
+    }
+    if (input.nav == Direction::down || input.is_pressed(Action::confirm) ||
+        input.is_pressed(Action::back))
+        focus_tabs(false, feedback);
+}
+
 void App::refresh(ui::Feedback &feedback)
 {
     if (tabs_.active() == kVod)
@@ -676,6 +753,23 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         refresh(feedback);
         return;
     }
+    if (multiview_.choosing())
+    {
+        tabs_focused_ = search_focused_ = false; // choosing keeps to Live TV and Favorites
+        tabs_.set_focused(false);
+    }
+    if (tabs_focused_)
+    {
+        handle_tabs(input, feedback);
+        return;
+    }
+    // A fresh Up at the top of a screen goes to the tab bar; a held one stops there.
+    if (input.nav == Direction::up && !input.nav_repeat && !multiview_.choosing() &&
+        screen_at_top())
+    {
+        focus_tabs(true, feedback);
+        return;
+    }
     if (input.is_pressed(Action::back))
     {
         if (model.cancel_home_play())
@@ -703,6 +797,8 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
             feedback.play(audio::Cue::back);
             show_tab(kLive, true);
         }
+        else if (!multiview_.choosing())
+            focus_tabs(true, feedback);
         return;
     }
 
@@ -1128,6 +1224,8 @@ void App::step(const InputFrame &physical, float dt, ui::Feedback &feedback)
     follow_channel(dt);
 
     tabs_.update(dt);
+    search_focus_.target = search_focused_ ? 1.0f : 0.0f;
+    search_focus_.update(dt, 18.0f);
     browse_.update(dt);
     const bool preview_allowed =
         !sleeping_ && !multiview_.active() && browsing() && shared_.settings.live_preview &&
@@ -1238,8 +1336,14 @@ void App::draw_header(ui::Canvas &canvas) const
     const ui::GlyphStyle glyphs = ui::GlyphStyle::dark();
     const Rect first = tabs_.tab_rect(fonts, 0);
     const Rect last = tabs_.tab_rect(fonts, kTabCount - 1);
+    const Rect lens{first.x - 62.0f, kHeaderY - 22.0f, 44.0f, 44.0f};
+    ui::Painter paint(list, fonts, shared_.theme, canvas.glass);
+    paint.focus_ring(lens, lens.h * 0.5f, search_focus_.value);
+    const gfx::Color ink = search_focused_ ? shared_.theme.text : shared_.theme.text_muted;
+    list.ring(lens.cx() - 3.0f, lens.cy() - 3.0f, 9.0f, 2.5f, ink);
+    list.line(lens.cx() + 4.0f, lens.cy() + 4.0f, lens.cx() + 11.0f, lens.cy() + 11.0f, 3.0f, ink);
     const float l1 = ui::button_width(ui::Button::l1, 34.0f);
-    ui::draw_button(list, fonts, glyphs, ui::Button::l1, first.x - l1 - 20.0f, kHeaderY, 34.0f);
+    ui::draw_button(list, fonts, glyphs, ui::Button::l1, lens.x - l1 - 16.0f, kHeaderY, 34.0f);
     ui::draw_button(list, fonts, glyphs, ui::Button::r1, last.x + last.w + 20.0f, kHeaderY, 34.0f);
     draw_status(canvas);
 }
@@ -1502,42 +1606,53 @@ void App::draw_hints(ui::Canvas &canvas) const
 {
     ui::Hint hints[9];
     int count = 0;
-    switch (tabs_.active())
+    if (search_focused_)
+        hints[count++] = {ui::Button::cross, tr("Search")};
+    else if (tabs_focused_)
     {
-    case kHome:
-        hints[count++] = {ui::Button::cross, tr("Watch")};
-        hints[count++] = {ui::Button::triangle, tr("Search")};
-        hints[count++] = {ui::Button::dpad, tr("Choose")};
-        break;
-    case kLive:
-    case kFavorites:
-        count = browse_.hints(hints, 5);
-        hints[count++] = {ui::Button::touchpad,
-                          tabs_.active() == kFavorites ? tr("Folders") : tr("Categories")};
-        hints[count++] = {ui::Button::left_stick, multiview_.pinned()
-                                                      ? tr("Close picture in picture")
-                                                  : multiview_.choosing() ? tr("Back to multiview")
-                                                                          : tr("Multiview")};
-        break;
-    case kSources:
-        count = sources_.hints(hints, 6);
-        break;
-    case kVod:
-        count = vod_.hints(hints, 7);
-        break;
-    case kSettings:
-        if (form_.uses_horizontal())
-            hints[count++] = {ui::Button::dpad, tr("Change")};
-        else
-            hints[count++] = {ui::Button::cross, tr("Choose")};
-        break;
-    default:
-        break;
+        hints[count++] = {ui::Button::dpad, tr("Switch tab")};
+        hints[count++] = {ui::Button::cross, tr("Open")};
     }
-    const bool source_picker = tabs_.active() == kSources && sources_.choosing_user_agent();
-    if (!source_picker && tabs_.active() < kSettings && tabs_.active() != kVod)
+    else
+    {
+        switch (tabs_.active())
+        {
+        case kHome:
+            hints[count++] = {ui::Button::cross, tr("Watch")};
+            hints[count++] = {ui::Button::triangle, tr("Search")};
+            hints[count++] = {ui::Button::dpad, tr("Choose")};
+            break;
+        case kLive:
+        case kFavorites:
+            count = browse_.hints(hints, 5);
+            hints[count++] = {ui::Button::touchpad,
+                              tabs_.active() == kFavorites ? tr("Folders") : tr("Categories")};
+            hints[count++] = {ui::Button::left_stick,
+                              multiview_.pinned()     ? tr("Close picture in picture")
+                              : multiview_.choosing() ? tr("Back to multiview")
+                                                      : tr("Multiview")};
+            break;
+        case kSources:
+            count = sources_.hints(hints, 6);
+            break;
+        case kVod:
+            count = vod_.hints(hints, 7);
+            break;
+        case kSettings:
+            if (form_.uses_horizontal())
+                hints[count++] = {ui::Button::dpad, tr("Change")};
+            else
+                hints[count++] = {ui::Button::cross, tr("Choose")};
+            break;
+        default:
+            break;
+        }
+    }
+    const bool own_hints =
+        tabs_focused_ || (tabs_.active() == kSources && sources_.choosing_user_agent());
+    if (!own_hints && tabs_.active() < kSettings && tabs_.active() != kVod)
         hints[count++] = {ui::Button::options, tr("Update")};
-    if (!source_picker && tabs_.active() != kLive && tabs_.active() != kVod &&
+    if (!own_hints && tabs_.active() != kLive && tabs_.active() != kVod &&
         !(browsing() && shared_.model.filtering()))
         hints[count++] = {ui::Button::circle, tr("Live TV")};
     ui::HintLayout layout;

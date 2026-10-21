@@ -890,12 +890,12 @@ TEST_F(ModelTest, PlaybackListBrowsesWithoutTuningAndBackClosesItFirst)
     ASSERT_TRUE(model.play(model.visible(0)));
     ASSERT_TRUE(model.take_play_request(&request));
     ptv::PlaybackOsd controls(model, request);
-    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 1), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 1), 1); // next page, nine rows
     EXPECT_FALSE(controls.selected_channel());
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 1), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 1), 0); // player handles Back
-    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 1), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 2);
     EXPECT_EQ(controls.selected_channel(), model.visible(9));
     request.record_channel_result = false; // VOD/catch-up must not zap to live.
@@ -930,12 +930,16 @@ TEST_F(ModelTest, LiveReplayKeepsPausedBannerAndPreservesMenuNavigation)
     state.expired = 1;
     controls.set_live_state(state);
     EXPECT_TRUE(draw(18000001));
-    for (const auto key :
-         {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_GO_LIVE, IPTV_INPUT_LEFT, IPTV_INPUT_RIGHT})
-        EXPECT_EQ(controls.input(key, 18000001), 0); // Player owns replay outside menus.
+    // Player owns replay outside menus; Cross is its pause there.
+    for (const auto key : {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_CROSS, IPTV_INPUT_GO_LIVE,
+                           IPTV_INPUT_LEFT, IPTV_INPUT_RIGHT})
+        EXPECT_EQ(controls.input(key, 18000001), 0);
     EXPECT_FALSE(controls.selected_channel());
-    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 18000002), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 18000002), 1);    // The channel list.
     EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 18000003), 1); // Page the channel list.
+    EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 18000003), 0); // Play still pauses.
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 18000004), 1);         // L2 closes it again.
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 18000004), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 18000004), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 18000005), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_LEFT, 18000006), 1); // Browse tracks, never seek.
@@ -943,7 +947,7 @@ TEST_F(ModelTest, LiveReplayKeepsPausedBannerAndPreservesMenuNavigation)
     state.paused = 0;
     controls.set_live_state(state);
     EXPECT_FALSE(draw(30000001));
-    for (const auto key : {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_GO_LIVE})
+    for (const auto key : {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_GO_LIVE, IPTV_INPUT_L2})
     {
         const auto menu = ptv::remote_input(key);
         EXPECT_EQ(menu.pressed, 0u);
@@ -971,7 +975,7 @@ TEST_F(ModelTest, PlaybackChannelListIsTheThemedSheetAtTheScreensResolution)
         return controls.draw_screen(color.data(), mask.data(), plane, 1920, 1088, 1920, 1080, 8, 0);
     };
     (void)screen();
-    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 1); // the list
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 1), 1); // the list
     EXPECT_FALSE(controls.draw(nullptr, 0, 720, 576, 720, 576, 8, 2));
     EXPECT_EQ(screen(), 3);
     EXPECT_GT(mask[400 * 1920 + 1500], 200); // the sheet at the right
@@ -1135,7 +1139,7 @@ TEST_F(ModelTest, PlaybackBannerExpiresFromFirstPictureAndCanBeRequestedAgain)
     EXPECT_EQ(controls.input(IPTV_INPUT_TRIANGLE, 20000000), 1);
     EXPECT_TRUE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 24999999));
     EXPECT_FALSE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 25000000));
-    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 26000000), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 26000000), 1);
     EXPECT_TRUE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 99000000));
     model.close();
 }

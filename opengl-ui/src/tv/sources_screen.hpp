@@ -28,6 +28,10 @@ class SourcesScreen
     {
         return http_source_ != 0;
     }
+    bool at_top() const
+    {
+        return !choosing_user_agent() && list_.focus() <= 0;
+    }
 
   private:
     void sync();

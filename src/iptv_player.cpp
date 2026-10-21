@@ -1390,7 +1390,9 @@ class StreamRunner
             const int handled = gControls ? gControls(gControlsContext, event.action) : 0;
             if (handled == 1)
                 continue;
-            if (event.action == IPTV_INPUT_PLAY_PAUSE)
+            // Cross pauses too when nothing on screen took it (no list or menu open).
+            if (event.action == IPTV_INPUT_PLAY_PAUSE ||
+                (handled == 0 && event.action == IPTV_INPUT_CROSS))
             {
                 (void)iptv_player_pause_live(Paused() ? 0 : 1);
                 UpdateLiveControls();

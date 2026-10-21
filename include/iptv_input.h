@@ -25,8 +25,10 @@ typedef enum {
     IPTV_INPUT_DOWN,
     IPTV_INPUT_LEFT,
     IPTV_INPUT_RIGHT,
+    /* Always pauses or resumes, even through an open menu. */
     IPTV_INPUT_PLAY_PAUSE,
-    IPTV_INPUT_GO_LIVE,
+    IPTV_INPUT_GO_LIVE, /* R2 */
+    IPTV_INPUT_L2,      /* the channel list on live TV */
     IPTV_INPUT_COUNT
 } iptv_input_action_t;
 

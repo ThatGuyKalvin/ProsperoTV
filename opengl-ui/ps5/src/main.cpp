@@ -22,6 +22,7 @@
 #include "iptv_native_agc_present.h"
 #include "iptv_remote.h"
 #include "iptv_store.h"
+#include "iptv_tv_remote.h"
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/pad.hpp"
@@ -32,6 +33,7 @@
 #include "tv/i18n.hpp"
 #include <atomic>
 #include "tv/remote_input.hpp"
+#include "tv/tv_remote_input.hpp"
 #include "tv_build_options.h"
 #include "tv_dev.hpp"
 #include "tv_diag.hpp"
@@ -416,6 +418,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
     // The controller opens the user service, which the keyboard needs too.
     ps5::Pad pad;
     const bool pad_ready = pad.open();
+    const int tv_remote = iptv_tv_remote_open();
+    say("[TV] tv remote open=0x%08x", static_cast<unsigned>(tv_remote));
 
     audio::Mixer mixer;
     int menu_volume = settings->volume;
@@ -489,6 +493,11 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         if (g_menu_sessions == 1)
             app.play_intro();
         InputTracker tracker;
+        // The TV remote's own: its OK always confirms, whatever Cross and Circle do.
+        InputTracker tv_tracker;
+        PadSample tv_samples[64];
+        std::uint32_t tv_words[64];
+        bool pad_cross_held = g_cross_held;
         ui::Feedback feedback;
         ptv::Frame frame;
         FrameStats stats;
@@ -527,6 +536,15 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             }
             InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
                                               static_cast<std::uint64_t>(now));
+            const int tv_count = iptv_tv_remote_read(tv_words, 64);
+            for (int i = 0; i < tv_count; ++i)
+                tv_samples[i] =
+                    ptv::tv_remote_sample(tv_words[i], static_cast<std::uint64_t>(now));
+            const InputFrame tv_input =
+                tv_tracker.update(std::span<const PadSample>(tv_samples, std::size_t(tv_count)),
+                                  static_cast<std::uint64_t>(now));
+            if (!script.active())
+                ptv::merge_tv_remote(input, tv_input);
             iptv_remote_enable_search(!resolving_portal && app.accepts_remote_search());
             iptv_remote_set_sources_handler(
                 resolving_portal || app.storage_busy() || app.storage_open()
@@ -591,8 +609,10 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             if (iptv_remote_search(remote_query) && !resolving_portal)
                 app.remote_search(remote_query);
             if (count > 0)
-                g_cross_held = samples[count - 1].connected &&
-                               (samples[count - 1].buttons & pad_bits::kCross) != 0;
+                pad_cross_held = samples[count - 1].connected &&
+                                 (samples[count - 1].buttons & pad_bits::kCross) != 0;
+            // An OK on the remote that opened the keyboard is not typed either.
+            g_cross_held = pad_cross_held || tv_input.is_held(Action::confirm);
 
             feedback.clear();
             if (!resolving_portal)
@@ -801,6 +821,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 app.stop_preview();
                 model.close();
                 audio_out.stop();
+                iptv_tv_remote_close();
                 pad.close();
                 sys::quit();
             }
@@ -812,6 +833,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 app.stop_preview();
                 model.close();
                 audio_out.stop();
+                iptv_tv_remote_close();
                 pad.close();
                 sys::quit();
             }
@@ -835,6 +857,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
     // finally the display itself.
     model.close();
     audio_out.stop();
+    iptv_tv_remote_close();
     pad.close();
     g_cross_held = false;
     renderer.release();

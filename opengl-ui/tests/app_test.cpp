@@ -622,6 +622,96 @@ TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsLiveTv)
     EXPECT_EQ(model_->group(), ptv::Group::all);
 }
 
+TEST_F(AppTest, ArrowsReachTheTabBarFromTheTopOfEveryScreen)
+{
+    move(Direction::up);
+    EXPECT_FALSE(app_->tabs_focused());
+    move(Direction::up);
+    EXPECT_TRUE(app_->tabs_focused());
+    move(Direction::up);
+    EXPECT_TRUE(app_->tabs_focused());
+    move(Direction::right);
+    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_TRUE(app_->tabs_focused());
+    move(Direction::right);
+    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(model_->group(), ptv::Group::favorites);
+    move(Direction::down);
+    EXPECT_FALSE(app_->tabs_focused());
+    move(Direction::up); // an empty Favorites list is its own top
+    EXPECT_TRUE(app_->tabs_focused());
+    move(Direction::left);
+    move(Direction::left);
+    EXPECT_EQ(app_->tab(), 1);
+    press(Action::confirm);
+    EXPECT_FALSE(app_->tabs_focused());
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model_->take_play_request(&request)); // OK only went back into the list
+
+    // Back on Live TV with nothing left to undo goes to the bar, and back again.
+    press(Action::back);
+    EXPECT_TRUE(app_->tabs_focused());
+    press(Action::back);
+    EXPECT_FALSE(app_->tabs_focused());
+    EXPECT_EQ(app_->tab(), 1);
+
+    // Settings: only Up from its first row leaves it.
+    move(Direction::up);
+    move(Direction::up);
+    for (int i = 0; i < 4; ++i)
+        move(Direction::right);
+    EXPECT_EQ(app_->tab(), 5);
+    move(Direction::down);
+    const std::string first = app_->settings_row();
+    move(Direction::down);
+    ASSERT_NE(app_->settings_row(), first);
+    move(Direction::up);
+    EXPECT_EQ(app_->settings_row(), first);
+    EXPECT_FALSE(app_->tabs_focused());
+    move(Direction::up);
+    EXPECT_TRUE(app_->tabs_focused());
+    move(Direction::right);
+    EXPECT_EQ(app_->tab(), 6);
+    move(Direction::right);
+    EXPECT_EQ(app_->tab(), 6);
+}
+
+TEST_F(AppTest, LeftOfTheFirstTabIsSearch)
+{
+    move(Direction::up);
+    move(Direction::up);
+    move(Direction::left);
+    ASSERT_EQ(app_->tab(), 0);
+    EXPECT_FALSE(app_->search_focused());
+    move(Direction::left);
+    EXPECT_TRUE(app_->search_focused());
+    move(Direction::left);
+    EXPECT_TRUE(app_->search_focused());
+    move(Direction::right);
+    EXPECT_FALSE(app_->search_focused());
+    EXPECT_TRUE(app_->tabs_focused());
+    EXPECT_EQ(app_->tab(), 0);
+    move(Direction::left);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->searching());
+    EXPECT_FALSE(app_->tabs_focused());
+    press(Action::back);
+    EXPECT_FALSE(app_->searching());
+    EXPECT_EQ(app_->tab(), 0);
+}
+
+TEST_F(AppTest, AHeldUpStopsAtTheTopOfTheScreen)
+{
+    move(Direction::up);
+    hui::InputFrame input;
+    input.connected = true;
+    input.nav = Direction::up;
+    input.nav_repeat = true;
+    frame(input);
+    idle(12);
+    EXPECT_FALSE(app_->tabs_focused());
+}
+
 TEST_F(AppTest, SquareStarsAndTheFavoritesTabListsIt)
 {
     move(Direction::right);
@@ -739,6 +829,24 @@ TEST_F(AppTest, UnifiedSearchResultsOpenTheSelectedLiveChannel)
     host::set_keyboard_text("channel 03");
     press(Action::confirm);
     press(Action::page_prev);
+    press(Action::confirm);
+    EXPECT_FALSE(app_->searching());
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_name, "Channel 03 (576p)");
+}
+
+TEST_F(AppTest, ArrowsAndOkSearchAndPlayAResult)
+{
+    move(Direction::up);
+    move(Direction::up);
+    move(Direction::left);
+    move(Direction::left); // the magnifier
+    press(Action::confirm);
+    ASSERT_TRUE(app_->searching());
+    host::set_keyboard_text("channel 03");
+    press(Action::confirm);
+    move(Direction::left); // from the field to the results
     press(Action::confirm);
     EXPECT_FALSE(app_->searching());
     ptv::PlayRequest request;

@@ -1159,6 +1159,9 @@ TEST_F(VodTest, FilmControlsClampSkipsPauseAndSelectChapters)
     controls.set_media_state(state);
     EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 5), 1);
     EXPECT_EQ(controls.take_media_pause(), true);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 5), 1); // Cross is pause too.
+    EXPECT_EQ(controls.take_media_pause(), true);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 5), 0); // No channel list on demand.
     EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 6), 1);
     EXPECT_EQ(controls.input(IPTV_INPUT_UP, 7), 1);    // Chapters, the last row.
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 7), 1); // At the chapter playing.
@@ -1220,10 +1223,10 @@ TEST_F(VodTest, SoundDelayChangesOnlyInsideAudioMenuAndIsBounded)
     EXPECT_EQ(controls.input(IPTV_INPUT_GO_LIVE, 2), 1);
     EXPECT_EQ(controls.take_audio_delay(), 50);
     EXPECT_FALSE(controls.take_audio_delay());
-    EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 3), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L2, 3), 1);
     EXPECT_EQ(controls.take_audio_delay(), 0);
     for (unsigned i = 0; i < 45; ++i)
-        controls.input(IPTV_INPUT_PLAY_PAUSE, 4 + i);
+        controls.input(IPTV_INPUT_L2, 4 + i);
     EXPECT_EQ(controls.take_audio_delay(), -2000);
     for (unsigned i = 0; i < 90; ++i)
         controls.input(IPTV_INPUT_GO_LIVE, 50 + i);
@@ -1236,8 +1239,11 @@ TEST_F(VodTest, SoundDelayChangesOnlyInsideAudioMenuAndIsBounded)
     controls.input(IPTV_INPUT_LEFT, 152);
     controls.input(IPTV_INPUT_LEFT, 153);
     EXPECT_EQ(controls.take_audio_delay(), -10);
-    controls.input(IPTV_INPUT_PLAY_PAUSE, 154);
+    controls.input(IPTV_INPUT_L2, 154);
     EXPECT_EQ(controls.take_audio_delay(), -60);
+    // Play pauses through the open menu and leaves the delay alone.
+    EXPECT_EQ(controls.input(IPTV_INPUT_PLAY_PAUSE, 154), 0);
+    EXPECT_FALSE(controls.take_audio_delay());
     EXPECT_EQ(controls.input(IPTV_INPUT_SQUARE, 155), 1);
     EXPECT_EQ(controls.take_audio_delay(), 0);
     EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 156), 1);

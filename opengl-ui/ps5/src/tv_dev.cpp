@@ -71,6 +71,7 @@ constexpr PlaybackName kPlaybackActions[] = {
     {"up", IPTV_INPUT_UP},             {"down", IPTV_INPUT_DOWN},
     {"left", IPTV_INPUT_LEFT},         {"right", IPTV_INPUT_RIGHT},
     {"pause", IPTV_INPUT_PLAY_PAUSE},  {"live", IPTV_INPUT_GO_LIVE},
+    {"l2", IPTV_INPUT_L2},
 };
 
 int playback_action(const std::string &name)

@@ -18,7 +18,7 @@ during 34 left
 during 44 live
 during 50 options
 during 53 options
-during 58 cross
+during 58 l2
 during 61 down
 during 63 cross
 during 80 r1

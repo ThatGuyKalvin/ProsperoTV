@@ -347,6 +347,15 @@ void BrowseScreen::apply_group(int chip)
     restart_list();
 }
 
+bool BrowseScreen::at_top() const
+{
+    if (!shared_.model.has_catalog() || zone_ == Zone::groups)
+        return true;
+    if (zone_ == Zone::rail || !favorites_)
+        return false;
+    return grid_.count() == 0 || grid_.focus() < kColumns;
+}
+
 BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback &feedback)
 {
     Model &model = shared_.model;

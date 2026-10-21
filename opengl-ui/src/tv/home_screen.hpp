@@ -13,6 +13,10 @@ class HomeScreen
     }
     void update();
     void handle(const InputFrame &, ui::Feedback &);
+    bool at_top() const
+    {
+        return focus_[static_cast<std::size_t>(column_)] == 0;
+    }
     void draw(ui::Canvas &) const;
     std::vector<std::string> image_urls() const;
 

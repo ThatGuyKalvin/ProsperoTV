@@ -602,7 +602,8 @@ int PlaybackOsd::handle(int action, std::uint64_t now)
         dirty_ = true;
         return 1;
     }
-    if (audio_menu_)
+    // Play on a remote or the phone pauses whatever is open.
+    if (audio_menu_ && action != IPTV_INPUT_PLAY_PAUSE)
     {
         if (interface_rtl())
         {
@@ -613,9 +614,9 @@ int PlaybackOsd::handle(int action, std::uint64_t now)
         }
         // L2 and R2 move the sound earlier and later wherever the menu is, 50 ms at a time;
         // Left and Right on Sound delay by 10 ms, fine enough to set lip sync.
-        if (action == IPTV_INPUT_PLAY_PAUSE || action == IPTV_INPUT_GO_LIVE)
+        if (action == IPTV_INPUT_L2 || action == IPTV_INPUT_GO_LIVE)
         {
-            const int step = action == IPTV_INPUT_PLAY_PAUSE ? -50 : 50;
+            const int step = action == IPTV_INPUT_L2 ? -50 : 50;
             audio_delay_ = audio_.delay_ms = std::clamp(audio_.delay_ms + step, -2000, 2000);
             dirty_ = true;
             return 1;
@@ -676,6 +677,9 @@ int PlaybackOsd::handle(int action, std::uint64_t now)
         }
         return 1;
     }
+    // With no list open Cross is pause and resume, live or on demand; in the list it watches.
+    if (action == IPTV_INPUT_CROSS && !list_)
+        action = IPTV_INPUT_PLAY_PAUSE;
     if (live_ && action == IPTV_INPUT_TOUCHPAD)
     {
         const bool stopping = model_.recording();
@@ -766,10 +770,10 @@ int PlaybackOsd::handle(int action, std::uint64_t now)
         return select(channels_[(at + channels_.size() + (backwards ? -1 : 1)) % channels_.size()]);
     }
     if (action == IPTV_INPUT_CROSS)
+        return select(channels_[focus_]);
+    if (action == IPTV_INPUT_L2)
     {
-        if (list_)
-            return select(channels_[focus_]);
-        list_ = true;
+        list_ = !list_;
         dirty_ = true;
         return 1;
     }
@@ -1211,7 +1215,7 @@ ControlsModel PlaybackOsd::controls_model() const
                          clock_text(position >= from ? position - from : from - position);
             model.chip_lit = true;
         }
-        hint(Button::l2, media_.paused ? "Resume" : "Pause");
+        hint(Button::cross, media_.paused ? "Resume" : "Pause");
         if (media_.seekable)
         {
             hint(Button::dpad, "Seek");
@@ -1234,11 +1238,11 @@ ControlsModel PlaybackOsd::controls_model() const
                 model.chip += "  " + minutes(seconds * 1000000) + tr(" behind live");
             if (history_.expired)
                 model.detail = tr("Earlier video is no longer retained");
-            hint(Button::l2, history_.paused ? "Resume" : "Pause");
+            hint(Button::cross, history_.paused ? "Resume" : "Pause");
             hint(Button::dpad, "Seek");
             hint(Button::r2, "Back to live");
         }
-        hint(Button::cross, "Channels");
+        hint(Button::l2, "Channels");
         hint(Button::square, "Last channel");
         hint(Button::touchpad, model_.recording() ? "Stop recording" : "Record");
     }
@@ -1293,7 +1297,7 @@ void PlaybackOsd::paint()
             if (history_.expired)
                 position += tr("  Earlier video is no longer retained");
             line(position, 30, 187, 24, 1700);
-            line(tr("L2 Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live"), 30, 231,
+            line(tr("Cross Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live"), 30, 231,
                  24, 1700);
         }
         if (media_.available)
@@ -1329,11 +1333,11 @@ void PlaybackOsd::paint()
                 }
             }
             line(media_.seekable
-                     ? tr("Left / Right 10s | L1 / R1 1 min | L2 Pause | R2 Speed | Square Restart")
-                     : tr("Seeking unavailable | L2 Pause / resume"),
+                     ? tr("Left / Right 10s | L1 / R1 1 min | Cross Pause | R2 Speed | Square Restart")
+                     : tr("Seeking unavailable | Cross Pause / resume"),
                  30, 187, 24, 1700);
         }
-        line(live_ ? tr("Touchpad Record · Square Last · Cross List · Options Tracks · Triangle "
+        line(live_ ? tr("Touchpad Record · Square Last · L2 List · Options Tracks · Triangle "
                         "Info · "
                         "Circle Back")
                    : tr("Options Tracks · Triangle Info · Circle Back"),

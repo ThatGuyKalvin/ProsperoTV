@@ -251,6 +251,9 @@ at 3840×2160. Codec and renderer details are documented in
 | R3 in the channel browser | Open the programme guide |
 | L3 in Live TV / Favorites | Open Multiview; Square chooses a channel, Triangle switches two/four tiles, R3 mutes, Cross opens full screen |
 | Options | Refresh the selected catalog source |
+| Cross during playback | Pause or resume; in the open channel list, watch the channel |
+| L2 during live TV | Open or close the channel list |
+| Up at the top of a screen, or Circle on Live TV | Focus the tabs; Left / Right change the tab, Down, Cross or Circle go back in; Left of Home is Search |
 | Circle during playback | Close the open panel, or stop playback and return to the browser |
 | Options during playback | Open or close the audio/subtitle/picture panel |
 | L1 / R1 in the playback panel | Switch between Audio, Subtitles and Picture |
@@ -260,6 +263,26 @@ During playback, Options then L1 opens Picture. Fit preserves the decoded pictur
 proportions by default; Stretch fills the screen, while 4:3 and 16:9 correct
 anamorphic or incorrectly advertised proportions. The choice lasts for the current
 playback session. Picture correction applies to live TV, movies and episodes.
+
+### TV remote
+
+The television's own remote works too, over HDMI-CEC, as it does in the
+console's menus. Turn on **Settings > System > HDMI > Enable HDMI Device Link**
+on the console (and the TV's CEC setting, for example BRAVIA Sync on Sony TVs).
+The remote can be used alongside the controller or instead of it.
+
+| Remote key | In the menu | During playback |
+| --- | --- | --- |
+| Arrows | Move focus; Up from the top of a screen reaches the tabs, Left / Right there change the tab, and Left of Home is Search | As the D-pad |
+| OK | Select, open, or play | As Cross: pause or resume, or watch the channel in the open list |
+| Back | Back | Close the open panel, or stop playback |
+| Play / Pause | Play the channel in focus | Pause or resume, even with a list or the panel open |
+| Rewind / Fast forward | Previous or next page | Step back and on, as Left and Right |
+| Channel − / Channel + | As L1 / R1, if the TV passes them on | As L1 / R1: previous or next channel on live TV |
+| Menu / Options | As Options | Open or close the playback panel |
+
+Which keys a television passes on is up to the television; arrows, OK and Back
+are the ones every CEC remote sends.
 
 ## Channels, lists and playback in detail
 

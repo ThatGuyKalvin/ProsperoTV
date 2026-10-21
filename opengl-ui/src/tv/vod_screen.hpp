@@ -28,6 +28,10 @@ class VodScreen
     {
         return filters_open_;
     }
+    bool at_top() const
+    {
+        return !details_open_ && !filters_open_ && shared_.model.view.vod_focus == 0;
+    }
     unsigned result_count() const;
     std::vector<std::string> result_titles() const; // in the order they are listed
 

@@ -83,6 +83,7 @@ SearchSheet::SearchSheet(Shared &shared) : shared_(shared)
     field_.style.remember = false;
     field_.style.max_rows = 0;
     field_.style.exits.down = true;
+    field_.style.exits.left = true; // to the results, for a remote without L1
     field_.set_placeholder(tr("Channels, movies, shows, programmes"));
     field_.set_bounds({area.x, y, area.w, kFieldHeight});
     y += kFieldHeight + 46.0f;
@@ -339,6 +340,8 @@ void SearchSheet::handle(const InputFrame &input, ui::Feedback &feedback)
         }
         if (field_.exit() == Direction::down)
             step(1, feedback);
+        else if (field_.exit() == Direction::left)
+            go(Zone::results, feedback);
         break;
     }
     case Zone::country:

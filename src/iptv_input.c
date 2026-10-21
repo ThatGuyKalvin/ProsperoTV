@@ -4,6 +4,7 @@
 
 #include "iptv_input.h"
 #include "iptv_remote.h"
+#include "iptv_tv_remote.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -23,6 +24,15 @@ typedef struct
     iptv_input_action_t action;
 } button_map_t;
 
+/* The controller and the TV remote each keep their own: one letting go must
+ * not release what the other holds. */
+typedef struct
+{
+    uint32_t buttons;
+    int direction;
+    uint64_t repeat_at;
+} device_state_t;
+
 extern int scePadInit(void);
 extern int scePadOpen(int32_t user_id, int32_t port_type, int32_t index, const void *param);
 extern int scePadClose(int32_t handle);
@@ -32,20 +42,20 @@ extern int sceUserServiceGetInitialUser(int32_t *user_id);
 extern int sceUserServiceTerminate(void);
 
 static const button_map_t buttons[] = {
-    {UINT32_C(0x00004000), IPTV_INPUT_CROSS},      {UINT32_C(0x00002000), IPTV_INPUT_CIRCLE},
-    {UINT32_C(0x00008000), IPTV_INPUT_SQUARE},     {UINT32_C(0x00001000), IPTV_INPUT_TRIANGLE},
-    {UINT32_C(0x00000008), IPTV_INPUT_OPTIONS},    {UINT32_C(0x00000400), IPTV_INPUT_L1},
-    {UINT32_C(0x00000800), IPTV_INPUT_R1},         {UINT32_C(0x00100000), IPTV_INPUT_TOUCHPAD},
-    {UINT32_C(0x00000100), IPTV_INPUT_PLAY_PAUSE}, {UINT32_C(0x00000200), IPTV_INPUT_GO_LIVE},
+    {UINT32_C(0x00004000), IPTV_INPUT_CROSS},     {UINT32_C(0x00002000), IPTV_INPUT_CIRCLE},
+    {UINT32_C(0x00008000), IPTV_INPUT_SQUARE},    {UINT32_C(0x00001000), IPTV_INPUT_TRIANGLE},
+    {UINT32_C(0x00000008), IPTV_INPUT_OPTIONS},   {UINT32_C(0x00000400), IPTV_INPUT_L1},
+    {UINT32_C(0x00000800), IPTV_INPUT_R1},        {UINT32_C(0x00100000), IPTV_INPUT_TOUCHPAD},
+    {UINT32_C(0x00000100), IPTV_INPUT_L2},        {UINT32_C(0x00000200), IPTV_INPUT_GO_LIVE},
+    {IPTV_TV_REMOTE_PLAY, IPTV_INPUT_PLAY_PAUSE},
 };
 
 static iptv_input_event_t queue[INPUT_QUEUE_SIZE];
 static unsigned char samples[PAD_SAMPLE_CAPACITY][PAD_SAMPLE_SIZE];
 static unsigned queue_read;
 static unsigned queue_write;
-static uint32_t button_state;
-static int direction = -1;
-static uint64_t repeat_at;
+static device_state_t pad_state = {0, -1, 0};
+static device_state_t tv_state = {0, -1, 0};
 static int32_t pad_handle = -1;
 static bool owns_user_service;
 
@@ -109,22 +119,38 @@ static int dpad_direction(uint32_t buttons_state)
     return -1;
 }
 
-static void update_direction(int next_direction)
+static void update_direction(device_state_t *device, int next_direction)
 {
-    if (next_direction == direction)
+    if (next_direction == device->direction)
         return;
-    if (direction >= 0)
-        queue_push((iptv_input_action_t)direction, false);
-    direction = next_direction;
-    if (direction >= 0)
+    if (device->direction >= 0)
+        queue_push((iptv_input_action_t)device->direction, false);
+    device->direction = next_direction;
+    if (device->direction >= 0)
     {
-        queue_push((iptv_input_action_t)direction, true);
-        repeat_at = now_ms() + IPTV_INPUT_REPEAT_DELAY_MS;
+        queue_push((iptv_input_action_t)device->direction, true);
+        device->repeat_at = now_ms() + IPTV_INPUT_REPEAT_DELAY_MS;
     }
     else
     {
-        repeat_at = 0;
+        device->repeat_at = 0;
     }
+}
+
+static void process_buttons(device_state_t *device, uint32_t current, int analog_direction)
+{
+    const uint32_t changed = device->buttons ^ current;
+    for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i)
+    {
+        if ((changed & buttons[i].mask) != 0)
+        {
+            queue_push(buttons[i].action, (current & buttons[i].mask) != 0);
+        }
+    }
+    device->buttons = current;
+
+    const int digital_direction = dpad_direction(current);
+    update_direction(device, digital_direction >= 0 ? digital_direction : analog_direction);
 }
 
 static void process_sample(const unsigned char *sample)
@@ -134,28 +160,25 @@ static void process_sample(const unsigned char *sample)
     const bool neutral = sample[76] == 0 || (current & PAD_BUTTON_INTERCEPTED) != 0;
     if (neutral)
         current = 0;
+    current &= ~(uint32_t)IPTV_TV_REMOTE_MEDIA_KEYS;
+    process_buttons(&pad_state, current, neutral ? -1 : stick_direction(sample[4], sample[5]));
+}
 
-    const uint32_t changed = button_state ^ current;
-    for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i)
-    {
-        if ((changed & buttons[i].mask) != 0)
-        {
-            queue_push(buttons[i].action, (current & buttons[i].mask) != 0);
-        }
-    }
-    button_state = current;
-
-    const int digital_direction = dpad_direction(current);
-    const int analog_direction = neutral ? -1 : stick_direction(sample[4], sample[5]);
-    update_direction(digital_direction >= 0 ? digital_direction : analog_direction);
+/* Rewind and Fast forward step like Left and Right. */
+static uint32_t tv_remote_pad_bits(uint32_t word)
+{
+    uint32_t current = word & ~(uint32_t)(IPTV_TV_REMOTE_REWIND | IPTV_TV_REMOTE_FAST_FORWARD);
+    if ((word & IPTV_TV_REMOTE_REWIND) != 0)
+        current |= UINT32_C(0x00000080);
+    if ((word & IPTV_TV_REMOTE_FAST_FORWARD) != 0)
+        current |= UINT32_C(0x00000020);
+    return current;
 }
 
 bool iptv_input_init(void)
 {
     queue_read = queue_write = 0;
-    button_state = 0;
-    direction = -1;
-    repeat_at = 0;
+    pad_state = tv_state = (device_state_t){0, -1, 0};
     pad_handle = -1;
     owns_user_service = false;
 
@@ -175,6 +198,8 @@ bool iptv_input_init(void)
         iptv_input_shutdown();
         return false;
     }
+    /* Without HDMI Device Link there is no such port; the controller is enough. */
+    (void)iptv_tv_remote_open();
     return true;
 }
 
@@ -257,13 +282,19 @@ void iptv_input_poll(void)
     for (int i = 0; i < count; ++i)
         process_sample(samples[i]);
 
-    if (direction >= 0)
+    uint32_t tv_words[PAD_SAMPLE_CAPACITY];
+    const int tv_count = iptv_tv_remote_read(tv_words, PAD_SAMPLE_CAPACITY);
+    for (int i = 0; i < tv_count; ++i)
+        process_buttons(&tv_state, tv_remote_pad_bits(tv_words[i]), -1);
+
+    device_state_t *const devices[] = {&pad_state, &tv_state};
+    const uint64_t now = now_ms();
+    for (unsigned i = 0; i < sizeof(devices) / sizeof(devices[0]); ++i)
     {
-        const uint64_t now = now_ms();
-        if (now >= repeat_at)
+        if (devices[i]->direction >= 0 && now >= devices[i]->repeat_at)
         {
-            queue_push((iptv_input_action_t)direction, true);
-            repeat_at = now + IPTV_INPUT_REPEAT_MS;
+            queue_push((iptv_input_action_t)devices[i]->direction, true);
+            devices[i]->repeat_at = now + IPTV_INPUT_REPEAT_MS;
         }
     }
 }
@@ -284,17 +315,18 @@ bool iptv_input_pressed(iptv_input_action_t action)
     if (action < 0 || action >= IPTV_INPUT_COUNT)
         return false;
     if (action >= IPTV_INPUT_UP && action <= IPTV_INPUT_RIGHT)
-        return direction == (int)action;
+        return pad_state.direction == (int)action || tv_state.direction == (int)action;
     for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i)
     {
         if (buttons[i].action == action)
-            return (button_state & buttons[i].mask) != 0;
+            return ((pad_state.buttons | tv_state.buttons) & buttons[i].mask) != 0;
     }
     return false;
 }
 
 void iptv_input_shutdown(void)
 {
+    iptv_tv_remote_close();
     if (pad_handle >= 0)
     {
         scePadClose(pad_handle);
@@ -306,7 +338,5 @@ void iptv_input_shutdown(void)
         owns_user_service = false;
     }
     queue_read = queue_write = 0;
-    button_state = 0;
-    direction = -1;
-    repeat_at = 0;
+    pad_state = tv_state = (device_state_t){0, -1, 0};
 }
