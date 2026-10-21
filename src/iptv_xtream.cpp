@@ -126,6 +126,31 @@ std::string_view CategoryName(const std::unordered_map<std::string, std::string>
                                                               : std::string_view(found->second);
 }
 
+// Every category of a stream, as newer panels list them ("category_id" is only
+// the first). Names and numbers are kept, a few of them; anything else in the
+// list, or a list written some other way, is passed over.
+constexpr std::size_t kMaxListedCategories = 16;
+
+bool ReadCategoryIds(JsonReader *reader, std::vector<std::string> *ids)
+{
+    if (reader->Peek() != '[')
+        return reader->SkipValue();
+    return ReadArray(reader,
+                     [ids](JsonReader *item)
+                     {
+                         const char lead = item->Peek();
+                         if (lead == '{' || lead == '[')
+                             return item->SkipValue();
+                         std::string id;
+                         if (!item->OptionalStringOrScalar(&id, 64u))
+                             return false;
+                         if (!id.empty() && ids->size() < kMaxListedCategories &&
+                             std::find(ids->begin(), ids->end(), id) == ids->end())
+                             ids->push_back(std::move(id));
+                         return true;
+                     });
+}
+
 std::string StableXtreamChannelId(std::uint64_t source_id, std::string_view stream_id)
 {
     char prefix[32]{};
@@ -509,6 +534,7 @@ struct XtreamStreamsParser::State
         std::string logo;
         std::string epg_id;
         std::string category_id;
+        std::vector<std::string> category_ids;
         std::string extension;
         std::string direct_source;
         std::string stream_url;
@@ -536,6 +562,8 @@ struct XtreamStreamsParser::State
                         return value->StringOrScalar(&epg_id);
                     if (key == "category_id")
                         return value->StringOrScalar(&category_id, 64u);
+                    if (key == "category_ids")
+                        return ReadCategoryIds(value, &category_ids);
                     if (key == "container_extension")
                         return value->StringOrScalar(&extension, 12u);
                     if (key == "direct_source")
@@ -572,10 +600,16 @@ struct XtreamStreamsParser::State
         if (ValidChannelNumber(number))
             channel.channel_number = number;
         channel.tvg_id = epg_id;
+        if (category_id.empty() && !category_ids.empty())
+            category_id = category_ids.front();
         channel.group_title = CategoryName(category_names, category_id);
-        const auto adult_group = category_adult.find(category_id);
-        channel.adult = adult == "1" || adult == "true" ||
-                        (adult_group != category_adult.end() && adult_group->second);
+        const auto adult_category = [this](const std::string &category)
+        {
+            const auto found = category_adult.find(category);
+            return found != category_adult.end() && found->second;
+        };
+        channel.adult = adult == "1" || adult == "true" || adult_category(category_id) ||
+                        std::any_of(category_ids.begin(), category_ids.end(), adult_category);
         channel.source_line = source_line;
         if (archive == "1")
         {
@@ -596,6 +630,23 @@ struct XtreamStreamsParser::State
         {
             LeftOut();
             return true;
+        }
+        // The stream's other categories, so each one lists and finds it too.
+        std::vector<std::string_view> groups{channel.group_title};
+        for (const std::string &other : category_ids)
+        {
+            const auto found = category_names.find(other);
+            if (found == category_names.end() || found->second.empty() ||
+                std::find(groups.begin(), groups.end(), found->second) != groups.end())
+                continue;
+            if (groups.size() > kDefaultMaxAlternateGroups)
+                break;
+            if (!catalog->AddAlternateGroup(index, found->second))
+            {
+                LeftOut();
+                return true;
+            }
+            groups.push_back(found->second);
         }
         ++report->accepted;
         return true;

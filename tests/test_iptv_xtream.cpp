@@ -136,6 +136,71 @@ TEST(IptvXtreamTest, ConvertsLiveJsonIntoTheSharedCatalog)
     EXPECT_EQ(report.skipped, 1u);
 }
 
+// Newer panels name every category of a stream in "category_ids"; "category_id"
+// is only the first. A package added to a plan puts channels the account already
+// had into its category this way, so that category is otherwise never seen.
+TEST(IptvXtreamTest, AStreamIsInEveryCategoryItsProviderNames)
+{
+    const iptv::XtreamCredentials credentials = Credentials();
+    std::vector<iptv::XtreamCategory> categories{
+        {"10", "US| AT&T"}, {"20", "LA / GENERAL"}, {"30", "Adults"}, {"40", "Mexico"}};
+    categories[2].adult = true;
+    constexpr std::string_view streams =
+        R"([{"stream_id":1,"name":"TELE EL SALVADOR","category_id":"10","category_ids":[10,20,"20",999,null],"container_extension":"ts"},)"
+        R"({"stream_id":2,"name":"Canal Mexico","category_id":null,"category_ids":["40"],"container_extension":"ts"},)"
+        R"({"stream_id":3,"name":"Late","category_id":"10","category_ids":[30],"container_extension":"ts"},)"
+        R"({"stream_id":4,"name":"Plain","category_id":"10","category_ids":[],"container_extension":"ts"}])";
+    iptv::Catalog catalog;
+    iptv::ParseReport report;
+    ASSERT_EQ(iptv::ParseXtreamLiveStreams(streams, credentials, categories, 0x5854000000001234u,
+                                           &catalog, &report),
+              iptv::XtreamStatus::ok);
+    ASSERT_EQ(catalog.size(), 4u);
+    EXPECT_EQ(report.skipped, 0u);
+
+    EXPECT_EQ(catalog[0].group_title, "US| AT&T");
+    ASSERT_EQ(catalog[0].alternate_group_titles.size(), 1u);
+    EXPECT_EQ(catalog[0].alternate_group_titles[0], "LA / GENERAL");
+
+    // Without "category_id" the first listed category is the channel's own.
+    EXPECT_EQ(catalog[1].group_title, "Mexico");
+    EXPECT_TRUE(catalog[1].alternate_group_titles.empty());
+
+    // A channel in any adult category is an adult channel.
+    EXPECT_FALSE(catalog[0].adult);
+    EXPECT_TRUE(catalog[2].adult);
+    ASSERT_EQ(catalog[2].alternate_group_titles.size(), 1u);
+    EXPECT_EQ(catalog[2].alternate_group_titles[0], "Adults");
+
+    EXPECT_EQ(catalog[3].group_title, "US| AT&T");
+    EXPECT_TRUE(catalog[3].alternate_group_titles.empty());
+}
+
+// The list only adds categories: one a panel writes some other way is passed
+// over, and the stream keeps the category it has.
+TEST(IptvXtreamTest, ACategoryListOfAnotherShapeIsPassedOver)
+{
+    const iptv::XtreamCredentials credentials = Credentials();
+    const std::vector<iptv::XtreamCategory> categories{{"10", "News"}, {"20", "Sports"}};
+    constexpr std::string_view streams =
+        R"([{"stream_id":1,"name":"A","category_id":"10","category_ids":[{"id":20},[20],"20"],"container_extension":"ts"},)"
+        R"({"stream_id":2,"name":"B","category_id":"10","category_ids":"20","container_extension":"ts"},)"
+        R"({"stream_id":3,"name":"C","category_id":"10","category_ids":null,"container_extension":"ts"}])";
+    iptv::Catalog catalog;
+    iptv::ParseReport report;
+    ASSERT_EQ(iptv::ParseXtreamLiveStreams(streams, credentials, categories, 1u, &catalog, &report),
+              iptv::XtreamStatus::ok);
+    ASSERT_EQ(catalog.size(), 3u);
+    EXPECT_EQ(report.skipped, 0u);
+    ASSERT_EQ(catalog[0].alternate_group_titles.size(), 1u);
+    EXPECT_EQ(catalog[0].alternate_group_titles[0], "Sports");
+    for (std::size_t index = 1; index < 3; ++index)
+    {
+        EXPECT_EQ(catalog[index].group_title, "News");
+        EXPECT_TRUE(catalog[index].alternate_group_titles.empty());
+    }
+}
+
 TEST(IptvXtreamTest, ProviderParentIdsBuildNestedPathsWithoutFollowingCycles)
 {
     std::vector<iptv::XtreamCategory> categories;
