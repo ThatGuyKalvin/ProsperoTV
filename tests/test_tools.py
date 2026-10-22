@@ -7,6 +7,7 @@
 
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import shlex
@@ -163,6 +164,11 @@ int main() {
         shim = player[player.index('extern "C" int getpwuid_r'):player.index("#endif")]
         for name in ("getpwuid_r", "recvmmsg", "sendmmsg", "if_nametoindex", "gmtime_r", "dladdr", "_setjmp", "_longjmp"):
             shim = shim.replace(name + "(", "probe_" + name + "(")
+        if platform.machine().lower() in {"aarch64", "arm64"}:
+            # Execute the same tail-call forwarding on the host ISA. A C wrapper
+            # would save its own invalid stack frame instead of the caller's.
+            shim = shim.replace('"jmp setjmp"', '"b setjmp"')
+            shim = shim.replace('"jmp longjmp"', '"b longjmp"')
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "probe.cpp"
             source.write_text("#include <pwd.h>\n#include <errno.h>\n#include <fcntl.h>\n#include <unistd.h>\n#include <sys/socket.h>\n#include <cassert>\n#include <atomic>\n#include <time.h>\n#include <dlfcn.h>\n#include <setjmp.h>\n"

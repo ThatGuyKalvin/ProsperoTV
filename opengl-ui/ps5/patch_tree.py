@@ -450,6 +450,12 @@ if True:
          '        wrap_options+=("--wrap=$symbol")\n'
          '    done\n'
          'fi\n')
+# PTV_SKIP_ZIP=1 leaves out the folder ZIP (tools/dev.sh: a deploy sends the folder).
+for line in ("printf '==> [zip] Archiving the application folder\\n'\n",
+             '(cd "$dist" && python3 -m zipfile -c "$title_id.zip" "$title_id")\n',
+             'python3 "$root/tools/zip-open-modes.py" "$dist/$title_id.zip"\n',
+             "printf 'Folder ZIP: %s\\n' \"$dist/$title_id.zip\"\n"):
+    swap("tools/build.sh", line, "[[ ${PTV_SKIP_ZIP:-0} == 1 ]] || " + line)
 # The test title also reads scripted runs a PC leaves beside it.
 (tree / "src/tv_build_options.h").write_text(
     "// ProsperoTV - What this build includes (written by ps5/patch_tree.py).\n#pragma once\n\n"

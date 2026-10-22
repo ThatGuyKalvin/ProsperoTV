@@ -362,7 +362,9 @@ use continues even if the remote cannot start.
 
 ## Requirements
 
-Building requires Linux, WSL, or a Linux CI runner. On Ubuntu, Debian, or WSL:
+On macOS, Windows or Linux, build in the development container:
+[Development setup](docs/DEVELOPMENT.md) (`tools/dev.sh`, `tools/dev.ps1`).
+To build natively on Ubuntu, Debian, or WSL:
 
 ```bash
 sudo apt update
@@ -382,8 +384,8 @@ Run the read-only prerequisite check before building:
 make doctor
 ```
 
-See [Getting started](docs/GETTING_STARTED.md) and
-[Native tooling](docs/NATIVE_TOOLING.md) for detailed environment setup.
+See [Development setup](docs/DEVELOPMENT.md) and
+[Getting started](docs/GETTING_STARTED.md) for detailed environment setup.
 
 ## Build
 
