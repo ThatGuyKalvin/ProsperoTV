@@ -1,7 +1,9 @@
 # Getting started
 
-This guide supports native Linux, WSL, and Windows PowerShell hosts. It does
-not configure or modify the PS5.
+To build the released app on macOS, Windows or Linux, start with
+[Development setup](DEVELOPMENT.md). This guide covers the repository root's
+build (the shared sources and the earlier interface) on native Linux, WSL, and
+Windows PowerShell hosts. It does not configure or modify the PS5.
 
 ## 1. Install the Linux toolchain
 
@@ -12,7 +14,8 @@ Install the compiler, linker, Make, Python, and download/archive tools:
 ```bash
 sudo apt update
 sudo apt install clang-18 clang-format-18 clang-tidy-18 curl git lld-18 make \
-  pkg-config python3 python3-pip python3-venv tar unzip wget
+  pkg-config python3 python3-pip python3-venv tar unzip wget ccache ffmpeg \
+  libsqlite3-dev libavcodec-dev libswresample-dev
 ```
 
 Confirm the expected compiler exists:
