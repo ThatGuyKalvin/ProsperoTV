@@ -371,12 +371,18 @@ static uint32_t float_bits(float value)
 
 static void flush_gpu_data(const void *address, size_t bytes)
 {
+#if defined(IPTV_NATIVE_OVERLAY_TEST) && !defined(__x86_64__)
+    /* Host overlay tests inspect CPU buffers; there is no GPU cache to flush. */
+    (void)address;
+    (void)bytes;
+#else
     const uint8_t *at = address;
     const uint8_t *end = at + bytes;
 
     for (; at < end; at += 64)
         __asm__ volatile("clflush (%0)" : : "r"(at) : "memory");
     __asm__ volatile("mfence" ::: "memory");
+#endif
 }
 
 /* Both of the controls' planes transparent: black, which adds nothing and darkens nothing. */

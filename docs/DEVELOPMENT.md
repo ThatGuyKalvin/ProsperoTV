@@ -1,5 +1,8 @@
 # Development setup
 
+For a measured Apple M2 MacBook Air baseline, daily commands, and recovery
+steps, see [macOS workstation setup and validation notes](MACOS_WORKSTATION.md).
+
 The released app builds in a Linux container with the same Ubuntu 24.04
 toolchain CI uses. `tools/dev.sh` (macOS, Linux) and `tools/dev.ps1`
 (Windows PowerShell) run every step in it: the PC tests, the console build, the
@@ -68,6 +71,9 @@ The first build fetches the SDKs and builds the dependencies (about 15
 minutes); after that a one-line change builds in about 5 seconds. `deploy` keeps a
 hash of every file it sent, so it uploads only what changed (usually
 `eboot.bin`). Use `--full` again after the folder on the console was removed.
+It also removes files recorded by an earlier deploy that are no longer in the
+build. Deploy manifests are separate for each host, FTP port and app folder;
+older manifests without a port identity are ignored, forcing a fresh upload.
 `build` leaves out the release ZIP; CI builds that.
 
 ## 4. Preview the interface on the PC

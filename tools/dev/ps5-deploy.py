@@ -37,7 +37,11 @@ remote_root = "/data/homebrew/" + os.path.basename(dist.rstrip("/"))
 # The FTP server hands back decrypted copies of these, so their sizes differ.
 SELF = {"eboot.bin", "libc.prx"}
 os.makedirs(args.manifests, exist_ok=True)
-manifest_path = os.path.join(args.manifests, f"{args.host}-{os.path.basename(remote_root)}.json")
+# An endpoint's port matters: one host can expose several different consoles.
+# Do not reuse old host-only manifests, whose endpoint cannot be determined.
+endpoint = json.dumps([args.host.lower(), args.port, remote_root]).encode("utf-8")
+endpoint_key = hashlib.sha256(endpoint).hexdigest()
+manifest_path = os.path.join(args.manifests, f"{os.path.basename(remote_root)}-{endpoint_key}.json")
 
 
 def sha256(path):
@@ -57,12 +61,12 @@ if "eboot.bin" not in local:
     sys.exit(f"{dist}: no eboot.bin")
 
 known = {}
-if os.path.exists(manifest_path) and not args.full:
+if os.path.exists(manifest_path):
     with open(manifest_path, encoding="utf-8") as fh:
         known = json.load(fh)
 
 hashes = {rel: sha256(path) for rel, path in local.items()}
-changed = [rel for rel in local if known.get(rel) != hashes[rel]]
+changed = [rel for rel in local if args.full or known.get(rel) != hashes[rel]]
 gone = [rel for rel in known if rel not in local]
 
 
@@ -115,8 +119,11 @@ def delete(path):
     """DELE accepting any 2xx reply (the FTP server answers 226, not 250)."""
     try:
         reply = f.sendcmd("DELE " + path)
-    except ftplib.error_perm:
-        return
+    except ftplib.error_perm as error:
+        message = str(error).lower()
+        if message.startswith("550") and ("no such" in message or "not found" in message):
+            return
+        raise
     if not reply.startswith("2"):
         raise ftplib.error_reply(reply)
 
