@@ -30,7 +30,12 @@ class VodScreen
     }
     bool at_top() const
     {
-        return !details_open_ && !filters_open_ && shared_.model.view.vod_focus == 0;
+        return !details_open_ && !filters_open_ && !letters_focused_ &&
+               shared_.model.view.vod_focus < columns();
+    }
+    bool on_letters() const
+    {
+        return letters_focused_;
     }
     unsigned result_count() const;
     std::vector<std::string> result_titles() const; // in the order they are listed
@@ -51,8 +56,15 @@ class VodScreen
         std::string text, category;
         unsigned item = 0;
         std::optional<unsigned> count = std::nullopt;
+        std::string key{};
     };
     void sync();
+    int columns() const;
+    int page_size() const;
+    bool has_letters() const;
+    int current_letter() const;
+    void enter_letters();
+    void draw_letters(ui::Canvas &) const;
     void draw_details(ui::Canvas &) const;
     void draw_filters(ui::Canvas &) const;
     void handle_filters(const InputFrame &);
@@ -63,6 +75,8 @@ class VodScreen
     std::vector<Row> rows_;
     unsigned revision_ = ~0u, model_revision_ = ~0u, counts_revision_ = ~0u;
     int top_ = 0;
+    std::array<int, kLetterCount> letter_starts_{};
+    bool letters_focused_ = false;
     bool details_open_ = false, filters_open_ = false;
     int filter_focus_ = 0;
     float detail_scroll_ = 0;

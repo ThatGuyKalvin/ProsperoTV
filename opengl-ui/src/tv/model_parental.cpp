@@ -106,6 +106,7 @@ bool Model::set_category_rule(std::string_view category, int rule)
 }
 void Model::parental_changed()
 {
+    stop_discovery();
     play_requested_ = false;
     play_request_ = {};
     mark_visibility();
