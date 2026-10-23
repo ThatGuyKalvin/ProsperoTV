@@ -35,6 +35,9 @@ bool contains_nocase(std::string_view text, std::string_view needle);
 bool equals_nocase(std::string_view left, std::string_view right);
 // True when a list field ("US, CA; MX") holds the value as one of its entries.
 bool field_has_value(std::string_view field, std::string_view value);
+// Live-channel filters, shared by the active catalog and saved-source search.
+bool matches_channel_filters(const iptv::ChannelView &channel, std::string_view country,
+                             std::string_view category, std::string_view language);
 // The first entry of a list field, trimmed.
 std::string first_value(std::string_view field);
 
@@ -50,7 +53,8 @@ const char *codec_label(const iptv::ChannelView &channel);
 // A channel's name as it reads on screen: the playlist's own notes are taken
 // out of it ("Name (1080p) [Not 24/7]" is "Name") and returned in `notes`
 // ("Not 24/7") when the caller wants them.
-std::string display_name(const iptv::ChannelView &channel, std::vector<std::string> *notes = nullptr);
+std::string display_name(const iptv::ChannelView &channel,
+                         std::vector<std::string> *notes = nullptr);
 // Two capitals for a channel that has no picture.
 std::string monogram(const iptv::ChannelView &channel);
 // "Movies", or "Uncategorized".

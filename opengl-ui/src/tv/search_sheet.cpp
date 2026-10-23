@@ -263,16 +263,9 @@ void SearchSheet::handle(const InputFrame &input, ui::Feedback &feedback)
         else if (input.is_pressed(Action::confirm) && !results_.empty())
         {
             const auto result = results_[result_focus_];
-            bool accepted = false;
-            if (result.kind == Model::SearchResult::Kind::channel)
-                accepted = model.play_channel(result.id);
-            else if (result.kind == Model::SearchResult::Kind::programme)
-            {
-                navigation_ = result;
-                accepted = true;
-            }
-            else if ((accepted = model.activate_search_vod(result)) &&
-                     result.kind == Model::SearchResult::Kind::show)
+            const bool accepted = model.activate_search_result(result);
+            if (accepted && (result.kind == Model::SearchResult::Kind::show ||
+                             result.kind == Model::SearchResult::Kind::programme))
                 navigation_ = result;
             if (accepted)
                 sheet_.close(feedback);
@@ -595,7 +588,9 @@ void SearchSheet::sync_results()
     if (focused)
         for (unsigned i = 0; i < results_.size(); ++i)
             if (results_[i].id == focused->id && results_[i].kind == focused->kind &&
-                results_[i].programme_start == focused->programme_start)
+                results_[i].programme_start == focused->programme_start &&
+                results_[i].source_id == focused->source_id &&
+                results_[i].saved_source_id == focused->saved_source_id)
                 result_focus_ = i;
     result_top_ = std::clamp(result_top_, std::max(0, result_focus_ - 6), result_focus_);
 }
@@ -606,8 +601,8 @@ void SearchSheet::draw_results(ui::Canvas &canvas) const
     ui::text(canvas.list, canvas.fonts.semibold, tr("Search results"), kMargin + 24, 170, 32,
              theme.text);
     ui::text(canvas.list, canvas.fonts.regular,
-             tr("Active source / channel filters apply to live channels"), kMargin + 24, 205, 20,
-             theme.text_muted);
+             tr("All saved sources / channel filters apply to live channels"), kMargin + 24, 205,
+             20, theme.text_muted);
     const char *kinds[] = {"Live", "Movie", "TV show", "Programme"};
     for (int i = result_top_; i < int(results_.size()) && i < result_top_ + 7; ++i)
     {
@@ -620,10 +615,12 @@ void SearchSheet::draw_results(ui::Canvas &canvas) const
         ui::text(canvas.list, canvas.fonts.semibold, tr(kinds[unsigned(result.kind)]), kMargin + 26,
                  y + 32, 18, tone::accent);
         const auto &title = face_for(canvas.fonts, canvas.fonts.semibold, result.title);
-        const auto &detail = face_for(canvas.fonts, canvas.fonts.regular, result.detail);
+        const auto description =
+            result.source_name.empty() ? result.detail : result.source_name + " · " + result.detail;
+        const auto &detail = face_for(canvas.fonts, canvas.fonts.regular, description);
         ui::text(canvas.list, title, title.font->fit(readable(title, result.title), 26, 748),
                  kMargin + 174, y + 32, 26, theme.text);
-        ui::text(canvas.list, detail, detail.font->fit(readable(detail, result.detail), 19, 748),
+        ui::text(canvas.list, detail, detail.font->fit(readable(detail, description), 19, 748),
                  kMargin + 174, y + 61, 19, theme.text_muted);
     }
     if (results_.empty())

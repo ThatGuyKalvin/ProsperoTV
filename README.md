@@ -121,6 +121,20 @@
 
 - Browse movies, shows, seasons, and episodes from an Xtream account or a
   classified M3U playlist in **On demand**, next to Live TV.
+- Open Movies or TV shows directly into a dark poster grid. Move between
+  titles with the D-pad, see the focused title's available details beside it,
+  and press Cross to watch a movie or open a show's seasons and episodes.
+  Titles without provider artwork show a readable placeholder.
+- Press Touchpad in the poster grid for categories, Square on a title for
+  details, Triangle to open Search, or R3 for filters and
+  sorting. L2 and R2 turn pages.
+- Jump by letter in Movies, TV shows, and their category views. Press Right
+  past the last poster in a row to focus the A–Z bar, then Up or Down to jump
+  between available letters. Cross, Left, or Circle returns to the posters.
+  Entering the bar selects **Title A–Z** order and keeps the focused title;
+  jumps stay within the current category and filters. Numbers and titles in
+  other scripts are under **#**, and empty letters are skipped. Seasons and
+  episodes retain their normal browsing order.
 - See the provider's newest movies and shows first in every category, by the
   date an Xtream provider added them; titles it gives no date follow by title,
   so an M3U playlist is listed by title.
@@ -130,6 +144,20 @@
 - Carry on with a show from **Continue**, at the top of its episode list: the
   episode watched last, from the time it was left at.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
+
+### Search across saved sources
+
+- The main Search panel finds channels, movies, shows, and saved programmes
+  across saved sources, with the provider's name beside each result. Searching
+  keeps the current source selected; choosing a result from another provider
+  switches to that source before opening it.
+- Other sources are searched from their saved catalogs and guide files in
+  the background. Refresh a source, and open its Movies and TV shows once,
+  to make those lists available offline. Search reports unavailable saved
+  lists; it does not contact every inactive provider when a query is typed.
+- Hidden channels, hidden parent categories, parental restrictions, and Kids
+  mode apply to results from every source. Channel filters apply to live
+  channel results; at most 250 results of each kind are shown.
 
 ### While watching
 

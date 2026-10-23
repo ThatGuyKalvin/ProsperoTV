@@ -46,7 +46,8 @@ constexpr std::array<unsigned char, 256> kLower = []
 {
     std::array<unsigned char, 256> table{};
     for (unsigned value = 0; value < 256; ++value)
-        table[value] = static_cast<unsigned char>(value >= 'A' && value <= 'Z' ? value + 32 : value);
+        table[value] =
+            static_cast<unsigned char>(value >= 'A' && value <= 'Z' ? value + 32 : value);
     return table;
 }();
 
@@ -79,7 +80,8 @@ class Mentions
             text_[size_++] = '\n';
         const std::size_t count = std::min(text.size(), text_.size() - size_);
         for (std::size_t index = 0; index < count; ++index)
-            text_[size_ + index] = static_cast<char>(kLower[static_cast<unsigned char>(text[index])]);
+            text_[size_ + index] =
+                static_cast<char>(kLower[static_cast<unsigned char>(text[index])]);
         size_ += count;
     }
 
@@ -167,9 +169,9 @@ std::string plain_text(std::string_view text)
         else if (whole)
         {
             const auto *end = std::end(kDecorative);
-            const auto *at = std::lower_bound(
-                std::begin(kDecorative), end, code,
-                [](const Decorative &entry, std::uint32_t value) { return entry.code < value; });
+            const auto *at = std::lower_bound(std::begin(kDecorative), end, code,
+                                              [](const Decorative &entry, std::uint32_t value)
+                                              { return entry.code < value; });
             if (at != end && at->code == code)
                 found = at->plain;
         }
@@ -203,7 +205,8 @@ std::string label_text(std::string_view text)
         }
         // Arrows, shapes, signs, dingbats, variation selectors and pictures:
         // decoration around the words, and nothing the faces can write.
-        const bool symbol = (code >= 0x2190 && code <= 0x2BFF) || (code >= 0xFE00 && code <= 0xFE0F) ||
+        const bool symbol = (code >= 0x2190 && code <= 0x2BFF) ||
+                            (code >= 0xFE00 && code <= 0xFE0F) ||
                             (code >= 0x1F000 && code <= 0x1FAFF);
         if (symbol || code == ' ')
             space = !label.empty();
@@ -268,6 +271,24 @@ bool field_has_value(std::string_view field, std::string_view value)
         start = end + 1u;
     }
     return false;
+}
+
+bool matches_channel_filters(const iptv::ChannelView &channel, std::string_view country,
+                             std::string_view category, std::string_view language)
+{
+    if (!country.empty() && !field_has_value(channel.tvg_country, country))
+        return false;
+    if (!language.empty() && !field_has_value(channel.tvg_language, language))
+        return false;
+    if (!category.empty())
+    {
+        bool found = field_has_value(channel.group_title, category);
+        for (const std::string_view alternate : channel.alternate_group_titles)
+            found = found || field_has_value(alternate, category);
+        if (!found)
+            return false;
+    }
+    return true;
 }
 
 std::string first_value(std::string_view field)

@@ -285,6 +285,8 @@ class Model
         std::string id, title, detail;
         std::int64_t programme_start = 0;
         std::uint64_t source_id = 0;
+        std::int64_t saved_source_id = 0;
+        std::string source_name{};
     };
     void begin_search();
     void end_search();
@@ -299,13 +301,15 @@ class Model
     std::string search_status() const;
     unsigned search_revision() const
     {
-        return search_movies_.revision() + search_shows_.revision();
+        return search_movies_.revision() + search_shows_.revision() + discovery_revision_;
     }
     bool activate_search_vod(const SearchResult &result);
+    bool activate_search_result(const SearchResult &result);
     bool channel_visible(unsigned index) const;
     bool search_loading() const
     {
-        return search_busy() || search_pending();
+        return search_busy() || search_pending() || discovery_thread_ ||
+               (searching_ && !query_.empty() && query_ != discovery_query_);
     }
     bool search_vod_allowed(const iptv::ChannelView &item) const;
     struct HomeItem
@@ -785,6 +789,39 @@ class Model
     void poll_home_playback();
     bool next_home_episode(const PlayRequest &request);
     VodLibrary search_movies_, search_shows_;
+    struct DiscoverySource
+    {
+        std::int64_t id = 0;
+        int kind = 0;
+        std::string name;
+        std::uint64_t fingerprint = 0, guide_fingerprint = 0;
+        std::string cache;
+        std::unordered_set<std::string> hidden, hidden_channels;
+        std::map<std::string, int> rules;
+        std::map<std::string, std::string, std::less<>> names;
+        bool valid = false, parental = false, kids = false, unlocked = false;
+    };
+    struct DiscoveryMatch
+    {
+        SearchResult result;
+        iptv::Channel item;
+    };
+    void poll_discovery();
+    void stop_discovery();
+    static void *discover_saved(void *self);
+    DiscoverySource discovery_policy(std::uint64_t source) const;
+    bool discovery_allowed(const DiscoveryMatch &match,
+                           const DiscoverySource *policy = nullptr) const;
+    std::vector<DiscoverySource> discovery_sources_;
+    std::vector<DiscoveryMatch> discovery_matches_, discovery_pending_;
+    std::string discovery_query_, discovery_requested_, discovery_running_;
+    std::string discovery_country_, discovery_category_, discovery_language_;
+    unsigned discovery_quality_ = 0;
+    void *discovery_thread_ = nullptr;
+    std::atomic<bool> discovery_done_{false}, discovery_stop_{false};
+    std::uint64_t discovery_due_ = 0;
+    unsigned discovery_revision_ = 0, discovery_missing_ = 0, discovery_pending_missing_ = 0;
+    bool discovery_truncated_ = false, discovery_pending_truncated_ = false;
     bool searching_ = false, vod_overview_ = false;
     CatalogCounts counts_;
     bool vod_was_busy_ = false;
