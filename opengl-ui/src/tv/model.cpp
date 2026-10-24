@@ -105,24 +105,6 @@ bool matches_query(const iptv::ChannelView &channel, std::string_view query, uns
     }
 }
 
-bool matches_filters(const iptv::ChannelView &channel, const std::string &country,
-                     const std::string &category, const std::string &language)
-{
-    if (!country.empty() && !field_has_value(channel.tvg_country, country))
-        return false;
-    if (!language.empty() && !field_has_value(channel.tvg_language, language))
-        return false;
-    if (!category.empty())
-    {
-        bool found = field_has_value(channel.group_title, category);
-        for (const std::string_view alternate : channel.alternate_group_titles)
-            found = found || field_has_value(alternate, category);
-        if (!found)
-            return false;
-    }
-    return true;
-}
-
 // Why a download failed, in words a person can act on.
 std::string fetch_problem(iptv::http::Status network, const iptv::http::FetchResult &fetch,
                           bool account, iptv::XtreamStatus account_status,
@@ -450,6 +432,7 @@ void Model::poll()
     if ((home_waiting_ || vod_.requested() || search_pending()) && !refreshing())
         stop_guide();
     poll_home_playback();
+    poll_discovery();
     vod_.poll(!home_waiting_ && !refreshing() && !guide_thread_ && !search_busy());
     search_movies_.poll(!home_waiting_ && (searching_ || vod_overview_) && !refreshing() &&
                         !guide_thread_ && !vod_.busy() && !vod_.requested() &&
@@ -673,7 +656,7 @@ void Model::rebuild_visible()
         if (by_word)
         {
             const iptv::ChannelView channel = this->channel(index);
-            if (!matches_filters(channel, country_, category_, language_) ||
+            if (!matches_channel_filters(channel, country_, category_, language_) ||
                 (!matches_query(channel, query_, quality) &&
                  !guide_.matches_now(channel.id, query_, guide_time)))
                 continue;
@@ -1828,7 +1811,7 @@ std::vector<Model::SearchResult> Model::search_results(std::string_view query,
         const auto item = channel(at);
         const unsigned quality = index_.traits[at] & CatalogIndex::kQualityMask;
         if ((quality_ != kQualityAny && quality_ != quality) ||
-            !matches_filters(item, country_, category_, language_))
+            !matches_channel_filters(item, country_, category_, language_))
             continue;
         if (matches_query(item, query, quality))
             append({SearchResult::Kind::channel, std::string(item.id), std::string(item.name),
@@ -1875,6 +1858,44 @@ std::vector<Model::SearchResult> Model::search_results(std::string_view query,
         }
         if (count > limit)
             break;
+    }
+    if (searching_)
+    {
+        if (const auto *active = saved_source(selected_source_id_))
+            for (auto &row : rows)
+            {
+                row.saved_source_id = selected_source_id_;
+                row.source_name = active->name;
+            }
+        if (query == discovery_query_)
+        {
+            // Read each provider's current rules once for this result refresh.
+            std::map<std::uint64_t, DiscoverySource> policies;
+            for (const auto &match : discovery_matches_)
+            {
+                auto [policy, inserted] = policies.try_emplace(match.result.source_id);
+                if (inserted)
+                    policy->second = discovery_policy(match.result.source_id);
+                if (discovery_allowed(match, &policy->second) &&
+                    (match.result.kind != SearchResult::Kind::channel ||
+                     ((quality_ == kQualityAny || quality_ == quality_of(match.item)) &&
+                      matches_channel_filters(match.item, country_, category_, language_))))
+                    rows.push_back(match.result);
+            }
+        }
+        if (truncated)
+            *truncated |= discovery_truncated_;
+        unsigned counts[4]{};
+        rows.erase(std::remove_if(rows.begin(), rows.end(),
+                                  [&](const SearchResult &row)
+                                  {
+                                      if (++counts[static_cast<unsigned>(row.kind)] <= limit)
+                                          return false;
+                                      if (truncated)
+                                          *truncated = true;
+                                      return true;
+                                  }),
+                   rows.end());
     }
     return rows;
 }

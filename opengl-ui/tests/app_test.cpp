@@ -398,6 +398,40 @@ TEST_F(AppTest, HomeStartsFirstRoutesFavoritesAndKeepsLiveAndVodAdjacent)
     EXPECT_EQ(app_->tab(), 2);
 }
 
+TEST_F(AppTest, OnDemandAlphabetRailKeepsUpAndBackInsideTheCurrentList)
+{
+    app_.reset();
+    std::ofstream(playlist_)
+        << "#EXTM3U\n#EXTINF:-1 "
+           "group-title=\"Movies\",Alpha\nhttps://stream.invalid/movie/u/p/1.mp4\n"
+           "#EXTINF:-1 group-title=\"Movies\",Beta\nhttps://stream.invalid/movie/u/p/2.mp4\n"
+           "#EXTINF:-1 group-title=\"Movies\",Gamma\nhttps://stream.invalid/movie/u/p/3.mp4\n";
+    model_->refresh();
+    for (int i = 0; i < 400 && model_->refreshing(); ++i)
+    {
+        model_->poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model_->refreshing());
+    model_->view.tab = 2;
+    model_->view.vod_kind = static_cast<int>(ptv::VodKind::movies);
+    model_->view.vod_all = true;
+    make_app();
+    move(Direction::right);
+    move(Direction::right);
+    move(Direction::right); // From the incomplete last row to the letter bar.
+    ASSERT_EQ(model_->view.vod_sort, 1);
+    ASSERT_EQ(model_->view.vod_focus, 2);
+    move(Direction::up); // G -> B, even though the posters are in the first row.
+    EXPECT_FALSE(app_->tabs_focused());
+    EXPECT_EQ(model_->view.vod_focus, 1);
+    press(Action::back);
+    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_TRUE(model_->view.vod_all); // Circle only exits the letters.
+    press(Action::back);
+    EXPECT_FALSE(model_->view.vod_all); // The next Circle returns to categories.
+}
+
 TEST(InterfaceLanguage, BulkCategoryGeometryMatchesIndividualTabs)
 {
     hui::ui::TabBar tabs;
