@@ -256,15 +256,19 @@ for file in sorted(tree.glob("src/**/*")) + sorted(tree.glob("include/*")):
     if '"/download0' in text or '"/app0' in text:
         sys.exit(f"{relative} names a sandbox path; use tv_paths.h or tv_storage.hpp")
 
-# ---- the decoders, woken before filesystem access. The system loads parts
-#      of its video and audio decoders only when they are first used, and with
-#      filesystem access the process no longer sees the sandbox those parts are
-#      loaded from (on hardware: "load_prx failed due to 0x63", then
-#      0x811D0111 from the first Videodec2 call). main() calls this first: it
-#      loads both modules for the life of the process and asks each decoder the
-#      questions that make it load the rest. Nothing is allocated or started. ----
+# ---- FW 3.x AGC/decoder ordering: first preload libSceVideodec2 while
+#      the system loader can still see its sandbox, then initialise AGC through
+#      a temporary EGL display in main(), and only then ask the compute and
+#      decoder memory queries. A compute query before AGC invalidated register
+#      defaults on FW 3.00; moving module loading past EGL breaks other
+#      firmware's module loading. Retain audio warm-up and all query modes. ----
 swap("src/iptv_native_backend.c",
      "int32_t iptv_native_backend_init(iptv_native_backend_t *backend)\n{\n",
+     "void iptv_native_backend_preload_video(int32_t results[6])\n"
+     "{\n"
+     "    results[0] = sceSysmoduleLoadModule(VIDEO_MODULE_ID);\n"
+     "}\n"
+     "\n"
      "void iptv_native_backend_warm(int32_t results[6])\n"
      "{\n"
      "    /* One row of each codec: 1080p H.264, 1080p HEVC, 1080p VP9. */\n"
@@ -272,7 +276,7 @@ swap("src/iptv_native_backend.c",
      "    videodec2_compute_memory_t compute = {0};\n"
      "    unsigned index;\n"
      "\n"
-     "    results[0] = sceSysmoduleLoadModule(VIDEO_MODULE_ID);\n"
+     "    /* Call only after AGC was initialized by the EGL bootstrap. */\n"
      "    compute.size = sizeof(compute);\n"
      "    results[1] = sceVideodec2QueryComputeMemoryInfo(&compute);\n"
      "    for (index = 0; index < 3u; ++index)\n"

@@ -75,9 +75,9 @@ extern "C" int sceSystemServiceParamGetInt(int parameter, int *value);
 extern "C" int sceUserServiceInitialize(void *);
 extern "C" int sceUserServiceGetInitialUser(std::int32_t *);
 extern "C" int sceUserServiceGetUserName(std::int32_t, char *, std::size_t);
-// The player's decoders, loaded and woken (ps5/patch_tree.py adds it to the
-// player's backend): [0] the video module, [1] its compute part, [2..4] H.264,
-// HEVC and VP9, [5] the audio module and its AAC library.
+// The player's decoder bootstrap, supplied by ps5/patch_tree.py. Preload the
+// video module before EGL but perform compute/codec queries only *after* AGC.
+extern "C" void iptv_native_backend_preload_video(std::int32_t results[6]);
 extern "C" void iptv_native_backend_warm(std::int32_t results[6]);
 extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
                                                 std::size_t size, int blocking);
@@ -1198,16 +1198,39 @@ int main()
 {
     say("[TV] entry");
 
-    // The system modules the app will ask for, loaded before anything else.
-    // With filesystem access the process no longer sees the sandbox the
-    // system loader resolves modules in, and once the OpenGL runtime has
-    // started the video decoder's module no longer loads either (0x80020016 on
-    // hardware). Loaded first, they stay for the life of the process, and the
-    // player's and the keyboard's own loads and unloads only count. The
-    // decoders load parts of themselves at their first use: they are asked
-    // now, so those parts are there too.
+    // VideoDec2 must load before EGL and before elevation, but FW 3.00
+    // cannot tolerate its compute-memory query before AGC is initialized.
+    // Open and close a throwaway EGL display once to initialize the same AGC
+    // runtime that the real menu uses; do not create a player presenter or
+    // perform a second sceAgcInit with a different API signature.
     std::int32_t decoders[6] = {};
+    iptv_native_backend_preload_video(decoders);
+    say("[TV][FWCompat] video module preload rc=0x%08x", static_cast<unsigned>(decoders[0]));
+    if (decoders[0] < 0)
+    {
+        say("[TV][FWCompat] video module preload failed; stopping before AGC");
+        notify_failure("Video module preload failed");
+        sys::park();
+    }
+    {
+        ps5::Display bootstrap;
+        say("[TV][FWCompat] early AGC via EGL begin");
+        const bool opened = bootstrap.open();
+        say("[TV][FWCompat] early AGC via EGL opened=%u error=0x%08x",
+            opened ? 1u : 0u, static_cast<unsigned>(bootstrap.last_error()));
+        bootstrap.close();
+        if (!opened)
+        {
+            notify_failure("AGC-first EGL bootstrap failed");
+            sys::park();
+        }
+    }
+    say("[TV][FWCompat] decoder warm-up after AGC begin");
     iptv_native_backend_warm(decoders);
+    say("[TV][FWCompat] decoder warm-up after AGC compute=0x%08x h264=0x%08x "
+        "hevc=0x%08x vp9=0x%08x", static_cast<unsigned>(decoders[1]),
+        static_cast<unsigned>(decoders[2]), static_cast<unsigned>(decoders[3]),
+        static_cast<unsigned>(decoders[4]));
     std::memcpy(g_decoder_modules, decoders, sizeof(g_decoder_modules));
     const int dialogs = sceCommonDialogInitialize();
     const int keyboard = sceSysmoduleLoadModule(kKeyboardModule);
