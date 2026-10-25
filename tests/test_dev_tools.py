@@ -145,6 +145,32 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(self.ftp.files[self.ftp.root + "/eboot.bin"], b"executable")
         self.assertEqual(self.ftp.files[self.ftp.root + "/sce_sys/param.json"], b"{}")
 
+    def test_denied_directory_access_preserves_cleanup_history(self):
+        for arguments in ((), ("--full",)):
+            with self.subTest(arguments=arguments):
+                self.write("obsolete.dat", b"obsolete")
+                self.deploy()
+                (self.folder / "obsolete.dat").unlink()
+                manifest = next(self.manifests.glob("*.json"))
+                previous = manifest.read_bytes()
+                self.ftp.uploads.clear()
+                original_cwd = self.ftp.cwd
+
+                def denied_cwd(path):
+                    if path == self.ftp.root:
+                        raise ftplib.error_perm("550 Permission denied")
+                    return original_cwd(path)
+
+                with patch.object(self.ftp, "cwd", side_effect=denied_cwd):
+                    with self.assertRaisesRegex(ftplib.error_perm, "Permission denied"):
+                        self.deploy(*arguments)
+                self.assertEqual(manifest.read_bytes(), previous)
+                self.assertEqual(self.ftp.uploads, [])
+                self.assertIn(self.ftp.root + "/obsolete.dat", self.ftp.files)
+                self.deploy(*arguments)
+                self.assertNotIn(self.ftp.root + "/obsolete.dat", self.ftp.files)
+                self.assertIn("nothing changed", self.deploy())
+
 
 class AssemblyTimestampTests(unittest.TestCase):
     def test_only_unchanged_files_recover_their_timestamps(self):

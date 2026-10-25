@@ -80,9 +80,17 @@ except OSError as error:
 f.login()
 f.voidcmd("TYPE I")
 
+
+def is_missing(error):
+    message = str(error).lower()
+    return "no such" in message or "not found" in message
+
+
 try:
     f.cwd(remote_root)
-except ftplib.error_perm:
+except ftplib.error_perm as error:
+    if not is_missing(error):
+        raise
     if known:
         print(f"{remote_root} is missing on the console: uploading everything")
         changed = sorted(local, key=lambda rel: (last(rel), rel))
@@ -116,7 +124,7 @@ def delete(path):
     try:
         reply = f.sendcmd("DELE " + path)
     except ftplib.error_perm as error:
-        if "no such" in str(error).lower() or "not found" in str(error).lower():
+        if is_missing(error):
             return
         raise
     if not reply.startswith("2"):
