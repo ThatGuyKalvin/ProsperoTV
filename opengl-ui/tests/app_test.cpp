@@ -991,6 +991,29 @@ TEST_F(AppTest, SourceUserAgentPickerCancelsSelectsPresetsAndRetainsCustomEntry)
     EXPECT_TRUE(model_->saved_source(2)->user_agent.empty());
 }
 
+TEST_F(AppTest, SourceTimingPanelOwnsControllerAndReturnsToSources)
+{
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 4);
+    const auto source = model_->selected_source_id();
+    press(Action::r3);
+    move(Direction::right);
+    EXPECT_EQ(model_->guide_timing(source), (std::pair{30, 0}));
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 4);
+    press(Action::back);
+    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(host::keyboard_requests(), 0);
+    press(Action::r3);
+    press(Action::confirm);
+    EXPECT_EQ(model_->guide_timing(source), (std::pair{0, 0}));
+    press(Action::back);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 5);
+}
+
 TEST_F(AppTest, SettingsAreChangedAndReported)
 {
     press(Action::page_prev); // Home precedes Live TV.

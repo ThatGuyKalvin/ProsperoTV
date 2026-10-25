@@ -249,6 +249,14 @@ bool Library::open(const std::string &path)
         "WHEN OLD.kind!=NEW.kind OR OLD.url!=NEW.url OR OLD.username!=NEW.username OR "
         "OLD.password!=NEW.password "
         "BEGIN DELETE FROM account_info WHERE source=OLD.id; END;"
+        "CREATE TABLE IF NOT EXISTS guide_timing (source INTEGER PRIMARY KEY REFERENCES "
+        "sources(id) ON DELETE CASCADE,guide_minutes INTEGER NOT NULL CHECK(guide_minutes BETWEEN "
+        "-720 AND 720),catchup_minutes INTEGER NOT NULL CHECK(catchup_minutes BETWEEN -720 AND "
+        "720));"
+        "CREATE TRIGGER IF NOT EXISTS timing_source_changed AFTER UPDATE OF "
+        "kind,url,username,password,mac ON sources WHEN OLD.kind!=NEW.kind OR OLD.url!=NEW.url OR "
+        "OLD.username!=NEW.username OR OLD.password!=NEW.password OR OLD.mac!=NEW.mac BEGIN DELETE "
+        "FROM guide_timing WHERE source=OLD.id; END;"
         "CREATE TABLE IF NOT EXISTS source_guide (source INTEGER PRIMARY KEY REFERENCES "
         "sources(id) "
         "ON DELETE CASCADE,url TEXT NOT NULL);"
@@ -428,6 +436,29 @@ std::vector<SavedSource> Library::sources() const
         }
     }
     return result;
+}
+
+std::pair<int, int> Library::guide_timing(std::int64_t source) const
+{
+    Statement query(db_, "SELECT guide_minutes,catchup_minutes FROM guide_timing WHERE source=?1");
+    if (!query.integer(1, source) || !query.row())
+        return {};
+    const auto guide = sqlite3_column_int(query.stmt, 0),
+               catchup = sqlite3_column_int(query.stmt, 1);
+    if (guide < -720 || guide > 720 || catchup < -720 || catchup > 720)
+        return {};
+    return {guide, catchup};
+}
+bool Library::set_guide_timing(std::int64_t source, int guide_minutes, int catchup_minutes)
+{
+    if (source <= 0 || guide_minutes < -720 || guide_minutes > 720 || catchup_minutes < -720 ||
+        catchup_minutes > 720)
+        return false;
+    Statement query(
+        db_, "INSERT INTO guide_timing VALUES(?1,?2,?3) ON CONFLICT(source) DO UPDATE SET "
+             "guide_minutes=excluded.guide_minutes,catchup_minutes=excluded.catchup_minutes");
+    return query.integer(1, source) && query.integer(2, guide_minutes) &&
+           query.integer(3, catchup_minutes) && query.done();
 }
 
 bool Library::save_account_info(std::int64_t source, const AccountInfo &info)

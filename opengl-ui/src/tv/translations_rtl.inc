@@ -798,3 +798,15 @@
 {"No channels yet", {"لا توجد قنوات بعد", "אין ערוצים עדיין"}},
 {"Add a playlist or account on the Sources tab.", {"أضف قائمة تشغيل أو حسابًا في علامة تبويب المصادر.", "הוסיפו רשימת ניגון או חשבון בלשונית המקורות."}},
 {"Open Sources", {"فتح المصادر", "פתיחת המקורות"}},
+
+{"Guide timing", {"توقيت الدليل", "תזמון המדריך"}},
+
+{"Guide time correction", {"تصحيح توقيت الدليل", "תיקון זמן המדריך"}},
+
+{"Catch-up time correction", {"تصحيح توقيت الاستعادة", "תיקון זמן צפייה חוזרת"}},
+
+{"Guide timing could not be saved", {"تعذر حفظ توقيت الدليل", "לא ניתן לשמור את תזמון המדריך"}},
+
+{"Wait for downloads to finish and unlock parental controls.", {"انتظر انتهاء التنزيلات وافتح الرقابة الأبوية.", "יש להמתין לסיום ההורדות ולבטל את נעילת בקרת ההורים."}},
+
+{"Left/Right adjusts by 30 minutes. Cross resets to zero. Guide correction moves programme times; catch-up correction adjusts the provider's original archive time. XMLTV time zones and scheduled updates remain automatic.", {"اليسار واليمين يضبطان بمقدار 30 دقيقة. زر التقاطع يعيد إلى الصفر. تصحيح الدليل يحرك أوقات البرامج وتصحيح الاستعادة يضبط وقت الأرشيف الأصلي للمزود. تبقى مناطق XMLTV والتحديثات المجدولة تلقائية.", "שמאלה וימינה משנים ב־30 דקות. כפתור הצלב מאפס. תיקון המדריך מזיז את זמני התוכניות; תיקון הצפייה החוזרת משנה את זמן הארכיון המקורי של הספק. אזורי הזמן של XMLTV והעדכונים המתוזמנים נשארים אוטומטיים."}},

@@ -24,7 +24,7 @@ struct Programme
 std::int64_t xmltv_time(std::string_view value);
 std::string programme_time(std::int64_t value, bool date = false);
 std::string catchup_url(const iptv::ChannelView &channel, const Programme &programme,
-                        std::int64_t now);
+                        std::int64_t now, int correction_minutes = 0);
 
 class Guide
 {
@@ -34,6 +34,7 @@ class Guide
     std::unordered_map<std::string, std::vector<Programme>> channels;
     std::uint64_t source_id = 0, saved_unix = 0;
     bool truncated = false;
+    bool set_time_shift(int minutes);
     void sort();
     std::size_t count() const;
     std::span<const Programme> programmes(std::string_view channel_id) const;
@@ -42,6 +43,9 @@ class Guide
     bool matches_now(std::string_view channel_id, std::string_view query, std::int64_t time) const;
     bool save(const std::string &path) const;
     bool load(const std::string &path, std::uint64_t expected_source);
+
+  private:
+    int time_shift_minutes_ = 0; // Cache files always retain the original UTC times.
 };
 
 // Feed arbitrary network chunks (XML or gzip). Only channels in this catalog

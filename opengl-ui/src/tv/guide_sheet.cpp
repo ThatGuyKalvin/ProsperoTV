@@ -245,7 +245,7 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         const auto &face = face_for(fonts, fonts.semibold, p->title);
         ui::text(list, face, face.font->fit(p->title, 29, 1450), kMargin, 855, 29, theme.text);
         const auto channel = model.channel(model.visible(row_));
-        const auto available = !catchup_url(channel, *p, now).empty();
+        const auto available = !model.programme_url(channel, *p, now).empty();
         const std::string status = programme_time(p->start) + " - " + programme_time(p->end) +
                                    (available                         ? tr("   Catch-up available")
                                     : p->start <= now && now < p->end ? tr("   On now")

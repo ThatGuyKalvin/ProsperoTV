@@ -28,18 +28,23 @@ class SourcesScreen
     {
         return http_source_ != 0;
     }
+    bool choosing_timing() const
+    {
+        return timing_source_ != 0;
+    }
     bool at_top() const
     {
-        return !choosing_user_agent() && list_.focus() <= 0;
+        return !choosing_user_agent() && !choosing_timing() && list_.focus() <= 0;
     }
 
   private:
     void sync();
+    void sync_timing();
 
     Shared &shared_;
     ui::ListView list_;
     ui::ListView user_agents_;
-    std::int64_t http_source_ = 0;
+    std::int64_t http_source_ = 0, timing_source_ = 0;
     unsigned seen_revision_ = 0;
     std::vector<std::int64_t> ids_;
     std::vector<std::string> usb_files_;

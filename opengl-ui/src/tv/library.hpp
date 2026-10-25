@@ -92,6 +92,8 @@ class Library
     bool save_source(SavedSource *source);
     bool remove_source(std::int64_t id);
     bool save_account_info(std::int64_t source, const AccountInfo &info);
+    std::pair<int, int> guide_timing(std::int64_t source) const;
+    bool set_guide_timing(std::int64_t source, int guide_minutes, int catchup_minutes);
     std::string guide_url(std::int64_t source) const;
     std::map<std::string, std::string> guide_mapping(std::int64_t source) const;
     bool set_guide_url(std::int64_t source, std::string_view url);

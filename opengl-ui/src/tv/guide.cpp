@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <ctime>
 #include <utility>
+#include <limits>
 
 namespace ptv
 {
@@ -134,12 +135,22 @@ std::string programme_time(std::int64_t value, bool date)
     return text;
 }
 
-std::string catchup_url(const iptv::ChannelView &channel, const Programme &p, std::int64_t now)
+std::string catchup_url(const iptv::ChannelView &channel, const Programme &programme,
+                        std::int64_t now, int correction_minutes)
 {
+    auto p = programme;
+    if (correction_minutes < -1440 || correction_minutes > 1440)
+        return {};
     const int days = number(channel.catchup_days);
     if (p.start <= 0 || p.end <= p.start || p.end > now || days <= 0 || days > 365 ||
         now - p.start > static_cast<std::int64_t>(days) * 86400)
         return {};
+    const std::int64_t correction = static_cast<std::int64_t>(correction_minutes) * 60;
+    if (p.start <= -correction ||
+        p.end > std::numeric_limits<std::int64_t>::max() - std::max<std::int64_t>(0, correction))
+        return {};
+    p.start += correction;
+    p.end += correction;
     std::string url(channel.catchup_source);
     std::tm utc{};
     if (!platform::calendar_time(p.start, false, utc))
@@ -186,6 +197,29 @@ std::string catchup_url(const iptv::ChannelView &channel, const Programme &p, st
     }
     std::string canonical;
     return iptv::CanonicalizeStreamUrl(url, &canonical) ? canonical : std::string();
+}
+
+bool Guide::set_time_shift(int minutes)
+{
+    if (minutes < -720 || minutes > 720)
+        return false;
+    if (minutes == time_shift_minutes_)
+        return true;
+    const std::int64_t delta = static_cast<std::int64_t>(minutes - time_shift_minutes_) * 60;
+    for (const auto &[id, entries] : channels)
+        for (const auto &p : entries)
+            for (const auto time : {p.start, p.end})
+                if ((delta > 0 && time > std::numeric_limits<std::int64_t>::max() - delta) ||
+                    (delta < 0 && time < std::numeric_limits<std::int64_t>::min() - delta))
+                    return false;
+    for (auto &[id, entries] : channels)
+        for (auto &p : entries)
+        {
+            p.start += delta;
+            p.end += delta;
+        }
+    time_shift_minutes_ = minutes;
+    return true;
 }
 
 void Guide::sort()
@@ -281,8 +315,10 @@ bool Guide::save(const std::string &path) const
             for (const auto &p : entries)
             {
                 row.text(1, id);
-                sqlite3_bind_int64(row.p, 2, p.start);
-                sqlite3_bind_int64(row.p, 3, p.end);
+                sqlite3_bind_int64(row.p, 2,
+                                   p.start - static_cast<std::int64_t>(time_shift_minutes_) * 60);
+                sqlite3_bind_int64(row.p, 3,
+                                   p.end - static_cast<std::int64_t>(time_shift_minutes_) * 60);
                 row.text(4, p.title);
                 row.text(5, p.description);
                 row.text(6, p.catchup_id);

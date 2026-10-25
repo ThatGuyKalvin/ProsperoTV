@@ -337,6 +337,9 @@ TEST_F(GuideTest, PlaylistAndXtreamMetadataSurviveCatalogStorage)
     EXPECT_EQ(
         ptv::catchup_url(loaded[0], old, now),
         "https://service.invalid/sub/timeshift/user%40home/p%26ss/60/2026-10-08:15-00/123.ts");
+    EXPECT_EQ(
+        ptv::catchup_url(loaded[0], old, now, 60),
+        "https://service.invalid/sub/timeshift/user%40home/p%26ss/60/2026-10-08:16-00/123.ts");
 }
 
 TEST_F(GuideTest, CatchupIsLimitedToTheAdvertisedArchive)
@@ -564,5 +567,215 @@ TEST_F(GuideTest, OverrideAndMatchingInvalidateOldGuideAndSurviveOfflineRestart)
     settle(offline);
     EXPECT_EQ(offline.guide().programmes(first).size(), 3u);
     offline.close();
+}
+
+TEST_F(GuideTest, TimingCorrectionIsAbsoluteAndCachesKeepOriginalUtc)
+{
+    ptv::Guide guide;
+    parse(guide);
+    const auto id = catalog[0].id;
+    const auto original = guide.programmes(id)[0].start;
+    ASSERT_TRUE(guide.set_time_shift(60));
+    EXPECT_EQ(guide.programmes(id)[0].start, original + 3600);
+    ASSERT_TRUE(guide.set_time_shift(60));
+    EXPECT_EQ(guide.programmes(id)[0].start, original + 3600);
+    ASSERT_TRUE(guide.set_time_shift(-30));
+    EXPECT_EQ(guide.programmes(id)[0].start, original - 1800);
+    EXPECT_FALSE(guide.set_time_shift(721));
+    EXPECT_EQ(guide.programmes(id)[0].start, original - 1800);
+    ASSERT_TRUE(guide.save(dir + "/timing-guide.db"));
+    ptv::Guide loaded;
+    ASSERT_TRUE(loaded.load(dir + "/timing-guide.db", 42));
+    EXPECT_EQ(loaded.programmes(id)[0].start, original);
+    ASSERT_TRUE(loaded.set_time_shift(-30));
+    EXPECT_EQ(loaded.programmes(id)[0].start, original - 1800);
+    ASSERT_TRUE(loaded.set_time_shift(0));
+    EXPECT_EQ(loaded.programmes(id)[0].start, original);
+    ptv::Guide invalid;
+    invalid.channels["bad"] = {{INT64_MAX - 100, INT64_MAX - 10, "Overflow", {}, {}}};
+    EXPECT_FALSE(invalid.set_time_shift(30));
+    EXPECT_EQ(invalid.channels["bad"][0].start, INT64_MAX - 100);
+}
+
+TEST_F(GuideTest, CatchupCorrectionChangesOnlyRequestedArchiveTime)
+{
+    const ptv::Programme old{now - 5400, now - 1800, "Previous", {}, {}};
+    EXPECT_EQ(ptv::catchup_url(catalog[0], old, now, 30),
+              "https://archive.invalid/stream?start=" + std::to_string(old.start + 1800) +
+                  "&end=" + std::to_string(old.end + 1800));
+    EXPECT_EQ(ptv::catchup_url(catalog[0], old, now, -60),
+              "https://archive.invalid/stream?start=" + std::to_string(old.start - 3600) +
+                  "&end=" + std::to_string(old.end - 3600));
+    EXPECT_TRUE(
+        ptv::catchup_url(catalog[0], {now, now + 3600, "Future", {}, {}}, now, -720).empty());
+    EXPECT_TRUE(ptv::catchup_url(catalog[0], old, now, 1441).empty());
+    EXPECT_EQ(old.start, now - 5400);
+}
+
+TEST_F(GuideTest, TimingPersistsPerSourceAndResetsForChangedProvider)
+{
+    ptv::Library library;
+    const auto path = dir + "/timing-library.db";
+    ASSERT_TRUE(library.open(path));
+    ptv::SavedSource one{10, 1, "One", "https://one.invalid/list", {}, {}, {}};
+    ptv::SavedSource two{11, 1, "Two", "https://two.invalid/list", {}, {}, {}};
+    ASSERT_TRUE(library.save_source(&one));
+    ASSERT_TRUE(library.save_source(&two));
+    ASSERT_TRUE(library.set_guide_timing(one.id, 60, -30));
+    EXPECT_FALSE(library.set_guide_timing(one.id, 721, 0));
+    EXPECT_FALSE(library.set_guide_timing(99, 30, 30));
+    ASSERT_TRUE(library.close());
+    ASSERT_TRUE(library.open(path));
+    EXPECT_EQ(library.guide_timing(one.id), (std::pair{60, -30}));
+    EXPECT_EQ(library.guide_timing(two.id), (std::pair{0, 0}));
+    one.name = "Renamed";
+    ASSERT_TRUE(library.save_source(&one));
+    EXPECT_EQ(library.guide_timing(one.id), (std::pair{60, -30}));
+    one.url = "https://replacement.invalid/list";
+    ASSERT_TRUE(library.save_source(&one));
+    EXPECT_EQ(library.guide_timing(one.id), (std::pair{0, 0}));
+    ASSERT_TRUE(library.set_guide_timing(two.id, -30, 90));
+    ASSERT_TRUE(library.remove_source(two.id));
+    EXPECT_EQ(library.guide_timing(two.id), (std::pair{0, 0}));
+}
+
+TEST_F(GuideTest, ControllerTimingUpdatesGuideHomeSearchAndSurvivesOfflineRestart)
+{
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::add_playlist_source(dir);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    std::string id;
+    std::int64_t original = 0;
+    {
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        settle(model);
+        const auto source = model.selected_source_id();
+        id = model.channel(0).id;
+        original = model.guide().programmes(id)[0].start;
+        const hui::ui::Fonts fonts{};
+        ptv::Shared shared(model, fonts, {});
+        ptv::SourcesScreen screen(shared);
+        hui::ui::Feedback feedback;
+        hui::InputFrame input;
+        input.pressed = hui::action_bit(hui::Action::r3);
+        screen.handle(input, feedback);
+        ASSERT_TRUE(screen.choosing_timing());
+        input = {};
+        input.nav = hui::Direction::right;
+        screen.handle(input, feedback);
+        EXPECT_EQ(model.guide_timing(source), (std::pair{30, 0}));
+        EXPECT_EQ(model.guide().programmes(id)[0].start, original + 1800);
+        model.report_watch(id);
+        ASSERT_FALSE(model.home_items()[2].empty());
+        EXPECT_EQ(model.home_items()[2][0].detail, "Football & friends");
+        const auto rows = model.search_results("Previous match");
+        ASSERT_EQ(rows.size(), 1u);
+        EXPECT_EQ(rows[0].programme_start, original + 1800);
+        const auto shifted = model.guide().programmes(id)[0];
+        const auto original_url = ptv::catchup_url(
+            model.channel(0), {original, original + 3600, "Previous", {}, {}}, now);
+        EXPECT_EQ(model.programme_url(model.channel(0), shifted, now), original_url);
+        input.nav = hui::Direction::down;
+        screen.handle(input, feedback);
+        input.nav = hui::Direction::left;
+        screen.handle(input, feedback);
+        EXPECT_EQ(model.guide_timing(source), (std::pair{30, -30}));
+        EXPECT_EQ(model.programme_url(model.channel(0), shifted, now),
+                  "https://archive.invalid/stream?start=" + std::to_string(original - 1800) +
+                      "&end=" + std::to_string(original + 1800));
+        input = {};
+        input.pressed = hui::action_bit(hui::Action::confirm);
+        screen.handle(input, feedback);
+        EXPECT_EQ(model.guide_timing(source), (std::pair{30, 0}));
+        input.pressed = hui::action_bit(hui::Action::back);
+        screen.handle(input, feedback);
+        EXPECT_FALSE(screen.choosing_timing());
+        model.refresh_guide();
+        settle(model);
+        EXPECT_EQ(model.guide().programmes(id)[0].start, original + 1800);
+        model.close();
+    }
+    host::set_network(false, "");
+    ptv::Model offline(dir);
+    ASSERT_TRUE(offline.open());
+    settle(offline);
+    EXPECT_EQ(offline.guide().programmes(id)[0].start, original + 1800);
+    EXPECT_EQ(offline.guide_timing(offline.selected_source_id()), (std::pair{30, 0}));
+    offline.close();
+}
+
+TEST_F(GuideTest, LockedProfileCannotChangeGuideTiming)
+{
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::add_playlist_source(dir);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    ptv::Parental parental;
+    ASSERT_TRUE(parental.load(dir + "/prosperotv-parental-v1.txt"));
+    ASSERT_TRUE(parental.set_pin("836295"));
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    EXPECT_FALSE(model.set_guide_timing(model.selected_source_id(), 60, 0));
+    EXPECT_EQ(model.guide_timing(model.selected_source_id()), (std::pair{0, 0}));
+    model.close();
+}
+
+TEST_F(GuideTest, SavedSourceSearchAppliesInactiveProvidersOwnTiming)
+{
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::add_playlist_source(dir);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    const std::string url = "https://second.invalid/list.m3u";
+    const auto fingerprint = iptv::CustomSourceId(url);
+    const auto cached = iptv::ParseExtendedM3u(
+        "#EXTM3U\n#EXTINF:-1,Second channel\nhttps://second.invalid/live.ts\n", fingerprint);
+    ASSERT_EQ(cached.size(), 1u);
+    ASSERT_EQ(iptv::SaveCatalog(dir + "/prosperotv-source-10.sqlite3", cached),
+              iptv::StoreStatus::ok);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource source{10, 1,  "Second provider",           url, {},
+                                {}, {}, ptv::RefreshSchedule::manual};
+        ASSERT_TRUE(library.save_source(&source));
+        ASSERT_TRUE(library.set_guide_timing(source.id, -60, 30));
+    }
+    ptv::Guide guide;
+    guide.source_id = fingerprint;
+    guide.channels[std::string(cached[0].id)] = {{now - 3600, now, "Second programme", {}, {}}};
+    ASSERT_TRUE(guide.save(dir + "/prosperotv-source-10.sqlite3.guide.sqlite3"));
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    const auto active = model.selected_source_id();
+    ASSERT_TRUE(model.set_guide_timing(active, 30, 0));
+    model.begin_search();
+    model.set_query("Second programme");
+    for (int i = 0; i < 600 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading());
+    const auto results = model.search_results("Second programme");
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].saved_source_id, 10);
+    EXPECT_EQ(results[0].programme_start, now - 7200);
+    EXPECT_EQ(model.selected_source_id(), active);
+    ASSERT_TRUE(model.activate_search_result(results[0]));
+    EXPECT_EQ(model.selected_source_id(), 10);
+    ASSERT_EQ(model.guide().programmes(cached[0].id).size(), 1u);
+    EXPECT_EQ(model.guide().programmes(cached[0].id)[0].start, now - 7200);
+    model.close();
 }
 } // namespace

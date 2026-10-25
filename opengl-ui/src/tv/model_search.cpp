@@ -264,6 +264,7 @@ void Model::poll_discovery()
         auto config = library_.guide_url(source.id);
         for (const auto &[channel, guide] : library_.guide_mapping(source.id))
             config += "\n" + channel + "\n" + guide;
+        saved.guide_shift = library_.guide_timing(source.id).first;
         saved.guide_fingerprint =
             config.empty()
                 ? saved.fingerprint
@@ -366,6 +367,7 @@ void *Model::discover_saved(void *argument)
         }
         Guide guide;
         guide.load(source.cache + ".guide.sqlite3", source.guide_fingerprint);
+        (void)guide.set_time_shift(source.guide_shift);
         for (std::size_t i = 0; i < catalog.size() && !model.discovery_stop_.load(); ++i)
         {
             const auto item = catalog[i];

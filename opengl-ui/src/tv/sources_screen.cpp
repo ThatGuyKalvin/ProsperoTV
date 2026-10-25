@@ -153,14 +153,58 @@ std::int64_t SourcesScreen::focused_id() const
 
 void SourcesScreen::enter()
 {
-    http_source_ = 0;
+    http_source_ = timing_source_ = 0;
     sync();
     list_.enter();
+}
+
+void SourcesScreen::sync_timing()
+{
+    const int focus = user_agents_.focus();
+    const auto timing = shared_.model.guide_timing(timing_source_);
+    std::vector<ui::ListItem> rows;
+    for (const auto &[title, minutes] : {std::pair{"Guide time correction", timing.first},
+                                         std::pair{"Catch-up time correction", timing.second}})
+    {
+        ui::ListItem row;
+        row.title = tr(title);
+        row.value = (minutes > 0 ? "+" : "") + std::to_string(minutes) + " min";
+        rows.push_back(std::move(row));
+    }
+    user_agents_.set_items(std::move(rows));
+    user_agents_.set_focus(std::clamp(focus, 0, 1), true);
 }
 
 void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
 {
     auto &model = shared_.model;
+    if (timing_source_)
+    {
+        if (input.is_pressed(Action::back))
+        {
+            timing_source_ = 0;
+            feedback.play(audio::Cue::back);
+            return;
+        }
+        if (input.nav == Direction::left || input.nav == Direction::right ||
+            input.is_pressed(Action::confirm))
+        {
+            auto timing = model.guide_timing(timing_source_);
+            auto &value = user_agents_.focus() == 0 ? timing.first : timing.second;
+            value = input.is_pressed(Action::confirm)
+                        ? 0
+                        : std::clamp(value + (input.nav == Direction::left ? -30 : 30), -720, 720);
+            const bool ok = model.set_guide_timing(timing_source_, timing.first, timing.second);
+            feedback.play(ok ? audio::Cue::select : audio::Cue::error);
+            if (!ok)
+                model.announce(Level::warning, tr("Guide timing could not be saved"),
+                               tr("Wait for downloads to finish and unlock parental controls."), 4);
+            sync_timing();
+        }
+        else
+            user_agents_.handle(input, feedback);
+        return;
+    }
     if (http_source_)
     {
         if (input.is_pressed(Action::back))
@@ -183,6 +227,16 @@ void SourcesScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         return;
     }
     const auto id = focused_id();
+    if (input.is_pressed(Action::r3) && id > 0)
+    {
+        if (!model.require_parent())
+            return;
+        timing_source_ = id;
+        user_agents_.set_focus(0, true);
+        sync_timing();
+        user_agents_.enter();
+        return;
+    }
     if (input.is_pressed(Action::jump_next) && id > 1)
     {
         if (!model.require_parent() || model.refreshing())
@@ -277,9 +331,10 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     const auto &theme = shared_.theme;
     auto &draw = canvas.list;
     const auto &fonts = canvas.fonts;
-    if (http_source_)
+    if (http_source_ || timing_source_)
     {
-        ui::text(draw, fonts.display, tr("HTTP settings"), kMargin, 224, 60, theme.text);
+        ui::text(draw, fonts.display, tr(timing_source_ ? "Guide timing" : "HTTP settings"),
+                 kMargin, 224, 60, theme.text);
         user_agents_.draw(canvas);
         const auto focus = user_agents_.row_rect(user_agents_.focus());
         draw.push_clip(kList);
@@ -288,7 +343,12 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
         draw_glass(canvas, theme, kPanel, 26);
         ui::paragraph(
             draw, fonts.regular,
-            tr("Presets change only the user agent. Custom entry also edits other HTTP settings."),
+            tr(timing_source_
+                   ? "Left/Right adjusts by 30 minutes. Cross resets to zero. Guide correction "
+                     "moves programme times; catch-up correction adjusts the provider's original "
+                     "archive time. XMLTV time zones and scheduled updates remain automatic."
+                   : "Presets change only the user agent. Custom entry also edits other HTTP "
+                     "settings."),
             kPanel.x + 36, 330, 26, kPanel.w - 72, 38, theme.text_muted, 8);
         return;
     }
@@ -420,6 +480,13 @@ int SourcesScreen::hints(ui::Hint *out, int capacity) const
         if (count < capacity)
             out[count++] = hint;
     };
+    if (timing_source_)
+    {
+        add({ui::Button::dpad, tr("Change")});
+        add({ui::Button::cross, tr("Reset")});
+        add({ui::Button::circle, tr("Back")});
+        return count;
+    }
     if (http_source_)
     {
         add({ui::Button::cross, tr("Edit")});
@@ -438,6 +505,7 @@ int SourcesScreen::hints(ui::Hint *out, int capacity) const
     {
         add({ui::Button::square, tr("Refresh schedule")});
         add({ui::Button::l2, tr("XMLTV guide")});
+        add({ui::Button::right_stick, tr("Guide timing")});
     }
     if (focused_id() > 1)
         add({ui::Button::r2, tr("HTTP settings")});

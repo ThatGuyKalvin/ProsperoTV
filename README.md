@@ -145,6 +145,14 @@
   episode watched last, from the time it was left at.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
 
+### Guide timing and player feature checklist
+
+In Sources, focus a saved source and press **R3** to adjust its guide or catch-up
+clock independently. Left/Right changes 30 minutes; Cross resets to zero.
+XMLTV timezone parsing and scheduled guide refresh remain automatic.
+See [the Android Premium feature checklist](docs/SMARTERS_PREMIUM_PARITY.md)
+for the implemented PS5 capabilities and remaining player/platform integrations.
+
 ### Search across saved sources
 
 - The main Search panel finds channels, movies, shows, and saved programmes
