@@ -10,6 +10,34 @@
 
 namespace ptv
 {
+bool Model::set_guide_timing(std::int64_t source, int guide_minutes, int catchup_minutes)
+{
+    const auto *saved = saved_source(source);
+    if (!saved || saved->kind == 0 || !require_parent() || guide_thread_ || refreshing() ||
+        guide_minutes < -720 || guide_minutes > 720 || catchup_minutes < -720 ||
+        catchup_minutes > 720)
+        return false;
+    const auto previous = library_.guide_timing(source);
+    if (source == selected_source_id_ && !guide_.set_time_shift(guide_minutes))
+        return false;
+    if (!library_.set_guide_timing(source, guide_minutes, catchup_minutes))
+    {
+        if (source == selected_source_id_)
+            (void)guide_.set_time_shift(previous.first);
+        return false;
+    }
+    stop_discovery();
+    rebuild_visible();
+    ++revision_;
+    return true;
+}
+std::string Model::programme_url(const iptv::ChannelView &channel, const Programme &programme,
+                                 std::int64_t now) const
+{
+    const auto timing = library_.guide_timing(selected_source_id_);
+    return catchup_url(channel, programme, now, timing.second - timing.first);
+}
+
 std::string Model::guide_path() const
 {
     return cache_path(active_source_) + ".guide.sqlite3";
@@ -42,6 +70,7 @@ void Model::stop_guide()
     if (completed && guide_ok_)
     {
         guide_ = std::move(pending_guide_);
+        (void)guide_.set_time_shift(library_.guide_timing(selected_source_id_).first);
         rebuild_visible();
     }
     if (!completed)
@@ -60,6 +89,7 @@ void Model::poll_guide()
         if (guide_ok_)
         {
             guide_ = std::move(pending_guide_);
+            (void)guide_.set_time_shift(library_.guide_timing(selected_source_id_).first);
             guide_status_ =
                 guide_.count() == 0 ? tr("No programmes matched this source's channels.")
                 : guide_.truncated ? tr("Guide loaded; this provider exceeded the programme limit.")
@@ -197,7 +227,7 @@ bool Model::play_programme(unsigned index, const Programme &programme)
     if (programme.start <= now && programme.end > now)
         return play(index);
     const auto channel = catalog_[index];
-    const auto url = catchup_url(channel, programme, now);
+    const auto url = programme_url(channel, programme, now);
     if (url.empty())
     {
         notify(Level::warning, programme.start > now
@@ -231,6 +261,7 @@ void Model::reload_guide_configuration()
 {
     guide_ = {};
     (void)guide_.load(guide_path(), guide_source_id());
+    (void)guide_.set_time_shift(library_.guide_timing(selected_source_id_).first);
     next_guide_check_ = 0;
     rebuild_visible();
     refresh_guide();

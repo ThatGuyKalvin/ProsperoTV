@@ -222,6 +222,14 @@ const Step kWalk[] = {
     // ---- Sources ----
     press(Action::page_next, 1.1f, "19-sources"),
     look(0.7f, "20-sources-playlist"),
+    press(Action::r3, 0.6f, "20a-guide-timing"),
+    move(Direction::right, 0.4f, "20b-guide-plus-30"),
+    move(Direction::down, 0.2f),
+    move(Direction::left, 0.4f, "20c-catchup-minus-30"),
+    press(Action::confirm, 0.2f),
+    move(Direction::up, 0.2f),
+    press(Action::confirm, 0.2f),
+    press(Action::back, 0.4f),
     move(Direction::down, 0.7f, "21-sources-account"),
     press(Action::jump_next, 0.7f, "21a-user-agent-presets"),
     move(Direction::down, 0.3f),
@@ -566,6 +574,34 @@ int main(int argc, char **argv)
 
     constexpr float kDt = 1.0f / 60.0f;
     hui::ui::Feedback feedback;
+    if (std::getenv("TV_GUIDE_TIMING_REVIEW"))
+    {
+        for (unsigned i = 0; i < 350; ++i)
+        {
+            app.update({}, kDt, feedback);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        const auto tick = [&](hui::Action action, hui::Direction direction = hui::Direction::none)
+        {
+            hui::InputFrame input;
+            input.pressed = direction == hui::Direction::none ? hui::action_bit(action) : 0;
+            input.nav = direction;
+            app.update(input, kDt, feedback);
+            for (unsigned i = 0; i < 20; ++i)
+                app.update({}, kDt, feedback);
+        };
+        for (unsigned i = 0; app.tab() != 4 && i < 7; ++i)
+            tick(Action::page_next);
+        tick(Action::r3);
+        tick(Action::right, Direction::right);
+        tick(Action::down, Direction::down);
+        tick(Action::left, Direction::left);
+        render("guide-timing");
+        app.stop_preview();
+        app.release_images();
+        model.close();
+        return ok ? 0 : 1;
+    }
     if (std::getenv("TV_SHARING_REVIEW"))
     {
         const auto tick = [&](hui::Action action, hui::Direction direction = hui::Direction::none)
