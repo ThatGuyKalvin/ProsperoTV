@@ -72,23 +72,26 @@ iptv::http::FetchResult read_usb_playlist(const std::string &path, iptv::http::L
         result.status = Status::read_failed;
         return result;
     }
-    const int directory = open(drive.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    if (directory < 0)
+    // openat() is not provided by the console's libkernel: its import resolves
+    // to null and calling it kills the process (issue #99). The drive is
+    // checked by path instead, before the read and again after it.
+    struct stat mount
+    {
+    };
+    if (lstat(drive.c_str(), &mount) != 0 || !S_ISDIR(mount.st_mode))
     {
         result.status = Status::read_failed;
         return result;
     }
-    const int file = openat(directory, path.c_str() + 10, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    const int file = open((drive + path.substr(9)).c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     struct stat st
     {
-    }, mount{};
-    if (file < 0 || fstat(file, &st) != 0 || fstat(directory, &mount) != 0 ||
-        !S_ISREG(st.st_mode) || st.st_dev != mount.st_dev || st.st_size <= 0 ||
-        static_cast<std::uint64_t>(st.st_size) > iptv::http::kMaxListBytes)
+    };
+    if (file < 0 || fstat(file, &st) != 0 || !S_ISREG(st.st_mode) || st.st_dev != mount.st_dev ||
+        st.st_size <= 0 || static_cast<std::uint64_t>(st.st_size) > iptv::http::kMaxListBytes)
     {
         if (file >= 0)
             close(file);
-        close(directory);
         result.status = Status::read_failed;
         return result;
     }
@@ -133,7 +136,6 @@ iptv::http::FetchResult read_usb_playlist(const std::string &path, iptv::http::L
          current.st_ino != mount.st_ino))
         result.status = Status::read_failed;
     close(file);
-    close(directory);
     return result;
 }
 } // namespace ptv
