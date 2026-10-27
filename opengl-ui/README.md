@@ -26,6 +26,11 @@ It compiles against two source trees:
 | `ps5-homebrew-ui` (renderer, themes, components, font files, sounds) | fetched at its pinned commit into `.deps/` by `tools/fetch-kit.sh` | `KIT=` |
 | ProsperoTV (catalog, stores, network, player) | the repository this folder is in | `TV=` |
 
+On macOS and Windows, `tools/dev.sh test|preview|build` at the repository root
+runs these in the development container ([Development setup](../docs/DEVELOPMENT.md)).
+Natively, the preview needs Mesa's EGL and software OpenGL (`libegl-dev
+libgl-dev libgl1-mesa-dri` on Ubuntu).
+
 ```bash
 tools/run-tests.sh                 # the logic and the interface, no OpenGL, under ASan + UBSan
 tools/host-snapshots.sh            # build for the PC, run the walk, write build/snapshots/*.png

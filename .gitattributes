@@ -2,7 +2,7 @@
 # Copyright (C) 2026 BlackBearReloaded
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-* text=auto
+* text=auto eol=lf
 *.sh text eol=lf
 *.c text eol=lf
 *.cc text eol=lf
