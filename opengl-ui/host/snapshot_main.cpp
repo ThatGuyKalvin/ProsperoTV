@@ -329,16 +329,23 @@ const Step kWalk[] = {
     press(Action::page_next, 0.7f, "54-sources-with-portals"),
     press(Action::page_prev),
     press(Action::page_prev, 0.7f, "55-vod-home"),
-    press(Action::confirm, 2.0f, "56-vod-categories"),
-    move(Direction::down),
+    press(Action::confirm, 2.0f, "58-vod-movies"),
+    move(Direction::right),
+    move(Direction::right),
+    move(Direction::right, 0.4f, "58a-vod-movies-alphabet"),
+    move(Direction::up, 0.4f, "58b-vod-movies-letter-jump"),
+    press(Action::back),
+    press(Action::touch, 0.3f, "56-vod-categories"),
+    move(Direction::right),
+    move(Direction::right, 0.4f, "56a-vod-category-alphabet"),
+    press(Action::back),
     press(Action::confirm, 0.5f, "57-vod-child-categories"),
-    press(Action::confirm, 1.2f, "58-vod-movies"),
     press(Action::back),
     press(Action::back),
-    press(Action::back),
-    move(Direction::down),
-    press(Action::confirm, 1.2f),
+    move(Direction::right),
     press(Action::confirm, 1.2f, "59-vod-shows"),
+    move(Direction::right, 0.4f, "59a-vod-shows-alphabet"),
+    press(Action::back),
     press(Action::confirm, 1.2f, "60-vod-seasons"),
     move(Direction::down),
     press(Action::confirm),
@@ -508,8 +515,7 @@ int main(int argc, char **argv)
     appearance.high_contrast = std::getenv("TV_HIGH_CONTRAST") != nullptr;
     ptv::App app(model, fonts, renderer.glass_texture(), appearance, "host build");
     app.configure_images(
-        [&renderer](const ptv::ImagePixels &pixels)
-        {
+        [&renderer](const ptv::ImagePixels &pixels) {
             return renderer.batch().create_texture(pixels.width, pixels.height, pixels.rgba.data());
         },
         [](std::uint32_t texture) { glDeleteTextures(1, &texture); });

@@ -833,7 +833,9 @@ TEST_F(VodTest, OverviewCountsTitlesAndDisablesOnlyConfirmedEmptyLists)
     screen.refresh();
     ASSERT_TRUE(settle(model));
     ASSERT_TRUE(model.vod().catalog().empty()) << model.vod().status();
-    ASSERT_TRUE(screen.back());
+    ASSERT_TRUE(screen.back()); // Poster grid back to categories.
+    EXPECT_FALSE(model.view.vod_all);
+    ASSERT_TRUE(screen.back()); // Categories back to Movies / TV shows.
     ASSERT_EQ(model.view.vod_kind, -1);
     settle_counts(model);
     EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 0u);
@@ -900,10 +902,10 @@ TEST_F(VodTest, ControllerBrowsesChildrenAndStartsAMovieWithoutChangingLiveHisto
         input.pressed = hui::action_bit(action);
         screen.handle(input, feedback);
     };
-    const auto down = [&]
+    const auto right = [&]
     {
         hui::InputFrame input;
-        input.nav = hui::Direction::down;
+        input.nav = hui::Direction::right;
         screen.handle(input, feedback);
     };
     screen.enter();
@@ -911,10 +913,12 @@ TEST_F(VodTest, ControllerBrowsesChildrenAndStartsAMovieWithoutChangingLiveHisto
     ASSERT_TRUE(settle(model));
     ASSERT_TRUE(model.vod().loaded());
     screen.update();
-    down();
+    EXPECT_TRUE(model.view.vod_all);
+    press(hui::Action::touch); // Categories are a secondary view beside the poster grid.
+    right();
     press(hui::Action::confirm);
     EXPECT_EQ(model.view.vod_category, "US");
-    down();
+    right();
     press(hui::Action::confirm);
     EXPECT_EQ(model.view.vod_category, "US / Movies");
     press(hui::Action::confirm); // Browse all below Movies, including Kids.
@@ -1966,5 +1970,470 @@ TEST_F(VodTest, ViewingLimitStopsFontlessControlsQualityReopenHomeAndNextEpisode
     // A quality reopen reuses the current request but must acquire the same meter again.
     EXPECT_FALSE(model.viewing_tick(true));
     EXPECT_EQ(model.viewing_control(), 2);
+    model.close();
+}
+
+TEST_F(VodTest, SearchFindsSavedProvidersWithoutSwitchingAndRoutesMovieToItsSource)
+{
+    const std::string url = "https://second.invalid/list.m3u";
+    const auto fingerprint = iptv::CustomSourceId(url);
+    const auto cached = iptv::ParseExtendedM3u(
+        "#EXTM3U\n#EXTINF:-1 group-title=\"Cinema\",Second movie\n"
+        "https://second.invalid/movie/u/p/40.mp4\n"
+        "#EXTINF:-1 group-title=\"Drama\",Second show "
+        "S01E01\nhttps://second.invalid/series/u/p/51.mp4\n"
+        "#EXTINF:-1 group-title=\"Drama\",Second show "
+        "S01E02\nhttps://second.invalid/series/u/p/52.mp4\n"
+        "#EXTINF:-1 group-title=\"News\",Second live\nhttps://second.invalid/live/u/p/1.ts\n",
+        fingerprint);
+    ASSERT_EQ(iptv::SaveCatalog(dir + "/prosperotv-source-6.sqlite3", cached),
+              iptv::StoreStatus::ok);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource source{6,  1,  "Second provider",           url, {},
+                                {}, {}, ptv::RefreshSchedule::manual};
+        source.user_agent = "SecondAgent";
+        ASSERT_TRUE(library.save_source(&source));
+    }
+    ptv::Guide guide;
+    guide.source_id = fingerprint;
+    const auto live = std::find_if(cached.begin(), cached.end(), [](const auto &item)
+                                   { return item.media_kind == iptv::MediaKind::live; });
+    ASSERT_NE(live, cached.end());
+    guide.channels[std::string((*live).id)].push_back(
+        {1800000000, 1800003600, "Second programme", {}, {}});
+    ASSERT_TRUE(guide.save(dir + "/prosperotv-source-6.sqlite3.guide.sqlite3"));
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.begin_search();
+    model.set_query("Second");
+    for (int i = 0; i < 600 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading()) << model.search_status();
+    EXPECT_EQ(model.selected_source_id(), 3);
+    const auto results = model.search_results("Second");
+    ASSERT_EQ(results.size(), 4u);
+    for (const auto &result : results)
+    {
+        EXPECT_EQ(result.saved_source_id, 6);
+        EXPECT_EQ(result.source_id, fingerprint);
+        EXPECT_EQ(result.source_name, "Second provider");
+    }
+    const auto movie = std::find_if(results.begin(), results.end(), [](const auto &row)
+                                    { return row.kind == ptv::Model::SearchResult::Kind::movie; });
+    ASSERT_NE(movie, results.end());
+    ASSERT_TRUE(model.activate_search_result(*movie));
+    EXPECT_EQ(model.selected_source_id(), 6);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    EXPECT_EQ(request.urls.front(), "https://second.invalid/movie/u/p/40.mp4");
+    EXPECT_EQ(request.source_id, fingerprint);
+    EXPECT_EQ(request.user_agent, "SecondAgent");
+    model.close();
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ASSERT_TRUE(library.select_source(3));
+    }
+    ptv::Model again(dir);
+    ASSERT_TRUE(again.open());
+    again.begin_search();
+    again.set_query("Second");
+    for (int i = 0; i < 600 && again.search_loading(); ++i)
+    {
+        again.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const auto found = again.search_results("Second");
+    const auto show = std::find_if(found.begin(), found.end(), [](const auto &row)
+                                   { return row.kind == ptv::Model::SearchResult::Kind::show; });
+    ASSERT_NE(show, found.end());
+    ASSERT_TRUE(again.activate_search_result(*show));
+    EXPECT_EQ(again.selected_source_id(), 6);
+    EXPECT_EQ(again.view.vod_kind, static_cast<int>(ptv::VodKind::episodes));
+    EXPECT_EQ(again.view.vod_series_name, "Second show");
+    EXPECT_EQ(again.vod().catalog().size(), 2u);
+    again.close();
+}
+
+TEST_F(VodTest, SearchRespectsInactiveProviderPolicyAndRejectsChangedCredentials)
+{
+    const std::string url = "https://second.invalid/list.m3u";
+    const auto fingerprint = iptv::CustomSourceId(url);
+    auto catalog =
+        iptv::ParseExtendedM3u("#EXTM3U\n#EXTINF:-1 group-title=\"Hidden / Films\",Second hidden\n"
+                               "https://second.invalid/movie/u/p/40.mp4\n"
+                               "#EXTINF:-1 group-title=\"Cinema\",Second "
+                               "allowed\nhttps://second.invalid/movie/u/p/41.mp4\n",
+                               fingerprint);
+    ASSERT_EQ(iptv::SaveCatalog(dir + "/prosperotv-source-6.sqlite3", catalog),
+              iptv::StoreStatus::ok);
+    ptv::SavedSource source{6, 1, "Second provider", url, {}, {}, {}, ptv::RefreshSchedule::manual};
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ASSERT_TRUE(library.save_source(&source));
+        ASSERT_TRUE(library.hide_category(fingerprint, "Hidden", true));
+    }
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.begin_search();
+    model.set_query("Second");
+    for (int i = 0; i < 600 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading());
+    const auto results = model.search_results("Second");
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].title, "Second allowed");
+    auto forged = results[0];
+    ++forged.source_id;
+    EXPECT_FALSE(model.activate_search_result(forged));
+    std::string response;
+    ASSERT_EQ(
+        model.remote_sources(
+            R"({"operation":"save","id":6,"kind":1,"name":"Changed","url":"https://changed.invalid/list.m3u","schedule":2})",
+            response),
+        200);
+    EXPECT_FALSE(model.activate_search_result(results[0]));
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model.take_play_request(&request));
+    model.close();
+}
+
+TEST_F(VodTest, PosterGridNavigatesRowsAndIncompleteLastRow)
+{
+    std::string titles = "[";
+    for (int i = 0; i < 13; ++i)
+    {
+        if (i)
+            titles += ",";
+        titles += "{\"stream_id\":" + std::to_string(i + 100) + ",\"name\":\"Film " +
+                  std::to_string(i) + "\",\"container_extension\":\"mp4\"}";
+    }
+    response("get_vod_streams", titles + "]");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.view.vod_kind = static_cast<int>(ptv::VodKind::movies);
+    model.view.vod_all = true;
+    hui::ui::Fonts fonts;
+    ptv::Shared shared(model, fonts, {});
+    ptv::VodScreen screen(shared);
+    screen.enter();
+    ASSERT_TRUE(settle(model));
+    screen.update();
+    ASSERT_EQ(screen.result_count(), 13u);
+    hui::ui::Feedback feedback;
+    const auto move = [&](hui::Direction direction, bool repeat = false)
+    {
+        hui::InputFrame input;
+        input.nav = direction;
+        input.nav_repeat = repeat;
+        screen.handle(input, feedback);
+    };
+    move(hui::Direction::right);
+    EXPECT_EQ(model.view.vod_focus, 1);
+    EXPECT_TRUE(screen.at_top());
+    move(hui::Direction::down);
+    EXPECT_EQ(model.view.vod_focus, 6);
+    EXPECT_FALSE(screen.at_top());
+    move(hui::Direction::down);
+    EXPECT_EQ(model.view.vod_focus, 11);
+    move(hui::Direction::right);
+    EXPECT_EQ(model.view.vod_focus, 12);
+    move(hui::Direction::right, true);
+    EXPECT_FALSE(screen.on_letters());
+    move(hui::Direction::right);
+    EXPECT_EQ(model.view.vod_focus, 12);
+    EXPECT_TRUE(screen.on_letters());
+    move(hui::Direction::left);
+    EXPECT_FALSE(screen.on_letters());
+    move(hui::Direction::up);
+    EXPECT_EQ(model.view.vod_focus, 7);
+    model.close();
+}
+
+TEST_F(VodTest, AlphabetRailWorksForMoviesAndShowsAndSkipsEmptyLetters)
+{
+    const std::array<std::string, 6> names{"Zulu",  "bravo",       "Éclair",
+                                           "alpha", "007 Mission", "日本ドラマ"};
+    for (const auto kind : {ptv::VodKind::movies, ptv::VodKind::series})
+    {
+        SCOPED_TRACE(static_cast<int>(kind));
+        std::string records = "[";
+        for (unsigned i = 0; i < names.size(); ++i)
+        {
+            if (i)
+                records += ",";
+            records +=
+                "{\"" + std::string(kind == ptv::VodKind::movies ? "stream_id" : "series_id") +
+                "\":" + std::to_string(100 + i) + ",\"name\":\"" + names[i] +
+                "\",\"added\":" + std::to_string(1000 - i) + ",\"container_extension\":\"mp4\"}";
+        }
+        response(kind == ptv::VodKind::movies ? "get_vod_streams" : "get_series", records + "]");
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        model.view.vod_kind = static_cast<int>(kind);
+        model.view.vod_all = true;
+        hui::ui::Fonts fonts;
+        ptv::Shared shared(model, fonts, {});
+        ptv::VodScreen screen(shared);
+        screen.enter();
+        ASSERT_TRUE(settle(model));
+        screen.update();
+        ASSERT_EQ(screen.result_count(), names.size());
+        EXPECT_EQ(screen.result_titles().front(), "Zulu");
+        hui::ui::Feedback feedback;
+        const auto move = [&](hui::Direction direction)
+        {
+            hui::InputFrame input;
+            input.nav = direction;
+            screen.handle(input, feedback);
+        };
+        for (int i = 0; i < 5; ++i)
+            move(hui::Direction::right);
+        ASSERT_TRUE(screen.on_letters());
+        EXPECT_FALSE(screen.at_top());
+        EXPECT_EQ(model.view.vod_sort, 1);
+        EXPECT_EQ(model.view.vod_focus, 0); // The focused numeric title survives the reorder.
+        EXPECT_EQ(screen.result_titles(),
+                  (std::vector<std::string>{"007 Mission", "日本ドラマ", "alpha", "bravo", "Éclair",
+                                            "Zulu"}));
+        move(hui::Direction::up); // '#' is the first group.
+        EXPECT_EQ(model.view.vod_focus, 0);
+        move(hui::Direction::down);
+        EXPECT_EQ(model.view.vod_focus, 2); // A
+        move(hui::Direction::down);
+        EXPECT_EQ(model.view.vod_focus, 3); // B
+        move(hui::Direction::down);
+        EXPECT_EQ(model.view.vod_focus, 4); // E, including accented letters
+        move(hui::Direction::down);
+        EXPECT_EQ(model.view.vod_focus, 5); // Z
+        move(hui::Direction::down);
+        EXPECT_EQ(model.view.vod_focus, 5);
+        hui::InputFrame confirm;
+        confirm.pressed = hui::action_bit(hui::Action::confirm);
+        screen.handle(confirm, feedback);
+        EXPECT_FALSE(screen.on_letters());
+        EXPECT_EQ(model.view.vod_kind, static_cast<int>(kind));
+        ptv::PlayRequest request;
+        EXPECT_FALSE(model.take_play_request(&request));
+        model.close();
+    }
+}
+
+TEST_F(VodTest, AlphabetRailStaysWithinNestedMovieAndShowCategories)
+{
+    const std::string categories =
+        R"([{"category_id":1,"category_name":"Genres"},{"category_id":2,"category_name":"Comedy","parent_id":1},{"category_id":3,"category_name":"Drama","parent_id":1},{"category_id":4,"category_name":"Hidden","parent_id":1},{"category_id":5,"category_name":"Other"}])";
+    response("get_vod_categories", categories);
+    response("get_series_categories", categories);
+    for (const auto kind : {ptv::VodKind::movies, ptv::VodKind::series})
+    {
+        const std::string id = kind == ptv::VodKind::movies ? "stream_id" : "series_id";
+        response(kind == ptv::VodKind::movies ? "get_vod_streams" : "get_series",
+                 "[{\"" + id +
+                     "\":100,\"name\":\"Alpha\",\"category_id\":2},"
+                     "{\"" +
+                     id +
+                     "\":101,\"name\":\"Beta\",\"category_id\":2},"
+                     "{\"" +
+                     id +
+                     "\":102,\"name\":\"Zulu\",\"category_id\":2},"
+                     "{\"" +
+                     id +
+                     "\":103,\"name\":\"Delta\",\"category_id\":3},"
+                     "{\"" +
+                     id +
+                     "\":104,\"name\":\"Forbidden\",\"category_id\":4},"
+                     "{\"" +
+                     id + "\":105,\"name\":\"Omega\",\"category_id\":5}]");
+        ptv::Model model(dir);
+        ASSERT_TRUE(model.open());
+        ASSERT_TRUE(model.hide_category("Genres / Hidden", true));
+        model.view.vod_kind = static_cast<int>(kind);
+        model.view.vod_category = "Genres";
+        hui::ui::Fonts fonts;
+        ptv::Shared shared(model, fonts, {});
+        ptv::VodScreen screen(shared);
+        screen.enter();
+        ASSERT_TRUE(settle(model));
+        screen.update();
+        hui::ui::Feedback feedback;
+        const auto move = [&](hui::Direction direction)
+        {
+            hui::InputFrame input;
+            input.nav = direction;
+            screen.handle(input, feedback);
+        };
+        const auto confirm = [&]
+        {
+            hui::InputFrame input;
+            input.pressed = hui::action_bit(hui::Action::confirm);
+            screen.handle(input, feedback);
+        };
+        move(hui::Direction::right);
+        move(hui::Direction::right);
+        move(hui::Direction::right);
+        move(hui::Direction::right); // Hidden remains available for restoring the category.
+        ASSERT_TRUE(screen.on_letters());
+        EXPECT_EQ(model.view.vod_focus, 1); // Comedy; the hidden category is not a letter target.
+        move(hui::Direction::down);
+        EXPECT_EQ(model.view.vod_focus, 2); // Drama
+        move(hui::Direction::down);
+        EXPECT_EQ(model.view.vod_focus, 2);
+        move(hui::Direction::up);
+        EXPECT_EQ(model.view.vod_focus, 1); // Comedy
+        confirm();                          // Return to the category without opening it yet.
+        EXPECT_EQ(model.view.vod_category, "Genres");
+        confirm();
+        ASSERT_EQ(model.view.vod_category, "Genres / Comedy");
+        EXPECT_EQ(screen.result_titles(), (std::vector<std::string>{"Alpha", "Beta", "Zulu"}));
+        for (int i = 0; i < 4; ++i)
+            move(hui::Direction::right);
+        ASSERT_TRUE(screen.on_letters());
+        move(hui::Direction::up);
+        EXPECT_EQ(model.view.vod_focus, 2); // Beta; nothing from Drama or Other.
+        move(hui::Direction::up);
+        EXPECT_EQ(model.view.vod_focus, 1); // Alpha; Browse all is not indexed.
+        EXPECT_TRUE(screen.back());
+        EXPECT_FALSE(screen.on_letters());
+        EXPECT_EQ(model.view.vod_category, "Genres / Comedy");
+        model.close();
+    }
+}
+
+TEST_F(VodTest, AlphabetRailUsesFilteredTitlesAndDoesNotReorderEpisodes)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.view.vod_kind = static_cast<int>(ptv::VodKind::movies);
+    model.view.vod_all = true;
+    model.view.vod_query = "Alpha";
+    hui::ui::Fonts fonts;
+    ptv::Shared shared(model, fonts, {});
+    ptv::VodScreen screen(shared);
+    screen.enter();
+    ASSERT_TRUE(settle(model));
+    screen.update();
+    ASSERT_EQ(screen.result_count(), 1u);
+    hui::ui::Feedback feedback;
+    const auto move = [&](hui::Direction direction)
+    {
+        hui::InputFrame input;
+        input.nav = direction;
+        screen.handle(input, feedback);
+    };
+    move(hui::Direction::right);
+    ASSERT_TRUE(screen.on_letters());
+    move(hui::Direction::down);
+    EXPECT_EQ(model.view.vod_focus, 0); // Beta is outside the search.
+    ASSERT_TRUE(model.hide_category("US", true));
+    screen.update();
+    EXPECT_EQ(screen.result_count(), 0u);
+    EXPECT_FALSE(screen.on_letters());
+    move(hui::Direction::right);
+    EXPECT_FALSE(screen.on_letters());
+    ASSERT_TRUE(model.hide_category("US", false));
+    model.view.vod_kind = static_cast<int>(ptv::VodKind::episodes);
+    model.view.vod_series = "20";
+    model.view.vod_series_group = "Comedy";
+    model.view.vod_query.clear();
+    model.view.vod_sort = 0;
+    screen.enter();
+    ASSERT_TRUE(settle(model));
+    screen.update();
+    const auto episodes = screen.result_titles();
+    ASSERT_EQ(episodes.size(), 3u);
+    move(hui::Direction::right);
+    EXPECT_FALSE(screen.on_letters());
+    EXPECT_EQ(model.view.vod_sort, 0);
+    EXPECT_EQ(screen.result_titles(), episodes);
+    model.close();
+}
+
+TEST_F(VodTest, SearchChecksInactiveParentalRulesBeforeCappingAndReadsVodWithoutLiveCache)
+{
+    const iptv::XtreamCredentials other{"https://other.invalid", "viewer", "secret"};
+    const auto fingerprint = iptv::XtreamSourceId(other);
+    ptv::SavedSource source{6,
+                            2,
+                            "Other account",
+                            other.server_url,
+                            other.username,
+                            other.password,
+                            {},
+                            ptv::RefreshSchedule::manual};
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ASSERT_TRUE(library.save_source(&source));
+        ASSERT_TRUE(library.set_category_rule(fingerprint, "Restricted", 1));
+    }
+    ptv::Parental parent;
+    ASSERT_TRUE(parent.load(dir + "/prosperotv-parental-v1.txt"));
+    ASSERT_TRUE(parent.set_pin("1234"));
+    iptv::Catalog catalog;
+    catalog.source_id = fingerprint;
+    for (int i = 0; i < 260; ++i)
+    {
+        iptv::Channel item;
+        item.id = "locked-" + std::to_string(i);
+        item.source_id = fingerprint;
+        item.name = "Shared restricted movie";
+        item.group_title = "Restricted / Films";
+        item.media_kind = iptv::MediaKind::movie;
+        item.url = "https://other.invalid/movie/viewer/secret/" + std::to_string(i) + ".mp4";
+        catalog.Add(item);
+    }
+    iptv::Channel allowed;
+    allowed.id = "allowed";
+    allowed.source_id = fingerprint;
+    allowed.name = "Shared permitted movie";
+    allowed.group_title = "Films";
+    allowed.media_kind = iptv::MediaKind::movie;
+    allowed.url = "https://other.invalid/movie/viewer/secret/999.mp4";
+    catalog.Add(allowed);
+    ASSERT_EQ(iptv::SaveCatalog(dir + "/prosperotv-source-6.sqlite3.vod-0-" +
+                                    std::to_string(iptv::CustomSourceId("")) + ".sqlite3",
+                                catalog),
+              iptv::StoreStatus::ok);
+    // A provider with no shows still has a valid saved list, not a missing one.
+    iptv::Catalog no_shows;
+    no_shows.source_id = fingerprint;
+    ASSERT_EQ(iptv::SaveCatalog(dir + "/prosperotv-source-6.sqlite3.vod-1-" +
+                                    std::to_string(iptv::CustomSourceId("")) + ".sqlite3",
+                                no_shows, {.allow_empty = true}),
+              iptv::StoreStatus::ok);
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    EXPECT_TRUE(model.parental().enabled());
+    EXPECT_FALSE(model.parental().unlocked());
+    model.begin_search();
+    model.set_query("Shared");
+    for (int i = 0; i < 600 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading());
+    bool truncated = false;
+    const auto results = model.search_results("Shared", &truncated);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_FALSE(truncated);
+    EXPECT_EQ(results[0].title, allowed.name);
+    EXPECT_EQ(results[0].source_name, "Other account");
+    EXPECT_EQ(model.selected_source_id(), 3);
+    // Only this provider's live list and the fixture's other live server are absent.
+    EXPECT_NE(model.search_status().find("2 saved lists unavailable"), std::string::npos);
+    model.end_search();
+    EXPECT_TRUE(model.search_results("Shared").empty());
+    EXPECT_FALSE(model.activate_search_result(results[0]));
     model.close();
 }

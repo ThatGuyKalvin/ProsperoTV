@@ -17,13 +17,72 @@ namespace ptv
 namespace
 {
 constexpr int kRows = 7;
+constexpr float kLetterX = 1274.0f;
+constexpr float kLetterTop = 294.0f;
+constexpr float kLetterPitch = 22.0f;
 // The first is the default: the provider's newest additions, or a show's episodes in order.
 constexpr const char *kSorts[] = {"Recently added", "Title A-Z", "Title Z-A", "Newest year",
                                   "Highest rating"};
 constexpr int kSortCount = static_cast<int>(std::size(kSorts));
 } // namespace
+int VodScreen::columns() const
+{
+    return shared_.model.view.vod_kind < 0                                      ? 2
+           : shared_.model.view.vod_kind == static_cast<int>(VodKind::episodes) ? 1
+                                                                                : 5;
+}
+int VodScreen::page_size() const
+{
+    return columns() == 1 ? kRows : columns() * 2;
+}
+bool VodScreen::has_letters() const
+{
+    const auto kind = shared_.model.view.vod_kind;
+    return (kind == static_cast<int>(VodKind::movies) ||
+            kind == static_cast<int>(VodKind::series)) &&
+           !rows_.empty() &&
+           std::any_of(letter_starts_.begin(), letter_starts_.end(),
+                       [](int start) { return start >= 0; });
+}
+int VodScreen::current_letter() const
+{
+    const auto *row = focused();
+    if (row && !row->key.empty() && letter_starts_[letter_of_key(row->key)] >= 0)
+        return letter_of_key(row->key);
+    for (int letter = 0; letter < kLetterCount; ++letter)
+        if (letter_starts_[letter] >= 0)
+            return letter;
+    return 0;
+}
+void VodScreen::enter_letters()
+{
+    auto &view = shared_.model.view;
+    const auto row = *focused();
+    // A letter must lead to a continuous group, even after newest-first browsing.
+    if (view.vod_sort != 1)
+    {
+        view.vod_sort = 1;
+        sync();
+        const auto kept = std::find_if(rows_.begin(), rows_.end(),
+                                       [&](const Row &candidate)
+                                       {
+                                           return candidate.kind == row.kind &&
+                                                  candidate.item == row.item &&
+                                                  candidate.category == row.category;
+                                       });
+        if (kept != rows_.end())
+            view.vod_focus = static_cast<int>(kept - rows_.begin());
+    }
+    if (focused()->key.empty() ||
+        (focused()->kind == Kind::category && shared_.model.category_hidden(focused()->category)))
+        view.vod_focus = letter_starts_[current_letter()];
+    top_ = view.vod_focus / columns() * columns();
+    page_dir_ = 0;
+    letters_focused_ = true;
+}
 void VodScreen::enter()
 {
+    letters_focused_ = false;
     const auto &view = shared_.model.view;
     if (view.vod_kind >= 0)
         shared_.model.vod().select(static_cast<VodKind>(view.vod_kind), view.vod_series);
@@ -148,6 +207,36 @@ void VodScreen::sync()
         rows_.insert(rows_.end(), std::make_move_iterator(items.begin()),
                      std::make_move_iterator(items.end()));
     }
+    letter_starts_.fill(-1);
+    if (view.vod_kind == static_cast<int>(VodKind::movies) ||
+        view.vod_kind == static_cast<int>(VodKind::series))
+    {
+        for (auto &row : rows_)
+            if (row.kind == Kind::item || row.kind == Kind::category)
+            {
+                iptv::ChannelView named{};
+                named.name = row.text;
+                row.key = sort_key(named);
+            }
+        if (view.vod_sort == 1)
+            std::stable_sort(rows_.begin(), rows_.end(),
+                             [](const Row &left, const Row &right)
+                             {
+                                 if (left.key.empty() || right.key.empty())
+                                     return left.key.empty() && !right.key.empty();
+                                 return left.key < right.key;
+                             });
+        for (int i = 0; i < static_cast<int>(rows_.size()); ++i)
+            if (!rows_[i].key.empty() &&
+                (rows_[i].kind != Kind::category || !model.category_hidden(rows_[i].category)))
+            {
+                auto &start = letter_starts_[letter_of_key(rows_[i].key)];
+                if (start < 0)
+                    start = i;
+            }
+    }
+    if (!has_letters())
+        letters_focused_ = false;
     if (details_open_)
     {
         const auto found = std::find_if(
@@ -159,7 +248,7 @@ void VodScreen::sync()
             view.vod_focus = static_cast<int>(found - rows_.begin());
     }
     view.vod_focus = std::clamp(view.vod_focus, 0, std::max(0, static_cast<int>(rows_.size()) - 1));
-    top_ = std::max(0, view.vod_focus - kRows + 1);
+    top_ = std::max(0, (view.vod_focus / columns() - (columns() == 1 ? kRows - 1 : 1)) * columns());
     revision_ = vod.revision();
     model_revision_ = model.revision();
     counts_revision_ = model.search_revision();
@@ -200,6 +289,11 @@ bool VodScreen::back()
     if (filters_open_)
     {
         filters_open_ = false;
+        return true;
+    }
+    if (letters_focused_)
+    {
+        letters_focused_ = false;
         return true;
     }
     if (!view.vod_query.empty())
@@ -253,8 +347,33 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
     }
     if (input.is_pressed(Action::r3) && view.vod_kind >= 0)
     {
+        letters_focused_ = false;
         filters_open_ = true;
         filter_focus_ = 0;
+        return;
+    }
+    if (letters_focused_)
+    {
+        if (input.nav == Direction::left || input.is_pressed(Action::confirm))
+        {
+            letters_focused_ = false;
+            feedback.play(audio::Cue::focus);
+        }
+        else if (input.nav == Direction::up || input.nav == Direction::down)
+        {
+            const int step = input.nav == Direction::down ? 1 : -1;
+            int letter = current_letter() + step;
+            while (letter >= 0 && letter < kLetterCount && letter_starts_[letter] < 0)
+                letter += step;
+            if (letter >= 0 && letter < kLetterCount)
+            {
+                view.vod_focus = letter_starts_[letter];
+                top_ = view.vod_focus / columns() * columns();
+                feedback.play(audio::Cue::focus);
+            }
+            else if (!input.nav_repeat)
+                feedback.play(audio::Cue::error);
+        }
         return;
     }
     if (input.is_pressed(Action::west) && focused() && focused()->kind == Kind::item)
@@ -263,6 +382,17 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         detail_item_id_ = model.vod().catalog()[focused()->item].id;
         detail_scroll_ = 0;
         model.vod().request_details(focused()->item);
+        return;
+    }
+    if (input.is_pressed(Action::touch) && view.vod_all && columns() > 1)
+    {
+        view.vod_all = false;
+        view.vod_query.clear();
+        view.vod_genre.clear();
+        view.vod_year.clear();
+        view.vod_category.clear();
+        view.vod_focus = 0;
+        sync();
         return;
     }
     if (input.is_pressed(Action::touch) && focused() && focused()->kind == Kind::category &&
@@ -291,9 +421,21 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         return;
     }
     const auto old = view.vod_focus;
+    if (input.nav == Direction::right && !input.nav_repeat && has_letters() &&
+        (view.vod_focus % columns() == columns() - 1 ||
+         view.vod_focus + 1 == static_cast<int>(rows_.size())))
+    {
+        enter_letters();
+        feedback.play(audio::Cue::focus);
+        return;
+    }
     if (input.nav == Direction::up)
-        --view.vod_focus;
+        view.vod_focus -= columns();
     if (input.nav == Direction::down)
+        view.vod_focus += columns();
+    if (input.nav == Direction::left && view.vod_focus % columns() > 0)
+        --view.vod_focus;
+    if (input.nav == Direction::right && view.vod_focus % columns() + 1 < columns())
         ++view.vod_focus;
     // L2 and R2 turn a page; held, they keep turning: after 0.4 s every
     // 0.12 s, after 1.6 s every 0.07 s, then two, four and eight pages a turn
@@ -324,17 +466,18 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
             page_due_ += hold >= 1.6 ? 0.07 : 0.12;
             pages = held * (hold >= 7.0 ? 8 : hold >= 5.0 ? 4 : hold >= 3.0 ? 2 : 1);
         }
-        view.vod_focus += pages * kRows;
+        view.vod_focus += pages * page_size();
     }
     view.vod_focus = std::clamp(view.vod_focus, 0, std::max(0, static_cast<int>(rows_.size()) - 1));
     if (old != view.vod_focus)
         feedback.play(audio::Cue::focus);
     if (view.vod_focus < top_)
-        top_ = view.vod_focus;
-    if (view.vod_focus >= top_ + kRows)
-        top_ = view.vod_focus - kRows + 1;
+        top_ = view.vod_focus / columns() * columns();
+    if (view.vod_focus >= top_ + page_size())
+        top_ = (view.vod_focus / columns() - (columns() == 1 ? kRows - 1 : 1)) * columns();
     if (!input.is_pressed(Action::confirm) || !focused() || !model.vod().available())
         return;
+    letters_focused_ = false;
     const auto row = *focused();
     if (row.count == 0)
         return;
@@ -345,6 +488,7 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         view.vod_sort = 0;
         view.vod_kind =
             static_cast<int>(row.kind == Kind::movies ? VodKind::movies : VodKind::series);
+        view.vod_all = true;
         model.vod().select(static_cast<VodKind>(view.vod_kind));
     }
     else if (row.kind == Kind::resume)
@@ -388,149 +532,261 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
 }
 std::vector<std::string> VodScreen::image_urls() const
 {
-    const auto *row = focused();
-    if (row && shows_a_title(*row))
+    std::vector<std::string> urls;
+    const auto add = [&](const Row &row)
     {
-        const auto item = shared_.model.vod().catalog()[row->item];
+        if (!shows_a_title(row))
+            return;
+        const auto item = shared_.model.vod().catalog()[row.item];
         const auto &details = shared_.model.vod().details(item.id);
-        const auto image =
-            details.poster.empty() ? item.tvg_logo : std::string_view(details.poster);
-        return {image.empty() ? shared_.model.view.vod_series_cover : std::string(image)};
-    }
-    return {};
+        auto image = details.poster.empty() ? std::string(item.tvg_logo) : details.poster;
+        if (image.empty())
+            image = shared_.model.view.vod_series_cover;
+        if (!image.empty() && std::find(urls.begin(), urls.end(), image) == urls.end())
+            urls.push_back(std::move(image));
+    };
+    if (const auto *row = focused())
+        add(*row);
+    for (int i = top_; i < int(rows_.size()) && i < top_ + page_size(); ++i)
+        add(rows_[i]);
+    return urls;
 }
 void VodScreen::draw(ui::Canvas &canvas) const
 {
     const auto &model = shared_.model;
     const auto &view = model.view;
-    const auto &theme = shared_.theme;
     const auto &fonts = canvas.fonts;
     auto &draw = canvas.list;
+    const auto white = Color::rgb(0xf2f5fc);
+    const auto muted = Color::rgb(0x9ba9c0);
+    const auto accent = Color::rgb(0x9fc0ff);
+    const auto panel = Color::rgb(0x151e2e);
     const std::string heading = view.vod_kind < 0    ? tr("On demand")
                                 : view.vod_kind == 0 ? tr("Movies")
                                 : view.vod_kind == 1 ? tr("TV shows")
                                                      : view.vod_series_name;
-    ui::text(draw, fonts.semibold, tr("YOUR PROVIDER'S LIBRARY"), kMargin, 162, 18, tone::accent,
-             gfx::Align::left, 4);
     const auto &face = title_face(fonts, heading);
-    ui::text(draw, face, face.font->fit(readable(face, heading), 54, kWidth - 2 * kMargin), kMargin,
-             224, 54, theme.text);
-    const std::string location =
-        view.vod_category.empty() ? tr("All categories") : view.vod_category;
-    const std::string breadcrumb =
-        location + (view.vod_query.empty() ? "" : tr(" / Search: ") + view.vod_query) +
-        (view.vod_genre.empty() ? "" : " / " + view.vod_genre) +
-        (view.vod_year.empty() ? "" : " / " + view.vod_year);
-    const auto &breadcrumb_face = face_for(fonts, fonts.regular, breadcrumb);
-    ui::text(draw, breadcrumb_face,
-             breadcrumb_face.font->fit(readable(breadcrumb_face, breadcrumb), 23, 1100), kMargin,
-             274, 23, theme.text_muted);
-    for (int i = top_; i < static_cast<int>(rows_.size()) && i < top_ + kRows; ++i)
+    ui::text(draw, fonts.semibold, tr("YOUR LIBRARY"), kMargin, 163, 17, accent, gfx::Align::left,
+             3);
+    ui::text(draw, face, face.font->fit(readable(face, heading), 46, 1180), kMargin, 219, 46,
+             white);
+    std::string location = view.vod_category.empty() ? tr("All categories") : view.vod_category;
+    if (!view.vod_query.empty())
+        location += " · " + view.vod_query;
+    if (!view.vod_genre.empty())
+        location += " · " + view.vod_genre;
+    if (!view.vod_year.empty())
+        location += " · " + view.vod_year;
+    if (view.vod_kind >= 0 && view.vod_sort == 1)
+        location += " · " + std::string(tr("Title A-Z"));
+    const auto &location_face = face_for(fonts, fonts.regular, location);
+    ui::text(draw, location_face,
+             location_face.font->fit(readable(location_face, location), 21, 1160), kMargin, 252, 21,
+             muted);
+    const auto poster = [&](const Row &row, Rect box, bool selected)
     {
-        const auto &row = rows_[i];
-        const float y = 305 + static_cast<float>(i - top_) * 85;
-        const bool selected = i == view.vod_focus;
-        const bool disabled = row.count == 0;
-        draw.bordered_rect({kMargin, y, 1060, 76}, 14,
-                           kWhite.with_alpha(disabled   ? 0.02f
-                                             : selected ? 0.16f
-                                                        : 0.04f),
-                           selected ? 2 : 0, tone::cream);
-        auto label = row.text + (row.kind == Kind::category && model.category_hidden(row.category)
-                                     ? tr(" (Hidden)")
-                                     : "");
-        if (row.kind == Kind::movies || row.kind == Kind::shows)
-            label += " (" +
-                     (row.count                ? group_digits(*row.count)
-                      : model.search_loading() ? std::string(tr("Loading…"))
-                                               : std::string("—")) +
-                     ")";
-        if (row.kind == Kind::category)
+        const auto colors = art_colors(row.text);
+        draw.bordered_rect(box, 12, panel, selected ? 3.5f : 1.0f,
+                           selected ? accent : Color::rgb(0x26334a));
+        ImageTexture image;
+        if (shows_a_title(row))
         {
-            const int rule = model.category_rule(row.category);
-            if (rule == 1)
-                label += tr(" (PIN required)");
-            if (rule == 2)
-                label += tr(" (Approved for kids)");
+            const auto item = model.vod().catalog()[row.item];
+            const auto &detail = model.vod().details(item.id);
+            const auto url =
+                detail.poster.empty() ? item.tvg_logo : std::string_view(detail.poster);
+            image =
+                shared_.images.find(url.empty() ? std::string_view(view.vod_series_cover) : url);
         }
-        const auto &font = face_for(fonts, fonts.semibold, label);
-        const auto shown = readable(font, label);
-        ui::text(draw, font, font.font->fit(shown.empty() ? tr("Untitled") : shown, 27, 960),
-                 kMargin + 24, y + 47, 27, disabled ? theme.text_muted : theme.text);
-        const bool opens = row.kind == Kind::item ? view.vod_kind == 1 : row.kind != Kind::resume;
-        if (!disabled && opens)
-            ui::text(draw, fonts.regular, ">", kMargin + 1020, y + 47, 27, tone::accent);
+        if (image.id)
+        {
+            const float scale = std::min((box.w - 8) / image.width, (box.h - 8) / image.height);
+            const float w = image.width * scale, h = image.height * scale;
+            draw.image(image.id, {box.cx() - w / 2, box.cy() - h / 2, w, h}, {0, 0, 1, 1}, kWhite);
+        }
+        else
+        {
+            draw.rounded_rect({box.x + 8, box.y + 8, box.w - 16, box.h - 16}, 8,
+                              colors.bottom.with_alpha(0.45f));
+            draw.rounded_rect({box.x + 23, box.y + 26, box.w - 46, box.h - 52}, 5,
+                              Color::rgb(0x23344c).with_alpha(0.8f));
+            iptv::Channel named;
+            named.name = row.text;
+            const auto initials = monogram(named);
+            const auto &font = face_for(fonts, fonts.display, initials);
+            ui::text(draw, font, readable(font, initials), box.cx(), box.cy() + 16, 52, accent,
+                     gfx::Align::center);
+            ui::text(draw, fonts.regular,
+                     shows_a_title(row) ? tr("Artwork unavailable") : tr("Collection"), box.cx(),
+                     box.y + box.h - 34, 16, muted, gfx::Align::center);
+        }
+    };
+    if (view.vod_kind < 0)
+    {
+        ui::text(draw, fonts.regular, tr("Choose what to watch."), kMargin, 300, 25, muted);
+        for (int i = 0; i < int(rows_.size()); ++i)
+        {
+            const auto &row = rows_[i];
+            const bool selected = view.vod_focus == i;
+            const Rect box{kMargin + i * 880.0f, 352, 848, 450};
+            draw.bordered_rect(box, 24, selected ? Color::rgb(0x1d304c) : panel, selected ? 3 : 1,
+                               selected ? accent : Color::rgb(0x26334a));
+            for (int n = 2; n >= 0; --n)
+                draw.bordered_rect({box.x + 518 + n * 37.0f, box.y + 65 + n * 24.0f, 142, 208}, 8,
+                                   Color::rgb(n == 0 ? 0x4d6c97 : 0x293b56), 1,
+                                   Color::rgb(0x7189aa));
+            const auto &font = face_for(fonts, fonts.semibold, row.text);
+            ui::text(draw, font, readable(font, row.text), box.x + 40, box.y + 116, 48, white);
+            const auto count = row.count ? group_digits(*row.count) + " " +
+                                               (*row.count == 1 ? tr("title") : tr("titles"))
+                               : model.search_loading() ? std::string(tr("Loading…"))
+                                                        : std::string("—");
+            ui::text(draw, fonts.regular, count, box.x + 42, box.y + 166, 24, muted);
+            ui::text(draw, fonts.semibold, tr("Browse library"), box.x + 42, box.y + 376, 25,
+                     selected ? accent : muted);
+        }
+    }
+    else if (columns() > 1)
+    {
+        for (int i = top_; i < int(rows_.size()) && i < top_ + page_size(); ++i)
+        {
+            const auto &row = rows_[i];
+            const int slot = i - top_;
+            const float x = kMargin + (slot % columns()) * 232.0f;
+            const float y = 282 + (slot / columns()) * 332.0f;
+            poster(row, {x, y, 208, 260}, i == view.vod_focus && !letters_focused_);
+            const auto &font = face_for(fonts, fonts.semibold, row.text);
+            ui::paragraph(draw, font, readable(font, row.text), x, y + 288, 21, 208, 25,
+                          i == view.vod_focus ? white : muted, 2);
+        }
+        draw.rounded_rect({1320, 282, 504, 610}, 18, panel);
+        if (const auto *row = focused())
+        {
+            const auto &font = face_for(fonts, fonts.semibold, row->text);
+            ui::paragraph(draw, font, readable(font, row->text), 1352, 338, 34, 440, 43, white, 3);
+            std::string metadata, plot;
+            if (shows_a_title(*row))
+            {
+                const auto item = model.vod().catalog()[row->item];
+                const auto &details = model.vod().details(item.id);
+                metadata = details.year;
+                if (!details.rating.empty())
+                    metadata += std::string(metadata.empty() ? "" : " · ") + tr("Rating") + " " +
+                                details.rating;
+                if (!details.genre.empty())
+                    metadata += (metadata.empty() ? "" : " · ") + details.genre;
+                plot = details.plot;
+                if (plot.empty())
+                    plot = item.group_title;
+            }
+            else
+            {
+                metadata = tr("Collection");
+                plot = tr("Open this collection to explore its titles.");
+            }
+            const auto &meta = face_for(fonts, fonts.regular, metadata);
+            ui::paragraph(draw, meta, readable(meta, metadata), 1352, 497, 21, 440, 30, accent, 2);
+            const auto &body = face_for(fonts, fonts.regular, plot);
+            ui::paragraph(draw, body, readable(body, plot), 1352, 584, 24, 440, 35, muted, 6);
+            ui::text(draw, fonts.semibold,
+                     row->kind == Kind::item && view.vod_kind == 0 ? tr("Watch movie") : tr("Open"),
+                     1352, 848, 24, white);
+        }
+        ui::text(draw, fonts.mono,
+                 rows_.empty()
+                     ? "0 / 0"
+                     : group_digits(view.vod_focus + 1) + " / " + group_digits(rows_.size()),
+                 1232, 951, 19, muted, gfx::Align::right);
+    }
+    else
+    {
+        for (int i = top_; i < int(rows_.size()) && i < top_ + kRows; ++i)
+        {
+            const auto &row = rows_[i];
+            const float y = 288 + (i - top_) * 85.0f;
+            const bool selected = i == view.vod_focus;
+            draw.bordered_rect({kMargin, y, 1110, 75}, 12, selected ? Color::rgb(0x243b5b) : panel,
+                               selected ? 2 : 0, accent);
+            const auto &font = face_for(fonts, fonts.semibold, row.text);
+            ui::text(draw, font, font.font->fit(readable(font, row.text), 25, 1040), kMargin + 24,
+                     y + 46, 25, selected ? white : muted);
+        }
+        if (const auto *row = focused(); row && shows_a_title(*row))
+            poster(*row, {1350, 300, 350, 470}, true);
     }
     if (rows_.empty())
         ui::text(draw, fonts.regular,
                  model.vod().busy() || model.vod().requested() ? tr("Loading…")
                                                                : tr("No matching titles"),
-                 kMargin, 370, 30, theme.text_muted);
-    const auto *row = focused();
-    if (row && shows_a_title(*row))
-    {
-        const auto item = model.vod().catalog()[row->item];
-        const Rect cover{1260, 310, 350, 480};
-        draw.rounded_rect(cover, 20, kWhite.with_alpha(0.05f));
-        const auto &details = model.vod().details(item.id);
-        const auto poster =
-            details.poster.empty() ? item.tvg_logo : std::string_view(details.poster);
-        const auto image =
-            shared_.images.find(poster.empty() ? std::string_view(view.vod_series_cover) : poster);
-        if (image.id)
-        {
-            const float scale = std::min(cover.w / image.width, cover.h / image.height);
-            const float width = image.width * scale, height = image.height * scale;
-            draw.image(image.id, {cover.cx() - width / 2, cover.cy() - height / 2, width, height},
-                       {0, 0, 1, 1}, kWhite);
-        }
-        else
-        {
-            iptv::Channel named;
-            named.name = view.vod_kind == static_cast<int>(VodKind::episodes)
-                             ? view.vod_series_name
-                             : std::string(item.name);
-            const auto letters = monogram(named);
-            const auto &letter_face = face_for(fonts, fonts.display, letters);
-            ui::text(draw, letter_face, readable(letter_face, letters), cover.cx(), cover.cy() + 25,
-                     76, tone::accent, gfx::Align::center);
-        }
-        const auto &category_face = face_for(fonts, fonts.regular, item.group_title);
-        ui::paragraph(draw, category_face, readable(category_face, item.group_title), 1180, 840, 24,
-                      600, 34, theme.text_muted, 3);
-    }
-    else
-        ui::paragraph(draw, fonts.regular,
-                      tr("Browse movies or choose a show, then its season and episode."), 1200, 365,
-                      28, 570, 42, theme.text_muted, 7);
-    ui::text(draw, fonts.regular,
-             fonts.regular.font->fit(model.vod().status(), 22, kWidth - 2 * kMargin), kMargin, 949,
-             22, theme.text_muted);
+                 kMargin, 370, 30, muted);
+    const auto status = model.vod().status();
+    ui::text(draw, fonts.regular, fonts.regular.font->fit(status, 19, 1050), kMargin, 951, 19,
+             muted);
+    if (has_letters())
+        draw_letters(canvas);
     if (details_open_)
         draw_details(canvas);
     if (filters_open_)
         draw_filters(canvas);
 }
+void VodScreen::draw_letters(ui::Canvas &canvas) const
+{
+    auto &draw = canvas.list;
+    const auto accent = Color::rgb(0x9fc0ff);
+    const auto muted = Color::rgb(0x9ba9c0);
+    ui::text(draw, canvas.fonts.semibold, "A–Z", kLetterX, 268, 14, muted, gfx::Align::center);
+    const int selected = current_letter();
+    for (int letter = 0; letter < kLetterCount; ++letter)
+    {
+        const float y = kLetterTop + letter * kLetterPitch;
+        const bool available = letter_starts_[letter] >= 0;
+        const bool active = available && letter == selected;
+        if (active)
+            draw.rounded_rect({kLetterX - 15, y - 10, 30, 21}, 7,
+                              letters_focused_ ? accent : Color::rgb(0x243b5b));
+        const char label[]{letter_char(letter), '\0'};
+        ui::text(draw, canvas.fonts.semibold, label, kLetterX, baseline_for(y, 17), 17,
+                 active && letters_focused_ ? Color::rgb(0x0b101a)
+                 : active                   ? accent
+                                            : muted.with_alpha(available ? 0.9f : 0.25f),
+                 gfx::Align::center);
+    }
+}
 int VodScreen::hints(ui::Hint *out, int capacity) const
 {
-    const ui::Hint hints[] = {{ui::Button::cross, tr("Open / Watch")},
-                              {ui::Button::right_stick, tr("Filter / Sort")},
-                              {ui::Button::triangle, tr("Search")},
-                              {ui::Button::options, tr("Update")},
-                              {ui::Button::circle, tr("Back")}};
-    const int first = focused() && focused()->count == 0 ? 1 : 0;
-    int count = std::min(capacity, 5 - first);
-    std::copy_n(hints + first, count, out);
-    if (count < capacity && focused() && focused()->kind == Kind::item)
-        out[count++] = {ui::Button::square, tr("Details")};
-    if (count < capacity && focused() && focused()->kind == Kind::category &&
-        shared_.model.view.vod_kind != static_cast<int>(VodKind::episodes))
+    if (letters_focused_)
     {
-        out[count++] = {ui::Button::square, tr("Show / Hide")};
-        if (count < capacity)
-            out[count++] = {ui::Button::touchpad, tr("Normal / PIN / Kids")};
+        const ui::Hint hints[] = {{ui::Button::dpad, tr("Choose letter")},
+                                  {ui::Button::cross, tr("Back to titles")},
+                                  {ui::Button::circle, tr("Back")}};
+        const int count = std::min(capacity, static_cast<int>(std::size(hints)));
+        std::copy_n(hints, count, out);
+        return count;
     }
-    return count;
+    ui::Hint hints[7];
+    int count = 0;
+    if (!focused() || focused()->count != 0)
+        hints[count++] = {ui::Button::cross, tr("Open / Watch")};
+    if (shared_.model.view.vod_kind >= 0)
+    {
+        if (focused() && focused()->kind == Kind::item)
+            hints[count++] = {ui::Button::square, tr("Details")};
+        if (shared_.model.view.vod_all && columns() > 1)
+            hints[count++] = {ui::Button::touchpad, tr("Categories")};
+        if (focused() && focused()->kind == Kind::category && columns() > 1)
+        {
+            hints[count++] = {ui::Button::square, tr("Show / Hide")};
+            hints[count++] = {ui::Button::touchpad, tr("Normal / PIN / Kids")};
+        }
+        hints[count++] = {ui::Button::right_stick, tr("Filter / Sort")};
+        hints[count++] = {ui::Button::triangle, tr("Search")};
+    }
+    hints[count++] = {ui::Button::circle, tr("Back")};
+    if (count < 6)
+        hints[count++] = {ui::Button::options, tr("Update")};
+    const int copied = std::min(capacity, count);
+    std::copy_n(hints, copied, out);
+    return copied;
 }
 unsigned VodScreen::result_count() const
 {

@@ -1709,6 +1709,8 @@ void App::draw(Frame &frame, bool themed) const
         multiview_.draw(canvas);
     else
     {
+        if (tabs_.active() == kVod)
+            frame.scene.rounded_rect({0, 0, kWidth, kHeight}, 0, Color::rgb(0x0b101a));
         draw_header(canvas);
         switch (tabs_.active())
         {
