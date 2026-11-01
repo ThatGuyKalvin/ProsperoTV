@@ -557,10 +557,12 @@ void VodScreen::draw(ui::Canvas &canvas) const
     const auto &view = model.view;
     const auto &fonts = canvas.fonts;
     auto &draw = canvas.list;
-    const auto white = Color::rgb(0xf2f5fc);
-    const auto muted = Color::rgb(0x9ba9c0);
-    const auto accent = Color::rgb(0x9fc0ff);
-    const auto panel = Color::rgb(0x151e2e);
+    const auto &theme = shared_.theme;
+    const auto white = theme.text;
+    const auto muted = theme.text_muted;
+    const auto accent = tone::accent;
+    const auto panel = theme.surface;
+    const auto lit = kWhite.with_alpha(0.16f);
     const std::string heading = view.vod_kind < 0    ? tr("On demand")
                                 : view.vod_kind == 0 ? tr("Movies")
                                 : view.vod_kind == 1 ? tr("TV shows")
@@ -587,7 +589,7 @@ void VodScreen::draw(ui::Canvas &canvas) const
     {
         const auto colors = art_colors(row.text);
         draw.bordered_rect(box, 12, panel, selected ? 3.5f : 1.0f,
-                           selected ? accent : Color::rgb(0x26334a));
+                           selected ? theme.focus : theme.outline);
         ImageTexture image;
         if (shows_a_title(row))
         {
@@ -609,7 +611,7 @@ void VodScreen::draw(ui::Canvas &canvas) const
             draw.rounded_rect({box.x + 8, box.y + 8, box.w - 16, box.h - 16}, 8,
                               colors.bottom.with_alpha(0.45f));
             draw.rounded_rect({box.x + 23, box.y + 26, box.w - 46, box.h - 52}, 5,
-                              Color::rgb(0x23344c).with_alpha(0.8f));
+                              tone::panel_lit.with_alpha(0.8f));
             iptv::Channel named;
             named.name = row.text;
             const auto initials = monogram(named);
@@ -629,12 +631,12 @@ void VodScreen::draw(ui::Canvas &canvas) const
             const auto &row = rows_[i];
             const bool selected = view.vod_focus == i;
             const Rect box{kMargin + i * 880.0f, 352, 848, 450};
-            draw.bordered_rect(box, 24, selected ? Color::rgb(0x1d304c) : panel, selected ? 3 : 1,
-                               selected ? accent : Color::rgb(0x26334a));
+            draw.bordered_rect(box, 24, selected ? lit : panel, selected ? 3 : 1,
+                               selected ? theme.focus : theme.outline);
             for (int n = 2; n >= 0; --n)
                 draw.bordered_rect({box.x + 518 + n * 37.0f, box.y + 65 + n * 24.0f, 142, 208}, 8,
-                                   Color::rgb(n == 0 ? 0x4d6c97 : 0x293b56), 1,
-                                   Color::rgb(0x7189aa));
+                                   n == 0 ? tone::wine : tone::panel_lit, 1,
+                                   tone::accent.with_alpha(0.6f));
             const auto &font = face_for(fonts, fonts.semibold, row.text);
             ui::text(draw, font, readable(font, row.text), box.x + 40, box.y + 116, 48, white);
             const auto count = row.count ? group_digits(*row.count) + " " +
@@ -705,8 +707,8 @@ void VodScreen::draw(ui::Canvas &canvas) const
             const auto &row = rows_[i];
             const float y = 288 + (i - top_) * 85.0f;
             const bool selected = i == view.vod_focus;
-            draw.bordered_rect({kMargin, y, 1110, 75}, 12, selected ? Color::rgb(0x243b5b) : panel,
-                               selected ? 2 : 0, accent);
+            draw.bordered_rect({kMargin, y, 1110, 75}, 12, selected ? lit : panel,
+                               selected ? 2 : 0, theme.focus);
             const auto &font = face_for(fonts, fonts.semibold, row.text);
             ui::text(draw, font, font.font->fit(readable(font, row.text), 25, 1040), kMargin + 24,
                      y + 46, 25, selected ? white : muted);
@@ -732,8 +734,8 @@ void VodScreen::draw(ui::Canvas &canvas) const
 void VodScreen::draw_letters(ui::Canvas &canvas) const
 {
     auto &draw = canvas.list;
-    const auto accent = Color::rgb(0x9fc0ff);
-    const auto muted = Color::rgb(0x9ba9c0);
+    const auto accent = tone::accent;
+    const auto muted = shared_.theme.text_muted;
     ui::text(draw, canvas.fonts.semibold, "A–Z", kLetterX, 268, 14, muted, gfx::Align::center);
     const int selected = current_letter();
     for (int letter = 0; letter < kLetterCount; ++letter)
@@ -743,10 +745,10 @@ void VodScreen::draw_letters(ui::Canvas &canvas) const
         const bool active = available && letter == selected;
         if (active)
             draw.rounded_rect({kLetterX - 15, y - 10, 30, 21}, 7,
-                              letters_focused_ ? accent : Color::rgb(0x243b5b));
+                              letters_focused_ ? accent : kWhite.with_alpha(0.16f));
         const char label[]{letter_char(letter), '\0'};
         ui::text(draw, canvas.fonts.semibold, label, kLetterX, baseline_for(y, 17), 17,
-                 active && letters_focused_ ? Color::rgb(0x0b101a)
+                 active && letters_focused_ ? tone::ink
                  : active                   ? accent
                                             : muted.with_alpha(available ? 0.9f : 0.25f),
                  gfx::Align::center);
