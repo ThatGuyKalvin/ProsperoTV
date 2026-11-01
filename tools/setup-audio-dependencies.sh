@@ -19,8 +19,13 @@ if [[ -f $prefix/.complete && $(<"$prefix/.complete") == "$stamp" && -f $prefix/
     exit 0
 fi
 mkdir -p "$root/.deps" "$build" "$prefix"
+# Downloaded beside the archive and checked before it takes the archive's name,
+# so an interrupted download is fetched again rather than kept.
 if [[ ! -f $archive ]]; then
-    curl --fail --location --max-time 120 "https://ffmpeg.org/releases/ffmpeg-$version.tar.xz" -o "$archive"
+    curl --fail --location --max-time 600 "https://ffmpeg.org/releases/ffmpeg-$version.tar.xz" \
+        -o "$archive.download"
+    printf '%s  %s\n' "$hash" "$archive.download" | sha256sum --check --strict
+    mv "$archive.download" "$archive"
 fi
 printf '%s  %s\n' "$hash" "$archive" | sha256sum --check --strict
 [[ -f $source/configure ]] || tar -xJf "$archive" -C "$root/.deps"
