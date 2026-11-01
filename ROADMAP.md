@@ -35,6 +35,10 @@ you, [open an issue](https://github.com/ThatGuyKalvin/ProsperoTV/issues).
   and the size and colour of subtitles.
 - [ ] **Picture in picture.** Keeping a channel in a corner while browsing
   the guide or the lists.
+- [ ] **Picture in picture over other apps.** Keeping a channel in a corner
+  while using something other than ProsperoTV.
+- [ ] **Opening a stream in another player.** Handing a channel or film to
+  another player on the console, such as VLC.
 - [ ] **Sound delay.** Moving the sound earlier or later on a channel whose
   own timing is wrong.
 - [ ] **Reminders.** Marking a programme in the guide and being told when it

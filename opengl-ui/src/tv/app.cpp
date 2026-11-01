@@ -696,7 +696,8 @@ void App::apply_settings()
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
 {
     Model &model = shared_.model;
-    if (tabs_.active() == kSources && sources_.choosing_user_agent())
+    if (tabs_.active() == kSources &&
+        (sources_.choosing_user_agent() || sources_.choosing_timing()))
     {
         sources_.handle(input, feedback);
         return;
@@ -1633,7 +1634,7 @@ void App::draw_hints(ui::Canvas &canvas) const
                                                       : tr("Multiview")};
             break;
         case kSources:
-            count = sources_.hints(hints, 6);
+            count = sources_.hints(hints, 7);
             break;
         case kVod:
             count = vod_.hints(hints, 7);
@@ -1649,7 +1650,8 @@ void App::draw_hints(ui::Canvas &canvas) const
         }
     }
     const bool own_hints =
-        tabs_focused_ || (tabs_.active() == kSources && sources_.choosing_user_agent());
+        tabs_focused_ || (tabs_.active() == kSources &&
+                          (sources_.choosing_user_agent() || sources_.choosing_timing()));
     if (!own_hints && tabs_.active() < kSettings && tabs_.active() != kVod)
         hints[count++] = {ui::Button::options, tr("Update")};
     if (!own_hints && tabs_.active() != kLive && tabs_.active() != kVod &&
