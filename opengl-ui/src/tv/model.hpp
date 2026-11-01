@@ -543,6 +543,13 @@ class Model
         return guide_status_;
     }
     void refresh_guide();
+    std::pair<int, int> guide_timing(std::int64_t source) const
+    {
+        return library_.guide_timing(source);
+    }
+    bool set_guide_timing(std::int64_t source, int guide_minutes, int catchup_minutes);
+    std::string programme_url(const iptv::ChannelView &channel, const Programme &programme,
+                              std::int64_t now) const;
     void edit_guide_url(std::int64_t source);
     void edit_guide_mapping(unsigned channel);
     bool set_guide_url(std::int64_t source, std::string_view url);
@@ -793,6 +800,7 @@ class Model
     {
         std::int64_t id = 0;
         int kind = 0;
+        int guide_shift = 0;
         std::string name;
         std::uint64_t fingerprint = 0, guide_fingerprint = 0;
         std::string cache;

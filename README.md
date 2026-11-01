@@ -145,6 +145,12 @@
   episode watched last, from the time it was left at.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
 
+### Guide timing
+
+In Sources, focus a saved source and press **R3** to correct its guide or
+catch-up clock, in 30-minute steps up to 12 hours either way. Cross resets
+it to zero.
+
 ### Search across saved sources
 
 - The main Search panel finds channels, movies, shows, and saved programmes

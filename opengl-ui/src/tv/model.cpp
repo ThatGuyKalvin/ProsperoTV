@@ -487,7 +487,10 @@ void Model::load_cache()
                                                                      : SourceHealth::empty;
     index_.build(catalog_);
     if (catalog_loaded_)
+    {
         (void)guide_.load(guide_path(), guide_source_id());
+        (void)guide_.set_time_shift(library_.guide_timing(selected_source_id_).first);
+    }
     adopt_catalog();
 }
 
