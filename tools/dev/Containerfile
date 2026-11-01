@@ -1,0 +1,33 @@
+# ProsperoTV - Development image: the CI toolchain, for building on any host.
+# Copyright (C) 2026 ThatGuyKalvin
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Built by `tools/dev.sh image`. Ubuntu 24.04 with the packages of both CI jobs
+# (.github/workflows/tooling.yml), clang-tidy, gcc (FFmpeg's configure checks
+# the host with it), and Mesa for the PC preview. It runs natively on arm64 and
+# amd64 hosts; clang-18 targets the console from either.
+
+# clang's x86_64 runtime (builtins, sanitizers): the console link needs it, and
+# only the amd64 package ships it.
+FROM --platform=linux/amd64 docker.io/library/ubuntu:24.04 AS x86rt
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends libclang-rt-18-dev \
+    && mkdir /x86rt && cp -a /usr/lib/llvm-18/lib/clang/18/lib/linux/*x86_64* /x86rt/
+
+FROM docker.io/library/ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      clang-18 clang-format-18 clang-tidy-18 lld-18 llvm-18 libclang-rt-18-dev \
+      gcc make ninja-build meson cmake ccache pkg-config python3 git rsync file \
+      curl wget ca-certificates tar unzip xz-utils bzip2 lbzip2 ffmpeg \
+      libsqlite3-dev libpng-dev libjpeg-dev zlib1g-dev libssl-dev \
+      libavcodec-dev libswresample-dev \
+      libegl-dev libgl-dev libegl-mesa0 libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=x86rt /x86rt/ /usr/lib/llvm-18/lib/clang/18/lib/linux/
+RUN for tool in clang clang++ clang-format clang-tidy; do \
+      ln -sf "/usr/bin/$tool-18" "/usr/local/bin/$tool"; \
+    done \
+    && git config --system --add safe.directory '*'
+ENV CCACHE_DIR=/w/ccache USE_CCACHE=1
+WORKDIR /w

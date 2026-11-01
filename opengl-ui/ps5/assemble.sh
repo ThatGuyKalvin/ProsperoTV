@@ -28,7 +28,13 @@ out=$(cd -- "$out" && pwd)
 }
 [[ ! -e $out/.git ]] || { echo "the build tree must not be a repository" >&2; exit 2; }
 
-# Everything but the caches and the build output is made again.
+# Everything but the caches and the build output is made again; files whose
+# content is unchanged get their old modification time back at the end, so
+# ninja rebuilds only what changed, and a runtime/libc.prx that still matches
+# the kit's manifest is kept.
+python3 "$proto/ps5/keep_mtimes.py" snapshot "$out"
+keep_libc=$(mktemp -d)
+[[ ! -f $out/runtime/libc.prx ]] || cp -p "$out/runtime/libc.prx" "$keep_libc/libc.prx"
 for stale in src include assets sce_sys vendor tools tooling runtime update_helper third_party \
     Makefile; do
     rm -rf -- "${out:?}/$stale"
@@ -38,6 +44,11 @@ mkdir -p "$out"/{src,include,tools,vendor/ps5/sdk/stubs,assets/fonts,assets/audi
 # ---- the build recipe: the kit's, which every OpenGL title of ours uses ----
 cp -a "$kit/tooling" "$out/tooling"
 cp -a "$kit/runtime" "$out/runtime"
+if [[ -f $keep_libc/libc.prx ]] && (cd "$keep_libc" && cp "$out/runtime/libc.prx.sha256" . &&
+    sha256sum -c --quiet libc.prx.sha256 >/dev/null 2>&1); then
+    cp -p "$keep_libc/libc.prx" "$out/runtime/libc.prx"
+fi
+rm -rf -- "$keep_libc"
 for tool in build.sh build-host-tools.sh ninja-build.sh prepare-opengl.sh fetch-opengl-sdk.sh \
     setup-native-dependencies.sh setup-pacbrew-dependencies.sh \
     rebuild-libc.sh validate-assets.sh zip-open-modes.py; do
@@ -118,4 +129,5 @@ if [[ ! -e $out/.deps/ps5-opengl && -d $kit/.deps/ps5-opengl ]]; then
 fi
 
 python3 "$proto/ps5/patch_tree.py" "$out"
+python3 "$proto/ps5/keep_mtimes.py" restore "$out"
 printf 'Build tree: %s\n' "$out"

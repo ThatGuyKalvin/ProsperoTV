@@ -5,12 +5,29 @@ ProsperoTV is a native IPTV client for the PS5. The released interface lives in
 uses are the shared sources in the rest of the repository. Keep a change small,
 reproducible, and about one thing.
 
-Before opening a change:
+## Set up
 
-1. Run `make test`, `make lint`, and `opengl-ui/tools/run-tests.sh`; add a
+On macOS, Windows or Linux, with Podman or Docker installed
+([Development setup](docs/DEVELOPMENT.md) has the per-OS steps):
+
+```bash
+tools/dev.sh image    # once: the CI toolchain in a container
+tools/dev.sh test     # the interface's PC tests
+tools/dev.sh build    # the console app, in build/dev/PPSA99003
+tools/dev.sh all      # build and deploy to the PS5 named by PS5_HOST in .env
+tools/dev.sh preview  # PNGs of the interface in build/snapshots
+```
+
+On Windows, run `.\tools\dev.ps1` with the same commands.
+
+## Before opening a change
+
+1. Run `tools/dev.sh test`, `tools/dev.sh lint`, and `tools/dev.sh legacy-test`
+   (natively: `opengl-ui/tools/run-tests.sh`, `make lint`, `make test`); add a
    focused unit or integration regression for behavior changed by the patch.
-2. Run `make`; it must reproduce the clean-room `runtime/libc.prx` digest. For
-   a change to the released app, also build it (`opengl-ui/ps5/assemble.sh`).
+2. For a change to the released app, build it (`tools/dev.sh build`). For a
+   change to the shared sources, `make` must reproduce the clean-room
+   `runtime/libc.prx` digest.
 3. Confirm the build reports zero static FSELF errors.
 4. Do not commit `.env`, `build/`, `dist/`, `.local/`, proprietary PRXs, game files, SDK
    binaries, generated `runtime/libc.prx`, console dumps, keys, or credentials.
