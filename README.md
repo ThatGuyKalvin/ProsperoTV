@@ -62,7 +62,7 @@
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current version | `01.000.100` |
+| Current version | `01.000.110` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Writable data | `/data/prosperotv`; the title's own `/download0` when filesystem access is not available |
 
@@ -639,7 +639,7 @@ Thank you to the people who test ProsperoTV on their own consoles and report wha
 
 And to the people who contribute code:
 
-- **ThatGuyKalvin** ([GitHub](https://github.com/ThatGuyKalvin)), for the playback menu, channel list and controls drawn at the screen's resolution, DTS sound, lip sync timed by when each picture reaches the screen, the sound in the statistics line, pictures 0.4 s sooner at every start and seek, newest-first On Demand, PlayStation button shapes in every hint, keeping whole lists when a provider sends oversized data, seeking within the open video, the HDR colour fix, the Stats line switch, the Continue row of a show, long on-demand lists, the quicker On Demand menu, the TV remote, the film and show counts of a source, the container build for any OS and the USB playlist fix.
+- **ThatGuyKalvin** ([GitHub](https://github.com/ThatGuyKalvin)), for the playback menu, channel list and controls drawn at the screen's resolution, DTS sound, lip sync timed by when each picture reaches the screen, the sound in the statistics line, pictures 0.4 s sooner at every start and seek, newest-first On Demand, PlayStation button shapes in every hint, keeping whole lists when a provider sends oversized data, seeking within the open video, the HDR colour fix, the Stats line switch, the Continue row of a show, long on-demand lists, the quicker On Demand menu, the TV remote, the film and show counts of a source, the container build for any OS, the USB playlist fix and 10-bit video at unusual widths.
 - **Oliv3rmoon** ([GitHub](https://github.com/Oliv3rmoon)), for listing a channel in every category its provider names.
 - **LedyBacer** ([GitHub](https://github.com/LedyBacer)), for the start-up fix for older system software.
 
