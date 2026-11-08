@@ -1483,10 +1483,13 @@ void App::draw_about(ui::Canvas &canvas) const
            clear_x, clear_bottom, 23.0f);
     rule();
     kicker(tr("THANKS"));
-    words(tr("Thanks to JMUtechnologies for testing and feedback, as well as Bastian-R-dotcom, to "
-             "the whole PS5 homebrew community, and to every developer whose tools and libraries "
-             "make ProsperoTV possible."),
+    words(tr("Thanks to Bastian-R-dotcom for testing and feedback, to the whole PS5 homebrew "
+             "community, and to every developer whose tools and libraries make ProsperoTV "
+             "possible."),
           theme.text, 3);
+    y += 20.0f;
+    kicker(tr("COLLABORATORS"));
+    words(tr("Cold (JMUtechnologies): testing, feedback and features from day one."), theme.text, 2);
     ui::text(list, fonts.regular, tr("Menu sound effects made with ElevenLabs."), x,
              kCreditsPanel.y + kCreditsPanel.h - 36.0f, 19.0f, theme.text_muted);
     list.pop_opacity();
@@ -1711,8 +1714,6 @@ void App::draw(Frame &frame, bool themed) const
         multiview_.draw(canvas);
     else
     {
-        if (tabs_.active() == kVod)
-            frame.scene.rounded_rect({0, 0, kWidth, kHeight}, 0, Color::rgb(0x0b101a));
         draw_header(canvas);
         switch (tabs_.active())
         {

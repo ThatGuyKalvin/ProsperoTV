@@ -197,6 +197,9 @@ typedef struct iptv_native_agc_presenter
     void *overlay_surface;
     int64_t overlay_start;
     size_t overlay_bytes;
+    void *packed_surface;
+    int64_t packed_start;
+    size_t packed_bytes;
     void *screen; /* the controls' colour plane, then their mask */
     int64_t screen_start;
     size_t screen_plane_bytes;
@@ -209,6 +212,7 @@ static iptv_native_agc_presenter_t presenter = {
     .shader_start = -1,
     .framebuffer_start = -1,
     .overlay_start = -1,
+    .packed_start = -1,
     .screen_start = -1,
     .video = -1,
 };
@@ -1202,6 +1206,18 @@ static int32_t teardown_presenter(int drain)
         if (first_result == 0 && result != 0)
             first_result = result;
     }
+    if (presenter.packed_surface)
+    {
+        result = sceKernelMunmap(presenter.packed_surface, presenter.packed_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
+    if (presenter.packed_start >= 0)
+    {
+        result = sceKernelReleaseDirectMemory(presenter.packed_start, presenter.packed_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
     if (presenter.screen)
     {
         result = sceKernelMunmap(presenter.screen, presenter.screen_pool_bytes);
@@ -1226,6 +1242,7 @@ static int32_t teardown_presenter(int drain)
     presenter.shader_start = -1;
     presenter.framebuffer_start = -1;
     presenter.overlay_start = -1;
+    presenter.packed_start = -1;
     presenter.screen_start = -1;
     presenter.video = -1;
     return first_result;
@@ -1635,25 +1652,57 @@ int32_t iptv_native_agc_present_finish_frame(void)
     return -5;
 }
 
-static int32_t prepare_overlay_surface(size_t bytes)
+static int32_t prepare_surface(void **surface, int64_t *start, size_t *capacity, size_t bytes)
 {
     int32_t result;
-    if (presenter.overlay_surface && presenter.overlay_bytes >= bytes)
+    if (*surface && *capacity >= bytes)
         return 0;
-    if (presenter.overlay_surface)
-        (void)sceKernelMunmap(presenter.overlay_surface, presenter.overlay_bytes);
-    if (presenter.overlay_start >= 0)
-        (void)sceKernelReleaseDirectMemory(presenter.overlay_start, presenter.overlay_bytes);
-    presenter.overlay_surface = NULL;
-    presenter.overlay_start = -1;
-    presenter.overlay_bytes = (bytes + 0x3fffu) & ~(size_t)0x3fffu;
-    result =
-        sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), presenter.overlay_bytes,
-                                      0x4000, DIRECT_MEMORY_TYPE, &presenter.overlay_start);
+    if (*surface)
+        (void)sceKernelMunmap(*surface, *capacity);
+    if (*start >= 0)
+        (void)sceKernelReleaseDirectMemory(*start, *capacity);
+    *surface = NULL;
+    *start = -1;
+    *capacity = (bytes + 0x3fffu) & ~(size_t)0x3fffu;
+    result = sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), *capacity, 0x4000,
+                                           DIRECT_MEMORY_TYPE, start);
     if (result == 0)
-        result = sceKernelMapDirectMemory(&presenter.overlay_surface, presenter.overlay_bytes,
-                                          MAP_PROTECTION, 0, presenter.overlay_start, 0x4000);
-    return result != 0 ? result : presenter.overlay_surface ? 0 : -12;
+        result = sceKernelMapDirectMemory(surface, *capacity, MAP_PROTECTION, 0, *start, 0x4000);
+    return result != 0 ? result : *surface ? 0 : -12;
+}
+
+static int32_t prepare_overlay_surface(size_t bytes)
+{
+    return prepare_surface(&presenter.overlay_surface, &presenter.overlay_start,
+                           &presenter.overlay_bytes, bytes);
+}
+
+/* The Main10 texture's implicit pitch: a linear row rounded up to 256 bytes. */
+static uint32_t main10_texture_pitch(uint32_t visible_width)
+{
+    return (visible_width + 127u) & ~127u;
+}
+
+static int32_t pack_main10_rows(const void **source, size_t *source_bytes, uint32_t *pitch,
+                                uint32_t surface_height, uint32_t visible_width)
+{
+    const uint32_t texture_pitch = main10_texture_pitch(visible_width);
+    const size_t row = (size_t)visible_width * 2u;
+    const size_t from = (size_t)*pitch * 2u;
+    const size_t to = (size_t)texture_pitch * 2u;
+    const uint32_t rows = surface_height + (surface_height + 1u) / 2u;
+    const int32_t result = prepare_surface(&presenter.packed_surface, &presenter.packed_start,
+                                           &presenter.packed_bytes, to * rows);
+    if (result != 0)
+        return result;
+    for (uint32_t y = 0; y < rows; ++y)
+        memcpy((uint8_t *)presenter.packed_surface + y * to, (const uint8_t *)*source + y * from,
+               row);
+    flush_gpu_data(presenter.packed_surface, to * rows);
+    *source = presenter.packed_surface;
+    *source_bytes = presenter.packed_bytes;
+    *pitch = texture_pitch;
+    return 0;
 }
 
 static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
@@ -1677,11 +1726,7 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
                 (bit_depth == 10u ? 2u : 1u);
     if (yuv_bytes > source_bytes)
         return -1;
-    /* The reused Main10 texture descriptor has an implicit row pitch.
-     * Reject padded/cropped
-     * widths until an explicit-pitch texture is added. */
-    if (bit_depth == 10u &&
-        (pitch != visible_width || visible_width < 2u || (visible_width & 1u) != 0))
+    if (bit_depth == 10u && (visible_width < 2u || (visible_width & 1u) != 0))
         return -1;
 
     if (atomic_load_explicit(&present_cancelled, memory_order_relaxed))
@@ -1743,6 +1788,13 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
         last_picture.visible_height = visible_height;
         last_picture.depth = bit_depth;
         last_picture.overlay = *overlay;
+    }
+    if (bit_depth == 10u && pitch != main10_texture_pitch(visible_width))
+    {
+        result = pack_main10_rows(&source, &source_bytes, &pitch, surface_height, visible_width);
+        if (result != 0)
+            return result;
+        yuv_bytes = (size_t)pitch * (surface_height + (surface_height + 1u) / 2u) * 2u;
     }
     if (overlay)
     {
