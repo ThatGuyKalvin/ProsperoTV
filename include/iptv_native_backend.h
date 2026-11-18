@@ -17,7 +17,7 @@ extern "C"
     /* User volume after optional normalization; 0 = mute, 100 = no attenuation. */
     void iptv_native_set_volume(unsigned percent);
     unsigned iptv_native_get_volume(void);
-    /* Optional playback loudness leveling; off by default. */
+    /* Optional playback loudness preset: 0 Off, 1 Standard, 2 Louder, 3 Speaker boost. */
     void iptv_native_set_audio_normalization(unsigned enabled);
     unsigned iptv_native_get_audio_normalization(void);
     /* Opt-in decoded 5.1 PCM; sampled when foreground playback opens. */

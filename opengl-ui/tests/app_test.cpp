@@ -2216,25 +2216,26 @@ TEST_F(AppTest, SourceCheckRowStartsAndCancelsWithoutChangingSource)
 
 TEST_F(AppTest, AudioNormalizationIsOptionalAndPersists)
 {
-    EXPECT_FALSE(app_->settings().audio_normalization);
-    EXPECT_FALSE(ptv::load_settings(dir_).audio_normalization);
+    EXPECT_EQ(app_->settings().audio_normalization, 0);
+    EXPECT_EQ(ptv::load_settings(dir_).audio_normalization, 0);
     for (int i = 0; i < 4; ++i)
         press(Action::page_next);
     settings_row("Normalize channel volume");
     press(Action::confirm);
-    EXPECT_TRUE(app_->settings().audio_normalization);
+    EXPECT_EQ(app_->settings().audio_normalization, 1);
     EXPECT_TRUE(app_->take_settings_changed());
     ASSERT_TRUE(ptv::save_settings(dir_, app_->settings()));
-    EXPECT_TRUE(ptv::load_settings(dir_).audio_normalization);
+    EXPECT_EQ(ptv::load_settings(dir_).audio_normalization, 1);
     app_->set_volume(35);
-    EXPECT_TRUE(app_->settings().audio_normalization);
-    app_->set_audio_normalization(false);
-    EXPECT_FALSE(app_->settings().audio_normalization);
+    EXPECT_EQ(app_->settings().audio_normalization, 1);
+    app_->set_audio_normalization(0);
+    EXPECT_EQ(app_->settings().audio_normalization, 0);
     press(Action::confirm);
-    EXPECT_TRUE(app_->settings().audio_normalization);
+    EXPECT_EQ(app_->settings().audio_normalization, 1);
     EXPECT_TRUE(app_->take_settings_changed());
-    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=60\n";
-    EXPECT_FALSE(ptv::load_settings(dir_).audio_normalization);
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt")
+        << "volume=60\naudio_normalization=99\n";
+    EXPECT_EQ(ptv::load_settings(dir_).audio_normalization, 1);
 }
 
 TEST_F(AppTest, SurroundOutputIsOptInPersistsAndRequiresParent)
@@ -2409,4 +2410,21 @@ TEST_F(AppTest, PictureInPictureAllowsBrowsingAndGuideWithoutForegroundPlayback)
     app_->stop_preview();
     EXPECT_EQ(host::preview_starts(), host::preview_stops());
     host::set_preview(false);
+}
+
+TEST_F(AppTest, AudioPresetsPreserveLegacySettingsAndPersistAllChoices)
+{
+    const auto path = dir_ + "/prosperotv-interface-v1.txt";
+    for (int preset = 0; preset <= 3; ++preset)
+    {
+        std::ofstream(path) << "audio_normalization=" << preset << "\n";
+        auto settings = ptv::load_settings(dir_);
+        EXPECT_EQ(settings.audio_normalization, preset);
+        ASSERT_TRUE(ptv::save_settings(dir_, settings));
+        EXPECT_EQ(ptv::load_settings(dir_).audio_normalization, preset);
+        app_->set_audio_normalization(preset);
+        EXPECT_EQ(app_->settings().audio_normalization, preset);
+    }
+    std::ofstream(path) << "audio_normalization=99\n";
+    EXPECT_EQ(ptv::load_settings(dir_).audio_normalization, 1);
 }

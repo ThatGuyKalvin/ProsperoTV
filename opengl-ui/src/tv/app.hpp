@@ -67,7 +67,7 @@ class App
     bool accepts_remote_search() const;
     bool remote_search(const char *query);
     void set_volume(int volume);
-    void set_audio_normalization(bool enabled);
+    void set_audio_normalization(int preset);
     void set_audio_surround(bool enabled);
     void set_stats_line(bool always);
     void set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones);
