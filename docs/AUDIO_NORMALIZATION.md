@@ -16,7 +16,7 @@ changing codec selection or downmix coefficients.
   by 1.41.
 - Up to thirty accepted 100 ms energy windows drive a rolling estimate; at least
   five accepted windows are needed before leveling begins.
-- Target: -23 LUFS. Gain is bounded to [-18, +18] dB; upward changes are limited
+- Local monitor-boost target: -6 LUFS (upstream: -23 LUFS). Gain is bounded to [-18, +18] dB; upward changes are limited
   to 3 dB/s, downward changes to 12 dB/s.
 - Windows below -50 LUFS are excluded from the program estimate. During quiet
   blocks, gain returns toward unity instead of rising. This cannot distinguish
@@ -56,3 +56,15 @@ channel, and a consistently quiet channel; then test silence, a sudden loud
 scene, mute, track switching, channel switching, and restart persistence. Keep
 speaker volume moderate during the comparison. Host tests do not validate PS5
 runtime linkage, CPU cost, device output, or subjective pumping/distortion.
+
+## Monitor listening test
+
+On a PS5 connected to a Deco Gear 49-inch 5K ultrawide PC monitor, playback
+was too quiet through the built-in speakers with both volume controls at 100%.
+With stereo output and normalization enabled, the tester reported that the
+-6 LUFS target fixed the low volume and sounded right on this monitor.
+
+This tuning is intended for quiet built-in monitor speakers. Other monitors
+may benefit, but listening tests covered only this Deco Gear. This branch
+applies the target whenever normalization is enabled. A separate opt-in
+setting would be needed to offer the boost alongside ordinary normalization.
