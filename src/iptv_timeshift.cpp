@@ -190,6 +190,16 @@ void Timeshift::Unmap::operator()(std::uint8_t *data) const
 {
     (void)munmap(data, bytes);
 }
+std::uint8_t *MapRing(std::size_t bytes)
+{
+    void *data = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    return data == MAP_FAILED ? nullptr : static_cast<std::uint8_t *>(data);
+}
+void UnmapRing(std::uint8_t *data, std::size_t bytes)
+{
+    if (data)
+        (void)munmap(data, bytes);
+}
 void Timeshift::copy(std::uint64_t offset, std::uint8_t *out, std::size_t bytes) const
 {
     const auto at = static_cast<std::size_t>(offset % capacity_);

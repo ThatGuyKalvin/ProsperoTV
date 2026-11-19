@@ -222,7 +222,7 @@ struct Memory
                 m.subtitle_segments.push_back(m.subtitle_times.size());
                 return true;
             };
-            output.seek_failed = [](void *self, std::int64_t target)
+            output.seek_failed = [](void *self, std::int64_t target, const char *)
             {
                 auto &m = *static_cast<Memory *>(self);
                 EXPECT_FALSE(m.armed);

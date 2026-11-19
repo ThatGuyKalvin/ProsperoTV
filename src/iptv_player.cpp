@@ -139,6 +139,13 @@ constexpr std::size_t kReadBytes = 64u * 1024u;
 // Batch network reads independently of the demuxer's bounded work chunks.
 constexpr std::size_t kNetworkReadBytes = 256u * 1024u;
 constexpr std::size_t kReadAheadBytes = 16u * 1024u * 1024u;
+// Files and non-live streams read ahead into their own mapping, as far as the
+// connection allows; live timeshift uses the same budget, never at the same time.
+constexpr std::size_t kFileReadAheadBytes = 512u * 1024u * 1024u;
+// A dropped file request is reopened at least this many times, and for as long
+// as more than the low-water mark of input is still buffered.
+constexpr unsigned kResumeTries = 3u;
+constexpr std::size_t kResumeLowWaterBytes = 2u * 1024u * 1024u;
 constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
 constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
 std::mutex gQualityMutex;
@@ -1106,15 +1113,33 @@ class StreamRunner
                                        std::memory_order_relaxed);
         const auto ticket = media_seek_requested_.fetch_add(1, std::memory_order_acq_rel) + 1;
         const auto deadline = MonotonicUsec() + kSeekCommitTimeoutUsec;
+        const auto refused = [](const char *why)
+        {
+            if (tv_diag_enabled())
+            {
+                char line[96];
+                std::snprintf(line, sizeof(line), "[player] seek commit refused: %s", why);
+                tv_diag_line(line);
+            }
+            return false;
+        };
         while (media_seek_acked_.load(std::memory_order_acquire) != ticket)
         {
-            if (StopRequested() || read_ahead_done_.load(std::memory_order_acquire) ||
-                MonotonicUsec() >= deadline)
+            if (StopRequested())
                 return false;
+            if (read_ahead_done_.load(std::memory_order_acquire))
+                return refused("the buffer thread had ended");
+            if (MonotonicUsec() >= deadline)
+                return refused("the buffer thread did not answer in time");
             sceKernelUsleep(1000u);
         }
-        if (media_seek_result_.load(std::memory_order_acquire) != IPTV_STREAM_OK)
-            return false;
+        if (const int result = media_seek_result_.load(std::memory_order_acquire);
+            result != IPTV_STREAM_OK)
+        {
+            char why[64];
+            std::snprintf(why, sizeof(why), "the stream restart returned %d", result);
+            return refused(why);
+        }
         media_seek_pending_.store(false, std::memory_order_release);
         iptv_native_telemetry_t native{};
         const auto hidden = NativeTelemetry(&native) ? native.hidden_decoded_frames : 0;
@@ -1123,7 +1148,7 @@ class StreamRunner
         gSeekTrace.hidden_before = hidden;
         return true;
     }
-    void FailMediaSeek(std::int64_t target)
+    void FailMediaSeek(std::int64_t target, const char *reason = nullptr)
     {
         inline_seek_armed_.store(false, std::memory_order_release);
         if (PlaybackStopRequested() || target < 0)
@@ -1138,9 +1163,10 @@ class StreamRunner
         }
         if (tv_diag_enabled())
         {
-            char line[96];
-            std::snprintf(line, sizeof(line), "[player] seek inline FAILED at %lld ms; reopening",
-                          static_cast<long long>(target / 1000));
+            char line[192];
+            std::snprintf(
+                line, sizeof(line), "[player] seek inline FAILED at %lld ms (%s); reopening",
+                static_cast<long long>(target / 1000), reason && *reason ? reason : "no reason");
             tv_diag_line(line);
         }
     }
@@ -1148,6 +1174,12 @@ class StreamRunner
     {
         return TakesSeekInline() && gMediaSeekRequest.load(std::memory_order_acquire) >= 0 &&
                !media_seek_pending_.load(std::memory_order_acquire);
+    }
+    // Input downloaded but not yet handed to the decoder.
+    std::size_t BufferedInputBytes() const
+    {
+        return static_cast<std::size_t>(read_ahead_write_.load(std::memory_order_acquire) -
+                                        read_ahead_read_.load(std::memory_order_acquire));
     }
     bool NetworkWaitEnds()
     {
@@ -1191,11 +1223,20 @@ class StreamRunner
         {
             const int worker_result = read_ahead_result_.load(std::memory_order_acquire);
             if (worker_result != IPTV_STREAM_OK)
+            {
+                if (tv_diag_enabled())
+                {
+                    char line[160];
+                    std::snprintf(line, sizeof(line), "[player] buffer thread result %d: %s",
+                                  worker_result, session_.telemetry.last_error);
+                    tv_diag_line(line);
+                }
                 return worker_result;
+            }
             const std::uint64_t read = read_ahead_read_.load(std::memory_order_acquire);
             const std::uint64_t write = read_ahead_write_.load(std::memory_order_relaxed);
             const std::size_t used = static_cast<std::size_t>(write - read);
-            if (used >= kReadAheadBytes)
+            if (used >= read_ahead_capacity_)
             {
                 if (StopRequested() ||
                     (TakesSeekInline() && gMediaSeekRequest.load(std::memory_order_acquire) >= 0))
@@ -1203,10 +1244,10 @@ class StreamRunner
                 sceKernelUsleep(1000u);
                 continue;
             }
-            const std::size_t offset = static_cast<std::size_t>(write % kReadAheadBytes);
-            std::size_t chunk = kReadAheadBytes - used;
-            if (chunk > kReadAheadBytes - offset)
-                chunk = kReadAheadBytes - offset;
+            const std::size_t offset = static_cast<std::size_t>(write % read_ahead_capacity_);
+            std::size_t chunk = read_ahead_capacity_ - used;
+            if (chunk > read_ahead_capacity_ - offset)
+                chunk = read_ahead_capacity_ - offset;
             if (chunk > bytes)
                 chunk = bytes;
             std::memcpy(read_ahead_buffer_ + offset, source, chunk);
@@ -1915,8 +1956,31 @@ class StreamRunner
         }
         if (mode_ == RunnerMode::webm && !history_)
             return true; // Allocation failure retains the existing direct playback path.
-        read_ahead_buffer_ =
-            new (std::nothrow) std::uint8_t[history_ ? kReadBytes : kReadAheadBytes];
+        ReleaseReadAhead();
+        if (!history_ && !live_)
+        {
+            if (auto *mapped = iptv::MapRing(kFileReadAheadBytes))
+            {
+                read_ahead_buffer_ = mapped;
+                read_ahead_capacity_ = kFileReadAheadBytes;
+                read_ahead_mapped_ = true;
+            }
+        }
+        if (!read_ahead_buffer_)
+        {
+            read_ahead_buffer_ =
+                new (std::nothrow) std::uint8_t[history_ ? kReadBytes : kReadAheadBytes];
+            read_ahead_capacity_ = kReadAheadBytes;
+            read_ahead_mapped_ = false;
+        }
+        if (tv_diag_enabled() && !history_)
+        {
+            char line[96];
+            std::snprintf(line, sizeof(line), "[player] read-ahead %zu MB%s",
+                          read_ahead_capacity_ / (1024u * 1024u),
+                          read_ahead_mapped_ ? " mapped" : "");
+            tv_diag_line(line);
+        }
         if (!read_ahead_buffer_)
         {
             history_.reset();
@@ -1932,8 +1996,7 @@ class StreamRunner
         if (scePthreadCreate(&read_ahead_thread_, nullptr, ReadAheadEntry, this,
                              "prosperotv-buffer") != 0)
         {
-            delete[] read_ahead_buffer_;
-            read_ahead_buffer_ = nullptr;
+            ReleaseReadAhead();
             read_ahead_thread_ = nullptr;
             history_.reset();
             return false;
@@ -1995,12 +2058,12 @@ class StreamRunner
             }
 
             const std::size_t offset =
-                history_ ? 0 : static_cast<std::size_t>(read % kReadAheadBytes);
+                history_ ? 0 : static_cast<std::size_t>(read % read_ahead_capacity_);
             std::size_t chunk = available;
             if (mode_ != RunnerMode::webm && chunk > kReadBytes)
                 chunk = kReadBytes;
-            if (mode_ != RunnerMode::webm && chunk > kReadAheadBytes - offset)
-                chunk = kReadAheadBytes - offset;
+            if (!history_ && mode_ != RunnerMode::webm && chunk > read_ahead_capacity_ - offset)
+                chunk = read_ahead_capacity_ - offset;
             const int result =
                 mode_ == RunnerMode::webm
                     ? DecodeWebm(history_webm_video_, history_webm_block_)
@@ -2030,6 +2093,17 @@ class StreamRunner
         read_ahead_done_.store(true, std::memory_order_release);
     }
 
+    void ReleaseReadAhead()
+    {
+        if (read_ahead_mapped_)
+            iptv::UnmapRing(read_ahead_buffer_, read_ahead_capacity_);
+        else
+            delete[] read_ahead_buffer_;
+        read_ahead_buffer_ = nullptr;
+        read_ahead_capacity_ = kReadAheadBytes;
+        read_ahead_mapped_ = false;
+    }
+
     int StopReadAhead(bool drain, bool keep_history = false)
     {
         if (!read_ahead_thread_)
@@ -2054,8 +2128,7 @@ class StreamRunner
         }
         const int join_result = scePthreadJoin(read_ahead_thread_, nullptr);
         read_ahead_thread_ = nullptr;
-        delete[] read_ahead_buffer_;
-        read_ahead_buffer_ = nullptr;
+        ReleaseReadAhead();
         if (!keep_history || (!history_reopen_ && !history_reopen_pts_) ||
             read_ahead_result_.load(std::memory_order_acquire) != IPTV_STREAM_REOPEN_REQUIRED)
             ResetHistory();
@@ -2110,6 +2183,8 @@ class StreamRunner
     std::optional<std::uint32_t> history_audio_selection_;
     std::atomic<std::uint64_t> history_generation_{0};
     std::uint8_t *read_ahead_buffer_ = nullptr;
+    std::size_t read_ahead_capacity_ = kReadAheadBytes;
+    bool read_ahead_mapped_ = false;
     void *read_ahead_thread_ = nullptr;
     std::atomic<std::uint64_t> read_ahead_read_{0};
     std::atomic<std::uint64_t> read_ahead_write_{0};
@@ -2763,6 +2838,7 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
         std::int64_t position = 0, size = -1;
         std::int64_t end = -1;
         const std::string *manifest = nullptr;
+        unsigned resumes = 0; // since the last byte arrived
         iptv::HlsMediaPrefix resource_prefix{};
         std::uint64_t opening_usec = 0, sample_bytes = 0;
         std::uint64_t window_started_usec = 0, window_bytes = 0, window_reads = 0,
@@ -2797,6 +2873,49 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
             size = request.size;
             return true;
         }
+        // A request that fails, or ends before the file does, was dropped.
+        bool dropped(int count) const
+        {
+            return count < 0 ||
+                   (count == 0 && ((size >= 0 && position < size) || (end >= 0 && position < end)));
+        }
+        // Reopen at the current byte after a drop. Keeps trying while the player
+        // has input buffered, and at least kResumeTries times; a server that
+        // cannot resume at that byte fails the open, as before.
+        bool resume()
+        {
+            for (;; ++resumes)
+            {
+                const unsigned attempt = resumes;
+                if (runner->NetworkWaitEnds() ||
+                    (attempt >= kResumeTries &&
+                     runner->BufferedInputBytes() < kResumeLowWaterBytes))
+                    return false;
+                const std::uint32_t pause = 500000u << std::min(attempt, 2u);
+                for (std::uint32_t slept = 0; slept < pause; slept += 50000u)
+                {
+                    if (runner->NetworkWaitEnds())
+                        return false;
+                    sceKernelUsleep(50000u);
+                }
+                iptv::http::CloseStream(&request);
+                ++gDirectDiagnostics.reconnects;
+                if (tv_diag_enabled())
+                {
+                    char line[128];
+                    std::snprintf(line, sizeof(line),
+                                  "[player] file resume %u at %lld, %zu KB buffered", attempt + 1u,
+                                  static_cast<long long>(position),
+                                  runner->BufferedInputBytes() / 1024u);
+                    tv_diag_line(line);
+                }
+                if (open())
+                {
+                    ++resumes;
+                    return true;
+                }
+            }
+        }
         int read(std::uint8_t *buffer, int bytes)
         {
             if (runner->StopRequested())
@@ -2812,14 +2931,22 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
                 return 0;
             if (!request.open)
             {
-                if (!open())
+                if (!open() && (!position || !resume()))
                     return -1;
             }
             if (end >= 0)
                 bytes = static_cast<int>(std::min<std::int64_t>(bytes, end - position));
             const std::uint64_t started = MonotonicUsec();
-            const int count =
-                iptv::http::ReadStream(&request, buffer, static_cast<std::size_t>(bytes));
+            int count = iptv::http::ReadStream(&request, buffer, static_cast<std::size_t>(bytes));
+            while (dropped(count) && !runner->NetworkWaitEnds())
+            {
+                trace("read dropped", position, started);
+                if (!resume())
+                    return -1;
+                count = iptv::http::ReadStream(&request, buffer, static_cast<std::size_t>(bytes));
+            }
+            if (count > 0)
+                resumes = 0;
             const std::uint64_t ended = MonotonicUsec();
             const auto media_kind = resource_prefix.observe(buffer, count > 0 ? count : 0);
             sample_bytes += count > 0 ? static_cast<std::uint64_t>(count) : 0;
@@ -2868,6 +2995,7 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
                            {
                                auto &f = *static_cast<File *>(self);
                                iptv::http::CloseStream(&f.request);
+                               f.resumes = 0;
                                return f.position = at;
                            },
                            [](void *self) { return static_cast<File *>(self)->size; },
@@ -2965,15 +3093,15 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
         output.seek_begin = [](void *self) { static_cast<StreamRunner *>(self)->BeginMediaSeek(); };
         output.seek_commit = [](void *self, std::int64_t target)
         { return static_cast<StreamRunner *>(self)->CommitMediaSeek(target); };
-        output.seek_failed = [](void *self, std::int64_t target)
-        { static_cast<StreamRunner *>(self)->FailMediaSeek(target); };
+        output.seek_failed = [](void *self, std::int64_t target, const char *reason)
+        { static_cast<StreamRunner *>(self)->FailMediaSeek(target, reason); };
     }
     std::string error;
     const int result =
         iptv::ReadMedia(input, output, &error, gMediaSession ? gMediaStartPosition.load() : 0);
     if (result < 0 && runner->SeekAwaitingPicture() && !runner->PlaybackStopRequested())
     {
-        runner->FailMediaSeek(runner->MediaSeekTarget());
+        runner->FailMediaSeek(runner->MediaSeekTarget(), error.c_str());
         return 1;
     }
     if (result < 0)

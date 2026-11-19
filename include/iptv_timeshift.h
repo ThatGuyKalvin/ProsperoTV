@@ -14,6 +14,10 @@
 
 namespace iptv
 {
+// A private anonymous mapping outside the application heap, or null.
+std::uint8_t *MapRing(std::size_t bytes);
+void UnmapRing(std::uint8_t *data, std::size_t bytes);
+
 class Timeshift
 {
   public:

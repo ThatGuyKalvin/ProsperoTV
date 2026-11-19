@@ -73,7 +73,7 @@ struct MediaOutput
     void (*seek_armed)(void *, bool) = nullptr;
     void (*seek_begin)(void *) = nullptr;
     bool (*seek_commit)(void *, std::int64_t target_us) = nullptr;
-    void (*seek_failed)(void *, std::int64_t target_us) = nullptr;
+    void (*seek_failed)(void *, std::int64_t target_us, const char *reason) = nullptr;
 };
 // 0: complete, 1: cancelled, -1: error. Streaming I/O, no transcoding.
 // start_us is relative to the beginning; seek to the preceding decodable keyframe.

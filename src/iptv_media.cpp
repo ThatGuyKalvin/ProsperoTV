@@ -9,6 +9,7 @@ extern "C"
 #include <libavutil/opt.h>
 }
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <charconv>
 #include <cstdio>
@@ -852,6 +853,55 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     int result = 0;
     auto video_clock = origin;
     bool first_video = true;
+    // After a start or seek the demuxer leaves video DTS unset until it has
+    // relearned the reorder delay. Fill it in as FFmpeg's muxer would, from the
+    // smallest PTS of a window one larger than the delay, but kept increasing.
+    struct DecodeTimes
+    {
+        std::array<std::int64_t, 17> window{};
+        int depth = 0;
+        std::int64_t step = 1, last = AV_NOPTS_VALUE;
+        bool primed = false;
+        void reset()
+        {
+            primed = false;
+            last = AV_NOPTS_VALUE;
+        }
+        bool fill(AVPacket *packet)
+        {
+            if (packet->pts == AV_NOPTS_VALUE)
+                return true;
+            if (packet->dts == AV_NOPTS_VALUE)
+            {
+                if (!primed)
+                {
+                    for (int i = 1; i <= depth; ++i)
+                        window[i] = packet->pts + (i - depth - 1) * step;
+                    primed = true;
+                }
+                window[0] = packet->pts;
+                for (int i = 0; i < depth && window[i] > window[i + 1]; ++i)
+                    std::swap(window[i], window[i + 1]);
+                packet->dts = window[0];
+            }
+            if (last != AV_NOPTS_VALUE && packet->dts <= last)
+                packet->dts = last + 1;
+            if (packet->dts > packet->pts)
+                return false;
+            last = packet->dts;
+            return true;
+        }
+    } decode_times;
+    {
+        const auto *stream = r.demux->streams[video];
+        const auto rate = stream->avg_frame_rate.num > 0 && stream->avg_frame_rate.den > 0
+                              ? stream->avg_frame_rate
+                              : stream->r_frame_rate;
+        if (rate.num > 0 && rate.den > 0)
+            decode_times.step =
+                std::max<std::int64_t>(1, av_rescale_q(1, av_inv_q(rate), stream->time_base));
+        decode_times.depth = std::clamp(v->video_delay > 0 ? v->video_delay : 2, 1, 16);
+    }
     struct Clock
     {
         std::int64_t last = AV_NOPTS_VALUE, next = AV_NOPTS_VALUE;
@@ -902,7 +952,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
                 return -1;
             }
             armed.set(false);
-            output.seek_failed(output.context, target);
+            output.seek_failed(output.context, target, message);
             return 1;
         };
         if (output.seek_begin)
@@ -915,6 +965,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         if (!output.seek_commit(output.context, target))
             return reopen("The video could not continue at that position.");
         first_video = true;
+        decode_times.reset();
         std::fill(clocks.begin(), clocks.end(), Clock{});
         discontinuity_offset = 0;
         pending_subtitles.clear();
@@ -1027,6 +1078,12 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
                     r.packet->dts == r.packet->pts)
                     r.packet->dts = AV_NOPTS_VALUE;
             }
+            if (source == video && !decode_times.fill(r.packet))
+            {
+                // A packet that cannot decode before it is shown cannot be muxed.
+                av_packet_unref(r.packet);
+                continue;
+            }
             if (source == video && r.packet->pts != AV_NOPTS_VALUE)
             {
                 video_clock = av_rescale_q(r.packet->pts, r.demux->streams[source]->time_base,
@@ -1053,8 +1110,21 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             r.packet->pos = -1;
             // Packets already arrive in demux order. Avoid an unbounded
             // interleave queue when a provider's audio timestamps are broken.
-            if (av_write_frame(r.mux, r.packet) < 0 || r.out->error < 0)
-                return r.cancelled() ? 1 : fail("The video's media packets could not be played.");
+            const auto dts = r.packet->dts;
+            if (const int written = av_write_frame(r.mux, r.packet);
+                written < 0 || r.out->error < 0)
+            {
+                if (r.cancelled())
+                    return 1;
+                char cause[AV_ERROR_MAX_STRING_SIZE] = {};
+                av_strerror(written < 0 ? written : r.out->error, cause, sizeof(cause));
+                char message[192];
+                std::snprintf(message, sizeof(message),
+                              "The video's media packets could not be played (%s, track %d, "
+                              "dts %lld).",
+                              cause, r.packet->stream_index, static_cast<long long>(dts));
+                return fail(message);
+            }
         }
         else if (output.subtitle_packet && r.packet->pts != AV_NOPTS_VALUE &&
                  std::any_of(subtitles.begin(), subtitles.end(), [&](const auto &track)
