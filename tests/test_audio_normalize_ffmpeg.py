@@ -38,14 +38,14 @@ class AudioNormalizeFFmpegTest(unittest.TestCase):
                 self.assertAlmostEqual(reported, measured, delta=.15)
 
     def test_quiet_audio_reaches_target_and_loud_audio_is_reduced(self):
-        for amplitude in [.01, .4]:
+        for amplitude in [.1, .8]:
             with self.subTest(amplitude=amplitude):
                 data = pcm(1000, amplitude)
                 result = subprocess.run([str(PROBE), '1'], input=data, check=True,
                                         capture_output=True)
                 # Last 3 seconds, after acquisition and gain ramp.
                 measured = loudness(result.stdout[-3 * 48000 * 4:])
-                self.assertAlmostEqual(float(measured['input_i']), -23, delta=.3)
+                self.assertAlmostEqual(float(measured['input_i']), -6, delta=.3)
                 self.assertLessEqual(float(measured['input_tp']), -.8)
 
     def test_extremely_quiet_audio_respects_boost_cap(self):
@@ -54,7 +54,7 @@ class AudioNormalizeFFmpegTest(unittest.TestCase):
         result = subprocess.run([str(PROBE), '1'], input=data, check=True, capture_output=True)
         measured = float(loudness(result.stdout[-3 * 48000 * 4:])['input_i'])
         self.assertAlmostEqual(measured - source_level, 18, delta=.15)
-        self.assertLess(measured, -23)
+        self.assertLess(measured, -6)
 
     def test_bypass_preserves_pcm_exactly(self):
         data = pcm(1000, .4, 1)

@@ -96,7 +96,8 @@ void iptv_audio_normalizer_process_channels(iptv_audio_normalizer_t *state, int1
     double target_db = 0.0;
     if (state->meter_valid && block_energy / frames >= GATE_ENERGY)
     {
-        target_db = -23.0 - state->loudness_lufs;
+        /* Local monitor boost: 17 dB above the upstream target; retain the limiter. */
+        target_db = -6.0 - state->loudness_lufs;
         if (target_db > 18.0)
             target_db = 18.0;
         if (target_db < -18.0)
