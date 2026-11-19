@@ -24,6 +24,7 @@ class SourcesScreen
     void draw(ui::Canvas &canvas) const;
     int hints(ui::Hint *out, int capacity) const;
     std::int64_t focused_id() const;
+    bool focused_on_source_setup() const;
     bool choosing_user_agent() const
     {
         return http_source_ != 0;

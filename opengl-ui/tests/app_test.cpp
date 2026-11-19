@@ -1014,6 +1014,132 @@ TEST_F(AppTest, SourceTimingPanelOwnsControllerAndReturnsToSources)
     EXPECT_EQ(app_->tab(), 5);
 }
 
+TEST_F(AppTest, L3RemovesOnlyTheFocusedAddedPlaylist)
+{
+    std::array<std::int64_t, 2> ids{};
+    std::string response;
+    for (std::size_t i = 0; i < ids.size(); ++i)
+    {
+        const std::string body =
+            R"({"operation":"save","id":0,"kind":1,"schedule":2,"url":"https://lists.example.invalid/)" +
+            std::to_string(i) + R"(.m3u","name":"Test playlist"})";
+        ASSERT_EQ(model_->remote_sources(body, response), 200);
+        ids[i] = model_->selected_source_id();
+        ASSERT_GT(ids[i], 4);
+        for (int frame = 0; frame < 400 && model_->refreshing(); ++frame)
+        {
+            idle(1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        ASSERT_FALSE(model_->refreshing());
+        ASSERT_TRUE(model_->has_catalog());
+    }
+    ASSERT_NE(ids[0], ids[1]);
+
+    for (int tab = 0; tab < 3; ++tab)
+        press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 4);
+    for (int row = 0; row < 3; ++row)
+        move(Direction::down);
+    press(Action::l3);
+    EXPECT_EQ(model_->saved_source(ids[0]), nullptr);
+    EXPECT_EQ(model_->selected_source_id(), ids[1]);
+    EXPECT_TRUE(model_->has_catalog());
+
+    press(Action::l3); // The active playlist now occupies the same row.
+    EXPECT_EQ(model_->saved_source(ids[1]), nullptr);
+    EXPECT_EQ(model_->selected_source_id(), 1);
+    EXPECT_FALSE(model_->has_catalog());
+    EXPECT_EQ(app_->tab(), 4);
+}
+
+TEST_F(AppTest, L3ClearsConfiguredDefaultPlaylist)
+{
+    ASSERT_EQ(model_->selected_source_id(), 2);
+    ASSERT_NE(model_->saved_source(2), nullptr);
+    ASSERT_FALSE(model_->saved_source(2)->url.empty());
+    for (int tab = 0; tab < 3; ++tab)
+        press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 4);
+
+    press(Action::l3);
+    ASSERT_NE(model_->saved_source(2), nullptr);
+    EXPECT_TRUE(model_->saved_source(2)->url.empty());
+    EXPECT_EQ(model_->selected_source_id(), 1);
+    EXPECT_FALSE(model_->has_catalog());
+    EXPECT_EQ(app_->tab(), 4);
+
+    app_.reset();
+    model_->close();
+    model_ = std::make_unique<ptv::Model>(dir_);
+    ASSERT_TRUE(model_->open());
+    ASSERT_NE(model_->saved_source(2), nullptr);
+    EXPECT_TRUE(model_->saved_source(2)->url.empty());
+    EXPECT_EQ(model_->selected_source_id(), 1);
+    EXPECT_FALSE(model_->has_catalog());
+}
+
+TEST_F(AppTest, L3RemovesXtreamPortalsAndLocalSources)
+{
+    app_.reset();
+    model_->close();
+    model_.reset();
+    const iptv::XtreamCredentials xtream{"https://xtream.example.invalid", "viewer", "secret"};
+    const auto legacy_xtream = dir_ + "/prosperotv-xtream-v1.txt";
+    ASSERT_EQ(iptv::SaveXtreamCredentials(legacy_xtream, xtream), iptv::XtreamStatus::ok);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir_ + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource sources[] = {
+            {3, 2, "Xtream slot", xtream.server_url, xtream.username, xtream.password, {}},
+            {4, 3, "Portal slot", "https://portal.example.invalid/portal.php", {}, {},
+             "00:1A:79:12:34:56"},
+            {5, 2, "Added Xtream", xtream.server_url, xtream.username, xtream.password, {}},
+            {6, 3, "Added portal", "https://other.example.invalid/portal.php", {}, {},
+             "00:1A:79:12:34:57"},
+            {7, 4, "HDHomeRun", "http://192.168.1.10", {}, {}, {}},
+            {8, 5, "Tvheadend", "http://192.168.1.11:9981", {}, {}, {}}};
+        for (auto &source : sources)
+            ASSERT_TRUE(library.save_source(&source)) << source.name;
+    }
+
+    model_ = std::make_unique<ptv::Model>(dir_);
+    ASSERT_TRUE(model_->open());
+    for (int frame = 0; frame < 400 && model_->refreshing(); ++frame)
+    {
+        model_->poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model_->refreshing());
+    ASSERT_EQ(model_->selected_source_id(), 2);
+    ASSERT_TRUE(model_->has_catalog());
+    model_->view.tab = 4;
+    make_app();
+    ASSERT_EQ(app_->tab(), 4);
+
+    move(Direction::down);
+    press(Action::l3);
+    ASSERT_NE(model_->saved_source(3), nullptr);
+    EXPECT_TRUE(model_->saved_source(3)->url.empty());
+    EXPECT_TRUE(model_->saved_source(3)->password.empty());
+    EXPECT_FALSE(fs::exists(legacy_xtream));
+
+    move(Direction::down);
+    press(Action::l3);
+    ASSERT_NE(model_->saved_source(4), nullptr);
+    EXPECT_TRUE(model_->saved_source(4)->url.empty());
+    EXPECT_TRUE(model_->saved_source(4)->mac.empty());
+
+    move(Direction::down);
+    for (const int id : {5, 6, 7, 8})
+    {
+        press(Action::l3);
+        EXPECT_EQ(model_->saved_source(id), nullptr) << id;
+    }
+    EXPECT_EQ(model_->selected_source_id(), 2);
+    EXPECT_TRUE(model_->has_catalog());
+}
+
 TEST_F(AppTest, SettingsAreChangedAndReported)
 {
     press(Action::page_prev); // Home precedes Live TV.
