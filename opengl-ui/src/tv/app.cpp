@@ -220,9 +220,11 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
         .description =
         tr("Use with a surround-capable HDMI receiver. Applies to the next playback.");
     form_
-        .add_toggle(kRowAudioNormalization, tr("Normalize channel volume"),
+        .add_choice(kRowAudioNormalization, tr("Normalize channel volume"),
+                    {tr("Off"), tr("Standard"), tr("Louder"), tr("Speaker boost")},
                     settings.audio_normalization)
-        .description = tr("Gradually balances channel volume and limits loud peaks.");
+        .description =
+        tr("Standard keeps the usual level. Speaker boost is for quiet monitor speakers; use Stereo.");
     form_.add_header(tr("PHONE REMOTE"));
     form_.add_action(kRowPair, tr("Pair a phone")).chevron = true;
     form_.add_value(kRowPhones, tr("Remembered phones"), "0");
@@ -334,10 +336,10 @@ void App::set_volume(int volume)
     form_.set_slider(kRowVolume, static_cast<float>(shared_.settings.volume));
 }
 
-void App::set_audio_normalization(bool enabled)
+void App::set_audio_normalization(int preset)
 {
-    shared_.settings.audio_normalization = enabled;
-    form_.set_toggle(kRowAudioNormalization, enabled);
+    shared_.settings.audio_normalization = std::clamp(preset, 0, 3);
+    form_.set_choice(kRowAudioNormalization, shared_.settings.audio_normalization);
 }
 
 void App::set_audio_surround(bool enabled)
@@ -666,7 +668,7 @@ void App::apply_settings()
     const int delays[] = {0, 1, 5, 10};
     next.screensaver_minutes = delays[std::clamp(form_.choice_index(kRowScreensaver), 0, 3)];
     next.volume = static_cast<int>(form_.slider_value(kRowVolume));
-    next.audio_normalization = form_.toggle_value(kRowAudioNormalization);
+    next.audio_normalization = form_.choice_index(kRowAudioNormalization);
     next.audio_surround = form_.choice_index(kRowAudioOutput) == 1;
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
@@ -689,7 +691,7 @@ void App::apply_settings()
     diag::event("settings: reduce motion=%d sounds=%d volume=%d menu sharpness=%d diagnostics=%d "
                 "normalization=%d surround=%d",
                 next.reduced_motion ? 1 : 0, next.sounds ? 1 : 0, next.volume, next.resolution,
-                next.diagnostics ? 1 : 0, next.audio_normalization ? 1 : 0,
+                next.diagnostics ? 1 : 0, next.audio_normalization,
                 next.audio_surround ? 1 : 0);
 }
 

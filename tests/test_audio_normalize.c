@@ -76,8 +76,58 @@ static void surround_checks(void)
     }
 }
 
+static void preset_checks(void)
+{
+    enum
+    {
+        COUNT = 4096
+    };
+    int16_t source[COUNT * 2], whole[COUNT * 2], split[COUNT * 2];
+    for (unsigned i = 0; i < COUNT; ++i)
+    {
+        source[i * 2] = i % 511 == 0 ? 32766 : 10000;
+        source[i * 2 + 1] = source[i * 2] / 2;
+    }
+    for (int preset = IPTV_NORMALIZE_LOUDER; preset <= IPTV_NORMALIZE_SPEAKER; ++preset)
+    {
+        iptv_audio_normalizer_t a, b;
+        iptv_audio_normalizer_reset(&a);
+        iptv_audio_normalizer_reset(&b);
+        memcpy(whole, source, sizeof(source));
+        memcpy(split, source, sizeof(source));
+        iptv_audio_normalizer_process(&a, whole, COUNT, preset);
+        for (unsigned i = 0; i < COUNT; ++i)
+            iptv_audio_normalizer_process(&b, split + i * 2, 1, preset);
+        /* Before meter acquisition, changing call boundaries must not change
+         * look-ahead, attack or release, including a transient at frame zero. */
+        assert(memcmp(whole, split, sizeof(whole)) == 0);
+        for (unsigned i = 0; i < COUNT; ++i)
+        {
+            assert(abs(whole[i * 2]) <= 29203);
+            assert(abs(whole[i * 2] - 2 * whole[i * 2 + 1]) <= 2);
+            if (i < IPTV_NORMALIZE_LOOKAHEAD)
+                assert(whole[i * 2] == 0);
+            else if (i > IPTV_NORMALIZE_LOOKAHEAD && (i - IPTV_NORMALIZE_LOOKAHEAD) % 511 != 0 &&
+                     (i - IPTV_NORMALIZE_LOOKAHEAD - 1) % 511 != 0)
+                assert(abs(whole[i * 2] - whole[(i - 1) * 2]) <= 43);
+        }
+        assert(a.limited_blocks > 0);
+        /* Switching to bypass must clear delayed content and be transparent. */
+        memcpy(split, source, sizeof(source));
+        iptv_audio_normalizer_process(&a, split, COUNT, IPTV_NORMALIZE_OFF);
+        assert(memcmp(split, source, sizeof(source)) == 0 && a.delay_position == 0);
+        /* A short final sample survives when the caller drains with silence. */
+        iptv_audio_normalizer_reset(&a);
+        int16_t tail[(IPTV_NORMALIZE_LOOKAHEAD + 1) * 2] = {1234, -1234};
+        iptv_audio_normalizer_process(&a, tail, IPTV_NORMALIZE_LOOKAHEAD + 1, preset);
+        assert(tail[IPTV_NORMALIZE_LOOKAHEAD * 2] == 1234);
+        assert(tail[IPTV_NORMALIZE_LOOKAHEAD * 2 + 1] == -1234);
+    }
+}
+
 int main(void)
 {
+    preset_checks();
     surround_checks();
     iptv_audio_normalizer_t n;
     int16_t pcm[FRAMES * 2], original[FRAMES * 2];

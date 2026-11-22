@@ -56,6 +56,17 @@ class AudioNormalizeFFmpegTest(unittest.TestCase):
         self.assertAlmostEqual(measured - source_level, 18, delta=.15)
         self.assertLess(measured, -23)
 
+    def test_louder_presets_reach_their_targets(self):
+        for preset, target in [(2, -18), (3, -14)]:
+            for amplitude in [.05, .4]:
+                with self.subTest(preset=preset, amplitude=amplitude):
+                    result = subprocess.run([str(PROBE), str(preset)],
+                                            input=pcm(1000, amplitude), check=True,
+                                            capture_output=True)
+                    measured = loudness(result.stdout[-3 * 48000 * 4:])
+                    self.assertAlmostEqual(float(measured['input_i']), target, delta=.3)
+                    self.assertLessEqual(float(measured['input_tp']), -.8)
+
     def test_bypass_preserves_pcm_exactly(self):
         data = pcm(1000, .4, 1)
         result = subprocess.run([str(PROBE), '0'], input=data, check=True, capture_output=True)

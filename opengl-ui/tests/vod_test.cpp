@@ -650,6 +650,26 @@ TEST_F(VodTest, LeavesOutAnEntryTheReaderRefusesAndKeepsTheRest)
     EXPECT_EQ(catalog[1].name, "Third");
 }
 
+TEST_F(VodTest, CancellingDownloadDoesNotReportAProviderFailure)
+{
+    host::set_network(true, "", 500);
+    ptv::VodLibrary library;
+    library.configure(account, dir + "/cancel.sqlite3", ptv::RefreshSchedule::manual);
+    library.select(ptv::VodKind::movies);
+    for (int i = 0; i < 1000 && library.loading(); ++i)
+    {
+        library.poll(false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    ASSERT_FALSE(library.loading());
+    library.poll(true);
+    ASSERT_TRUE(library.busy());
+    library.stop();
+    EXPECT_FALSE(library.busy());
+    EXPECT_FALSE(library.loaded());
+    EXPECT_TRUE(library.status().empty());
+}
+
 TEST_F(VodTest, CountsComeFromTheSavedSummaryAndTheListIsReadOnTheWorker)
 {
     response("get_vod_categories", R"([{"category_id":3,"category_name":"Movies"}])");

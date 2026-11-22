@@ -43,7 +43,9 @@ unsigned iptv_native_get_audio_surround(void)
 
 void iptv_native_set_audio_normalization(unsigned enabled)
 {
-    atomic_store_explicit(&audio_normalization, enabled != 0, memory_order_relaxed);
+    atomic_store_explicit(&audio_normalization,
+                          enabled <= IPTV_NORMALIZE_SPEAKER ? enabled : IPTV_NORMALIZE_STANDARD,
+                          memory_order_relaxed);
 }
 
 unsigned iptv_native_get_audio_normalization(void)
@@ -1043,7 +1045,14 @@ static int32_t audio_submit_block(backend_state_t *state)
     // The output takes a block once the one before it has played, so this block's first frame
     // is what plays now. Stamping the clock here, rather than once a whole decoded frame had
     // gone out, kept it 5 to 30 ms behind the sound, by how long the format's frames are.
-    publish_audio_clock(state, sink->block_pts_us);
+    uint64_t audible_pts = sink->block_pts_us;
+    if (sink->normalizer.enabled >= IPTV_NORMALIZE_LOUDER && audible_pts != UINT64_MAX)
+    {
+        const uint64_t delay = media_elapsed(
+            (uint64_t)IPTV_NORMALIZE_LOOKAHEAD * 1000000u / AUDIO_OUT_RATE, playback_speed(state));
+        audible_pts = audible_pts > delay ? audible_pts - delay : 0;
+    }
+    publish_audio_clock(state, audible_pts);
     return 0;
 }
 
@@ -1182,6 +1191,18 @@ static int32_t audio_drain(backend_state_t *state)
             first_result = result;
         }
         sink->pending = 0;
+    }
+    /* Flush the look-ahead tail at normal EOF; a seek/stop discards history. */
+    if (sink->normalizer.enabled >= IPTV_NORMALIZE_LOUDER && !atomic_load(&state->stop_requested) &&
+        !atomic_load(&state->audio_worker_discard))
+    {
+        memset(sink->block, 0, sizeof(sink->block));
+        if (sink->block_pts_us != UINT64_MAX)
+            sink->block_pts_us += media_elapsed(
+                (uint64_t)AUDIO_OUT_GRAIN * 1000000u / AUDIO_OUT_RATE, playback_speed(state));
+        result = audio_submit_block(state);
+        if (result < 0 && first_result == 0)
+            first_result = result;
     }
     result = sink->handle >= 0 ? sceAudioOutOutput(sink->handle, NULL) : 0;
     if (first_result == 0 && result < 0)
