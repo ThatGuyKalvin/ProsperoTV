@@ -25,28 +25,32 @@ void iptv_audio_normalizer_reset(iptv_audio_normalizer_t *state)
     memset(state, 0, sizeof(*state));
     state->limiter_gain = 1.0;
     state->loudness_lufs = -100.0;
+    for (unsigned i = 0; i <= IPTV_NORMALIZE_LOOKAHEAD; ++i)
+        state->required[i] = 1.0;
 }
 
 void iptv_audio_normalizer_process(iptv_audio_normalizer_t *state, int16_t *pcm, size_t frames,
-                                   int enabled)
+                                   int preset)
 {
-    iptv_audio_normalizer_process_channels(state, pcm, frames, 2, enabled);
+    iptv_audio_normalizer_process_channels(state, pcm, frames, 2, preset);
 }
 
 void iptv_audio_normalizer_process_channels(iptv_audio_normalizer_t *state, int16_t *pcm,
-                                            size_t frames, unsigned channels, int enabled)
+                                            size_t frames, unsigned channels, int preset)
 {
     if (!state || !pcm || !frames || (channels != 2 && channels != 6 && channels != 8) ||
         frames > SIZE_MAX / channels)
         return;
-    enabled = enabled != 0;
+    int enabled = preset >= IPTV_NORMALIZE_OFF && preset <= IPTV_NORMALIZE_SPEAKER
+                      ? preset
+                      : IPTV_NORMALIZE_STANDARD;
     if (state->enabled != enabled || state->channels != channels)
     {
         iptv_audio_normalizer_reset(state);
         state->enabled = enabled;
         state->channels = channels;
     }
-    if (!enabled)
+    if (enabled == IPTV_NORMALIZE_OFF)
         return;
 
     double block_energy = 0.0, peak = 0.0;
@@ -96,13 +100,19 @@ void iptv_audio_normalizer_process_channels(iptv_audio_normalizer_t *state, int1
     double target_db = 0.0;
     if (state->meter_valid && block_energy / frames >= GATE_ENERGY)
     {
-        target_db = -23.0 - state->loudness_lufs;
+        const double target = enabled == IPTV_NORMALIZE_SPEAKER  ? -14.0
+                              : enabled == IPTV_NORMALIZE_LOUDER ? -18.0
+                                                                 : -23.0;
+        target_db = target - state->loudness_lufs;
         if (target_db > 18.0)
             target_db = 18.0;
         if (target_db < -18.0)
             target_db = -18.0;
     }
-    const double step = (target_db > previous_db ? 3.0 : 12.0) * seconds;
+    const double step = (target_db > previous_db              ? 3.0
+                         : enabled == IPTV_NORMALIZE_STANDARD ? 12.0
+                                                              : 24.0) *
+                        seconds;
     if (fabs(target_db - previous_db) <= step)
         state->gain_db = target_db;
     else
@@ -110,6 +120,46 @@ void iptv_audio_normalizer_process_channels(iptv_audio_normalizer_t *state, int1
 
     const double start_gain = pow(10.0, previous_db / 20.0);
     const double end_gain = pow(10.0, state->gain_db / 20.0);
+    if (enabled >= IPTV_NORMALIZE_LOUDER)
+    {
+        int limited = 0;
+        for (size_t i = 0; i < frames; ++i)
+        {
+            const unsigned first = state->delay_position;
+            const unsigned last =
+                (first + IPTV_NORMALIZE_LOOKAHEAD) % (IPTV_NORMALIZE_LOOKAHEAD + 1);
+            const double gain = start_gain + (end_gain - start_gain) * (double)(i + 1) / frames;
+            double frame_peak = 0.0;
+            for (unsigned c = 0; c < channels; ++c)
+            {
+                const double sample = pcm[i * channels + c] * gain;
+                state->delayed[last][c] = (int32_t)lrint(sample);
+                frame_peak = fmax(frame_peak, fabs(sample));
+            }
+            state->required[last] = frame_peak > PEAK_CEILING ? PEAK_CEILING / frame_peak : 1.0;
+            /* Every future peak imposes an attack ramp. A newly arrived peak is
+             * 5 ms away and cannot introduce a gain step at the current sample.
+             * The minimum envelope falls by at most 1/lookahead per sample;
+             * release is linked across channels and takes at least 250 ms.
+             * Persistent history makes the envelope continuous across blocks. */
+            double limit = fmin(1.0, state->limiter_gain + 1.0 / (0.25 * IPTV_NORMALIZE_RATE));
+            for (unsigned j = 0; j <= IPTV_NORMALIZE_LOOKAHEAD; ++j)
+            {
+                const unsigned at = (first + j) % (IPTV_NORMALIZE_LOOKAHEAD + 1);
+                limit = fmin(limit, state->required[at] + (double)j / IPTV_NORMALIZE_LOOKAHEAD);
+            }
+            state->limiter_gain = limit;
+            limited |= limit < 0.999999;
+            for (unsigned c = 0; c < channels; ++c)
+            {
+                const double sample = state->delayed[first][c] * limit;
+                pcm[i * channels + c] = (int16_t)fmax(-PEAK_CEILING, fmin(PEAK_CEILING, sample));
+            }
+            state->delay_position = (first + 1) % (IPTV_NORMALIZE_LOOKAHEAD + 1);
+        }
+        state->limited_blocks += limited;
+        return;
+    }
     const double maximum_gain = start_gain > end_gain ? start_gain : end_gain;
     double limit = peak > 0.0 ? PEAK_CEILING / (peak * maximum_gain) : 1.0;
     if (limit > 1.0)

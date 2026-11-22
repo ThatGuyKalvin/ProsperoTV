@@ -11,6 +11,11 @@ extern "C"
 #endif
 #define IPTV_NORMALIZE_RATE 48000u
 #define IPTV_NORMALIZE_WINDOWS 30u
+#define IPTV_NORMALIZE_LOOKAHEAD 240u /* 5 ms; louder presets only. */
+#define IPTV_NORMALIZE_OFF 0
+#define IPTV_NORMALIZE_STANDARD 1
+#define IPTV_NORMALIZE_LOUDER 2
+#define IPTV_NORMALIZE_SPEAKER 3
 
     typedef struct iptv_audio_normalizer
     {
@@ -21,20 +26,25 @@ extern "C"
         uint64_t limited_blocks;
         int enabled, meter_valid;
         unsigned channels;
+        int32_t delayed[IPTV_NORMALIZE_LOOKAHEAD + 1][8];
+        double required[IPTV_NORMALIZE_LOOKAHEAD + 1];
+        unsigned delay_position;
     } iptv_audio_normalizer_t;
 
     /* Resets all channel history. Disabled processing is bit-for-bit transparent. */
     void iptv_audio_normalizer_reset(iptv_audio_normalizer_t *state);
     /* Interleaved stereo S16 only, after downmix/resampling and before user volume.
      * K-weighted rolling loudness control, not a certified integrated R128 meter.
-     * Target -23 LUFS; gain [-18,+18] dB, rise 3 dB/s, fall 12 dB/s.
-     * Gate -50 LUFS; linked block limiter at -1 dBFS (sample peak, not true peak). */
+     * Presets: Off=0, Standard=1 (-23), Louder=2 (-18), Speaker boost=3 (-14 LUFS).
+     * Standard retains the original limiter; louder presets use a smooth 5 ms
+     * look-ahead envelope. Gain [-18,+18] dB, rise 3 dB/s, fall up to 24 dB/s.
+     * Gate -50 LUFS; -1 dBFS sample-peak ceiling (not true peak). */
     void iptv_audio_normalizer_process(iptv_audio_normalizer_t *state, int16_t *pcm, size_t frames,
-                                       int enabled);
+                                       int preset);
     /* Supports 2, 6 or 8 channels in FL FR FC LFE BL BR SL SR order.
      * LFE is excluded from loudness, but included in the linked peak limiter. */
     void iptv_audio_normalizer_process_channels(iptv_audio_normalizer_t *state, int16_t *pcm,
-                                                size_t frames, unsigned channels, int enabled);
+                                                size_t frames, unsigned channels, int preset);
 #ifdef __cplusplus
 }
 #endif
