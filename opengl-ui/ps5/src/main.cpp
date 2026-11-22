@@ -1305,6 +1305,8 @@ int main()
     {
         const auto library = tv::storage::config_dir() + "/prosperotv-library.sqlite3";
         std::string bytes;
+        if (save::read_file(tv::storage::app_file("dev/fixture-reset.txt"), &bytes, 64))
+            (void)std::remove(library.c_str());
         if (!save::read_file(library, &bytes, 4u * 1024u * 1024u) &&
             save::read_file(tv::storage::app_file("dev/library.sqlite3"), &bytes,
                             4u * 1024u * 1024u))

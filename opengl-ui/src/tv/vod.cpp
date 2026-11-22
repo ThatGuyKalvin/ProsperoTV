@@ -959,8 +959,11 @@ void VodLibrary::poll(bool can_download)
                     status_ = text;
                 }
             }
+            else if (stop_.load())
+                status_ = loaded_ ? tr("Showing the saved titles.") : std::string{};
             else
-                status_ = error_ + (loaded_ ? tr(" Showing the saved titles.") : "");
+                status_ = error_ + (loaded_ ? " " + std::string(tr("Showing the saved titles."))
+                                            : "");
             pending_.Clear();
             pending_metadata_.clear();
             detail_id_.clear();
