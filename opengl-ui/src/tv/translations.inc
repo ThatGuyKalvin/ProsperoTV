@@ -547,6 +547,9 @@
 {"Show channel", {"Mostrar canal", "Afficher la chaîne", "Kanal anzeigen", "Mostra canale", "Mostrar canal", "Kanaal tonen"}},
 
 {"Delete", {"Borrar", "Effacer", "Löschen", "Elimina", "Apagar", "Verwijder"}},
+{"Remove source", {"Eliminar fuente", "Supprimer la source", "Quelle löschen", "Rimuovi fonte", "Remover fonte", "Bron verwijderen"}},
+{"Source removed", {"Fuente eliminada", "Source supprimée", "Quelle gelöscht", "Sorgente rimossa", "Fonte removida", "Bron verwijderd"}},
+{"The source could not be removed", {"No se pudo eliminar la fuente", "Impossible de supprimer la source", "Quelle konnte nicht gelöscht werden", "Impossibile rimuovere la sorgente", "Não foi possível remover a fonte", "Bron kon niet worden verwijderd"}},
 {"APPEARANCE AND ACCESSIBILITY", {"APARIENCIA Y ACCESIBILIDAD", "APPARENCE ET ACCESSIBILITÉ", "DARSTELLUNG UND BARRIEREFREIHEIT", "ASPETTO E ACCESSIBILITÀ", "APARÊNCIA E ACESSIBILIDADE", "WEERGAVE EN TOEGANKELIJKHEID"}},
 {"Theme", {"Tema", "Thème", "Design", "Tema", "Tema", "Thema"}},
 {"Dusk", {"Crepúsculo", "Crépuscule", "Abendrot", "Crepuscolo", "Crepúsculo", "Schemering"}},

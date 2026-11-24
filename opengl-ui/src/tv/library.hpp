@@ -41,8 +41,8 @@ struct AccountInfo
 // Positive: days remaining (rounded up) within one week, -1: expired, 0: no warning.
 int account_expiry_notice(const AccountInfo &info, std::uint64_t now);
 
-// IDs 1..3 are the original built-in, playlist and Xtream source slots.
-// Subsequent records allow any number of playlists and accounts.
+// IDs 1..4 are reserved for the original source slots. New sources use id 0
+// until saved; an empty name can be filled in from the assigned ID.
 struct SavedSource
 {
     std::int64_t id = 0;
@@ -56,7 +56,7 @@ struct SavedSource
     AccountInfo account{};
     std::string user_agent{}, referrer{}, extra_headers{};
 };
-bool valid_source(const SavedSource &source);
+bool valid_source(const SavedSource &source, bool allow_default_name = false);
 
 // All mutations are committed before callers update their in-memory state.
 // The original catalog and favorites files remain readable by older releases.

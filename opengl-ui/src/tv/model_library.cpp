@@ -12,9 +12,24 @@
 #include "iptv_ime.h"
 
 #include <algorithm>
+#include <cstdio>
 
 namespace ptv
 {
+namespace
+{
+SavedSource original_source(std::int64_t id)
+{
+    constexpr const char *names[] = {"No source", "Custom playlist", "Xtream Codes account",
+                                     "MAC-code portal"};
+    SavedSource source;
+    source.id = id;
+    source.kind = static_cast<int>(id - 1);
+    source.name = names[id - 1];
+    return source;
+}
+} // namespace
+
 bool Model::export_shared_library(SharedLibrary &out)
 {
     out = {};
@@ -49,19 +64,13 @@ void Model::load_library()
     }
     sources_ = library_.sources();
     // Import without altering any original credentials or catalog files.
-    const SavedSource originals[] = {
-        {1, 0, "No source", {}, {}, {}, {}, RefreshSchedule::daily},
-        {2, 1, "Custom playlist", custom_url_, {}, {}, {}, RefreshSchedule::daily},
-        {3,
-         2,
-         "Xtream Codes account",
-         xtream_.server_url,
-         xtream_.username,
-         xtream_.password,
-         {},
-         RefreshSchedule::daily},
-        {4, 3, "MAC-code portal", {}, {}, {}, {}, RefreshSchedule::daily}};
-    for (SavedSource source : originals)
+    SavedSource originals[] = {original_source(1), original_source(2), original_source(3),
+                               original_source(4)};
+    originals[1].url = custom_url_;
+    originals[2].url = xtream_.server_url;
+    originals[2].username = xtream_.username;
+    originals[2].password = xtream_.password;
+    for (auto &source : originals)
         if (saved_source(source.id) == nullptr && !library_.save_source(&source))
             notify(Level::warning, tr("A source could not be imported"));
     // An earlier version kept the third-party list's address in the first slot.
@@ -76,8 +85,9 @@ void Model::load_library()
     if (saved != 0 && saved_source(saved) != nullptr && saved_source(saved)->kind <= 5)
         selected_source_id_ = saved;
     const auto last = library_.last_channel();
-    if (settings.resume_last && last.first != 0 && saved_source(last.first) != nullptr &&
-        saved_source(last.first)->kind <= 5)
+    if (const auto *previous = saved_source(last.first);
+        settings.resume_last && previous != nullptr && previous->kind <= 5 &&
+        !previous->url.empty())
         selected_source_id_ = last.first;
     // With no source chosen, or the third-party list an earlier version chose,
     // the first source set up is used instead.
@@ -300,9 +310,10 @@ void Model::use_saved_source(std::int64_t id)
         return;
     }
     const auto *source = saved_source(id);
-    if (source == nullptr || source->kind == 0 || source->kind > 5)
+    if (source == nullptr || source->kind > 5)
         return;
-    if (source->url.empty())
+    const bool no_source = source->kind == 0;
+    if (!no_source && source->url.empty())
     {
         edit_saved_source(id);
         return;
@@ -310,7 +321,8 @@ void Model::use_saved_source(std::int64_t id)
     if (!library_.select_source(id))
     {
         notify(Level::error, tr("The source choice could not be saved"));
-        return;
+        if (!no_source)
+            return;
     }
     const bool changed = id != selected_source_id_;
     select_source_record(*source);
@@ -321,6 +333,14 @@ void Model::use_saved_source(std::int64_t id)
     }
     if (id <= 3)
         (void)iptv::SaveActiveSource(path("iptv-active-source-v1.txt"), active_source_);
+    if (no_source)
+    {
+        catalog_failed_ = false;
+        catalog_error_.clear();
+        set_status(tr("No source"), Level::ready);
+        set_source_text(tr("No channels yet"), tr("Add a playlist or account on the Sources tab."));
+        return;
+    }
     set_source_text(source->name, catalog_loaded_ ? tr("Showing the saved channel list.")
                                                   : tr("Downloading the first copy."));
     if (refresh_needed())
@@ -433,9 +453,7 @@ void Model::commit_local_form()
 {
     account_step_ = AccountStep::none;
     local_form_.id = editing_source_id_;
-    if (local_form_.name.empty())
-        local_form_.name = local_form_.kind == 4 ? "HDHomeRun" : "Tvheadend";
-    if (!valid_source(local_form_))
+    if (!valid_source(local_form_, true))
         notify(Level::error, tr("The TV server details could not be saved"),
                tr("Check the address and account details."));
     else
@@ -451,9 +469,6 @@ bool Model::save_source_form(std::string_view url, const iptv::XtreamCredentials
     source.id = editing_source_id_;
     source.kind = account != nullptr ? 2 : 1;
     source.url = url;
-    if (source.name.empty())
-        source.name = std::string(account != nullptr ? "Xtream account " : "Playlist ") +
-                      std::to_string(sources_.size() - 2);
     if (account != nullptr)
     {
         source.username = account->username;
@@ -520,8 +535,6 @@ void Model::on_portal_mac(const char *text, void *self)
     source.kind = 3;
     source.url = model.portal_form_.url;
     source.mac = model.portal_form_.mac;
-    if (source.name.empty())
-        source.name = "MAC-code portal " + std::to_string(model.sources_.size() - 2);
     (void)model.commit_source(std::move(source));
     model.portal_form_ = {};
 }
@@ -530,11 +543,52 @@ bool Model::remove_source(std::int64_t id)
 {
     if (!require_parent())
         return false;
-    if (id <= 4 || refreshing() || !library_.remove_source(id))
+    if (refreshing())
+    {
+        notify(Level::warning, tr("An update is running"),
+               tr("Wait for it to finish, then choose a source."));
+        return false;
+    }
+    const auto *source = saved_source(id);
+    if (source == nullptr || id <= 1 || source->kind == 0 || source->url.empty())
+        return false;
+    if (id >= 2 && id <= 4)
+    {
+        auto empty = original_source(id);
+        if (!library_.save_source(&empty))
+            return false;
+        if (id == 2)
+            (void)std::remove(path("iptv-custom-source-v1.txt").c_str());
+        else if (id == 3)
+            (void)std::remove(path("prosperotv-xtream-v1.txt").c_str());
+    }
+    else if (!library_.remove_source(id))
         return false;
     sources_ = library_.sources();
     if (selected_source_id_ == id)
+    {
+        switch (active_source_)
+        {
+        case iptv::SourceKind::Custom:
+            custom_url_.clear();
+            break;
+        case iptv::SourceKind::Xtream:
+            xtream_ = {};
+            break;
+        case iptv::SourceKind::Portal:
+            portal_ = {};
+            break;
+        case iptv::SourceKind::HDHomeRun:
+        case iptv::SourceKind::Tvheadend:
+            local_source_ = {};
+            break;
+        case iptv::SourceKind::BuiltIn:
+            break;
+        }
         use_saved_source(1);
+    }
+    else
+        ++revision_;
     return true;
 }
 

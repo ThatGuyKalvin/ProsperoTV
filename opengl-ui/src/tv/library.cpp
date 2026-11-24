@@ -63,6 +63,14 @@ bool valid_text(std::string_view text, std::size_t max)
                         [](unsigned char c) { return c < 32 || c == 127; });
 }
 
+// The caller holds a write transaction until the INSERT advances the sequence.
+std::int64_t next_source_id(sqlite3 *db)
+{
+    Statement query(db, "SELECT last_id+1 FROM source_id_sequence WHERE singleton=1 "
+                        "AND last_id<9223372036854775807");
+    return query.row() ? sqlite3_column_int64(query.stmt, 0) : 0;
+}
+
 bool valid_resume(const iptv::ChannelView &channel, std::string_view series)
 {
     std::string canonical;
@@ -137,9 +145,11 @@ int account_expiry_notice(const AccountInfo &info, std::uint64_t now)
     return remaining <= 7u * 86400u ? static_cast<int>((remaining + 86399u) / 86400u) : 0;
 }
 
-bool valid_source(const SavedSource &source)
+bool valid_source(const SavedSource &source, bool allow_default_name)
 {
-    if (source.id < 0 || source.kind < 0 || source.kind > 5 || !valid_text(source.name, 128) ||
+    const bool default_name = allow_default_name && source.id == 0 && source.name.empty();
+    if (source.id < 0 || source.kind < 0 || source.kind > 5 ||
+        (!default_name && !valid_text(source.name, 128)) ||
         source.schedule < RefreshSchedule::daily || source.schedule > RefreshSchedule::manual)
         return false;
     std::string referer_url;
@@ -236,6 +246,12 @@ bool Library::open(const std::string &path)
         "CREATE TABLE IF NOT EXISTS sources (id INTEGER PRIMARY KEY,kind INTEGER NOT NULL,"
         "name TEXT NOT NULL,url TEXT NOT NULL,username TEXT NOT NULL,password TEXT NOT NULL,"
         "mac TEXT NOT NULL,schedule INTEGER NOT NULL CHECK(schedule BETWEEN 0 AND 2));"
+        "CREATE TABLE IF NOT EXISTS source_id_sequence (singleton INTEGER PRIMARY KEY "
+        "CHECK(singleton=1),last_id INTEGER NOT NULL CHECK(last_id>=4));"
+        "INSERT OR IGNORE INTO source_id_sequence SELECT 1,MAX(4,COALESCE(MAX(id),4)) FROM sources;"
+        "CREATE TRIGGER IF NOT EXISTS source_id_inserted AFTER INSERT ON sources "
+        "WHEN NEW.id>4 BEGIN UPDATE source_id_sequence SET last_id=NEW.id "
+        "WHERE singleton=1 AND last_id<NEW.id; END;"
         "CREATE TABLE IF NOT EXISTS source_extra_headers (source INTEGER PRIMARY KEY REFERENCES "
         "sources(id)"
         " ON DELETE CASCADE,headers TEXT NOT NULL);"
@@ -477,22 +493,29 @@ bool Library::save_account_info(std::int64_t source, const AccountInfo &info)
 
 bool Library::save_source(SavedSource *source)
 {
-    if (source == nullptr || !valid_source(*source))
+    if (source == nullptr || !valid_source(*source, true))
         return false;
     if (sqlite3_exec(db_, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr) != SQLITE_OK)
         return false;
+    const auto id = source->id ? source->id : next_source_id(db_);
+    std::string name = source->name;
+    if (name.empty())
+    {
+        constexpr const char *prefix[] = {
+            "", "Playlist", "Xtream account", "MAC-code portal", "HDHomeRun", "Tvheadend"};
+        name = std::string(prefix[source->kind]) + " #" + std::to_string(id);
+    }
     Statement query(
         db_,
-        "INSERT INTO sources VALUES(NULLIF(?1,0),?2,?3,?4,?5,?6,?7,?8)"
+        "INSERT INTO sources VALUES(?1,?2,?3,?4,?5,?6,?7,?8)"
         " ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,name=excluded.name,url=excluded.url,"
         "username=excluded.username,password=excluded.password,mac=excluded.mac,schedule=excluded."
         "schedule");
-    bool saved = query.integer(1, source->id) && query.integer(2, source->kind) &&
-                 query.text(3, source->name) && query.text(4, source->url) &&
+    bool saved = id != 0 && query.integer(1, id) && query.integer(2, source->kind) &&
+                 query.text(3, name) && query.text(4, source->url) &&
                  query.text(5, source->username) && query.text(6, source->password) &&
                  query.text(7, source->mac) &&
                  query.integer(8, static_cast<int>(source->schedule)) && query.done();
-    const auto id = source->id ? source->id : sqlite3_last_insert_rowid(db_);
     Statement http(db_, "INSERT INTO source_http VALUES(?1,?2,?3) ON CONFLICT(source) "
                         "DO UPDATE SET user_agent=excluded.user_agent,referrer=excluded.referrer");
     saved = saved && http.integer(1, id) && http.text(2, source->user_agent) &&
@@ -503,6 +526,7 @@ bool Library::save_source(SavedSource *source)
     if (saved && sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr) == SQLITE_OK)
     {
         source->id = id;
+        source->name = std::move(name);
         return true;
     }
     (void)sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
